@@ -6,6 +6,7 @@ import type { SignalQueueAdapter } from "./adapters/index.js";
 import { configure, getAdapter } from "./config.js";
 import { parseInterval } from "./interval.js";
 import type { AnySignal } from "./signal.js";
+import type { IPCMessage, SignalSubscriber } from "./subscribers/index.js";
 import { DEFAULT_MAX_ATTEMPTS, DEFAULT_TIMEOUT_MS, type QueueEntry } from "./types.js";
 
 const BOOTSTRAP = fileURLToPath(new URL("./bootstrap.js", import.meta.url));
@@ -40,6 +41,8 @@ export interface SignalRunnerOptions {
    * });
    */
   configModule?: string;
+  /** Subscribers notified of signal lifecycle events. */
+  subscribers?: SignalSubscriber[];
 }
 
 export class SignalRunner {
@@ -50,6 +53,7 @@ export class SignalRunner {
   private defaultMaxAttempts: number;
   private registry = new Map<string, RegisteredSignal>();
   private scheduledRecurring = new Set<string>();
+  private subscribers: SignalSubscriber[];
   private running = false;
 
   constructor(options: SignalRunnerOptions = {}) {
@@ -63,12 +67,33 @@ export class SignalRunner {
     this.signalsDir = options.signalsDir;
     this.configModule = options.configModule;
     this.defaultMaxAttempts = options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
+    this.subscribers = options.subscribers ? [...options.subscribers] : [];
   }
 
   /** Manual registration — advanced use when not using signalsDir. */
   register(name: string, filePath: string): this {
     this.registry.set(name, { name, filePath: resolve(filePath) });
     return this;
+  }
+
+  /** Add a subscriber for signal lifecycle events. */
+  subscribe(subscriber: SignalSubscriber): this {
+    this.subscribers.push(subscriber);
+    return this;
+  }
+
+  private emit<K extends keyof SignalSubscriber>(
+    event: K,
+    data: Parameters<NonNullable<SignalSubscriber[K]>>[0],
+  ): void {
+    for (const sub of this.subscribers) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (sub[event] as any)?.(data);
+      } catch (err) {
+        console.error(`[simple-signal] Subscriber error in ${String(event)}:`, err);
+      }
+    }
   }
 
   async start(): Promise<void> {
@@ -119,6 +144,7 @@ export class SignalRunner {
         for (const value of Object.values(mod)) {
           if (isSignal(value)) {
             this.registry.set(value.name, { name: value.name, filePath });
+            this.emit("onSignalDiscovered", { signalName: value.name, filePath });
             if (value.interval && !this.scheduledRecurring.has(value.name)) {
               await this.scheduleRecurring(value);
             }
@@ -168,15 +194,18 @@ export class SignalRunner {
         attempts: entry.attempts + 1,
       });
 
+      this.emit("onEntryDispatched", { entry });
       this.dispatch(sig, entry);
 
       // Recurring: schedule next run immediately so the slot isn't lost
       if (entry.kind === "recurring" && entry.interval) {
         const ms = parseInterval(entry.interval);
+        const nextRunAt = new Date(Date.now() + ms);
         await this.adapter.update(entry.id, {
           lastRunAt: new Date(),
-          nextRunAt: new Date(Date.now() + ms),
+          nextRunAt,
         });
+        this.emit("onEntryRescheduled", { entry, nextRunAt });
       }
     }
   }
@@ -191,12 +220,15 @@ export class SignalRunner {
 
       const maxAttempts = entry.maxAttempts ?? this.defaultMaxAttempts;
 
+      this.emit("onEntryTimeout", { entry });
+
       if (entry.attempts < maxAttempts) {
         // Retry: reset to pending
         await this.adapter.update(entry.id, {
           status: "pending",
           startedAt: undefined,
         });
+        this.emit("onEntryRetry", { entry, attempt: entry.attempts, maxAttempts });
       } else {
         // Exhausted retries
         if (entry.kind === "trigger") {
@@ -204,15 +236,18 @@ export class SignalRunner {
             status: "failed",
             completedAt: new Date(),
           });
+          this.emit("onEntryFailed", { entry });
         } else {
           // Recurring: don't permanently fail — schedule the next run
           const ms = parseInterval(entry.interval!);
+          const nextRunAt = new Date(Date.now() + ms);
           await this.adapter.update(entry.id, {
             status: "pending",
             startedAt: undefined,
             attempts: 0,
-            nextRunAt: new Date(Date.now() + ms),
+            nextRunAt,
           });
+          this.emit("onEntryRescheduled", { entry, nextRunAt });
         }
       }
     }
@@ -231,8 +266,43 @@ export class SignalRunner {
           SIMPLE_SIGNAL_CONFIG_MODULE: this.configModule,
         }),
       },
-      stdio: "ignore",
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
       detached: true,
+    });
+
+    // IPC messages from bootstrap (lifecycle events)
+    child.on("message", async (msg: IPCMessage) => {
+      switch (msg.type) {
+        case "entry:started":
+          this.emit("onEntryStarted", { entry });
+          break;
+        case "entry:completed":
+          this.emit("onEntryCompleted", { entry });
+          if (entry.kind === "recurring") {
+            // nextRunAt was already updated in tick() — reset status so getDue() picks it up next interval
+            await this.adapter.update(entry.id, { status: "pending" });
+          } else {
+            await this.adapter.update(entry.id, { status: "completed", completedAt: new Date() });
+          }
+          break;
+        case "entry:failed":
+          this.emit("onEntryFailed", {
+            entry,
+            error: (msg.data?.error as string) ?? undefined,
+          });
+          if (entry.kind === "trigger") {
+            await this.adapter.update(entry.id, { status: "failed", completedAt: new Date() });
+          }
+          break;
+      }
+    });
+
+    // Capture child stdout/stderr as log output events
+    child.stdout?.on("data", (chunk: Buffer) => {
+      this.emit("onLogOutput", { entry, level: "stdout", message: chunk.toString() });
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      this.emit("onLogOutput", { entry, level: "stderr", message: chunk.toString() });
     });
 
     child.on("error", (err) => {

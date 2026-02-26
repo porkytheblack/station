@@ -60,6 +60,22 @@ async function updateStatus(patch: Partial<QueueEntry>): Promise<void> {
   }
 }
 
+/** Send a lifecycle event to the parent runner via IPC (if available). */
+function sendIPC(
+  type: "entry:started" | "entry:completed" | "entry:failed",
+  data?: Record<string, unknown>,
+): void {
+  if (typeof process.send === "function") {
+    process.send({
+      type,
+      entryId,
+      signalName,
+      timestamp: new Date().toISOString(),
+      data,
+    });
+  }
+}
+
 try {
   // If a configModule was provided by the runner, import it first.
   // This calls configure() and sets up the shared adapter before anything
@@ -81,12 +97,14 @@ try {
           `[simple-signal] Invalid input for "${signalName}":`,
           result.error?.message,
         );
+        sendIPC("entry:failed", { error: `Invalid input: ${result.error?.message}` });
         await updateStatus({ status: "failed", completedAt: new Date() });
         process.exit(1);
       }
 
       // Signal the runner (if using a shared adapter) that we've started
       await updateStatus({ status: "running", startedAt: new Date() });
+      sendIPC("entry:started");
 
       // Enforce the timeout via Promise.race
       await Promise.race([
@@ -99,6 +117,7 @@ try {
         ),
       ]);
 
+      sendIPC("entry:completed");
       await updateStatus({ status: "completed", completedAt: new Date() });
       found = true;
       break;
@@ -115,6 +134,7 @@ try {
   process.exit(0);
 } catch (err) {
   console.error(`[simple-signal] Signal "${signalName}" failed:`, err);
+  sendIPC("entry:failed", { error: err instanceof Error ? err.message : String(err) });
   await updateStatus({ status: "failed", completedAt: new Date() });
   process.exit(1);
 }

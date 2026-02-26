@@ -7,3 +7,4 @@ build/
 *.tsbuildinfo
 coverage/
 .turbo/
+*.db

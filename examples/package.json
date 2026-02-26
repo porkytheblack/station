@@ -1,0 +1,9 @@
+{
+  "name": "@simple-signal/examples",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "simple-signal": "workspace:*",
+    "@simple-signal/adapter-sqlite": "workspace:*"
+  }
+}

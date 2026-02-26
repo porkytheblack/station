@@ -7,4 +7,10 @@ export { parseInterval } from "./interval.js";
 export type { QueueEntry, QueueEntryKind, EntryStatus } from "./types.js";
 export { type SignalQueueAdapter, MemoryAdapter } from "./adapters/index.js";
 
+export {
+  type SignalSubscriber,
+  type IPCMessage,
+  ConsoleSubscriber,
+} from "./subscribers/index.js";
+
 export { z } from "zod";
