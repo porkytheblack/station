@@ -6,14 +6,15 @@ const UNITS: Record<string, number> = {
 };
 
 /**
- * Parse a simple interval string like "every 5m", "every 30s", "every 1h".
+ * Parse a simple interval string like "5m", "30s", "1h", "2d".
+ * The "every" prefix is optional for backwards compatibility (e.g. "every 5m" also works).
  * Returns milliseconds.
  */
 export function parseInterval(interval: string): number {
-  const match = interval.match(/^every\s+(\d+)\s*([smhd])$/i);
+  const match = interval.match(/^(?:every\s+)?(\d+)\s*([smhd])$/i);
   if (!match) {
     throw new Error(
-      `Invalid interval "${interval}". Use format: "every <number><s|m|h|d>"`,
+      `Invalid interval "${interval}". Expected format: "<number><s|m|h|d>" (e.g. "5m", "30s", "1h")`,
     );
   }
   const value = parseInt(match[1], 10);

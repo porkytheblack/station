@@ -2,10 +2,11 @@ import { signal, z } from "simple-signal";
 
 export const flakyTask = signal("flakyTask")
   .input(z.object({ message: z.string() }))
-  .timeout(5_000)
+  .timeout(3_000)
   .retries(3)
   .run(async (input) => {
-    const shouldFail = Math.random() < 0.5;
+    // 60% chance of failure — with 4 total attempts, very likely to succeed
+    const shouldFail = Math.random() < 0.6;
 
     if (shouldFail) {
       console.log(`[flakyTask] Processing "${input.message}" — failed! (will retry)`);

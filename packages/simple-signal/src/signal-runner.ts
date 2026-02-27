@@ -1,19 +1,33 @@
-import { spawn } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { type ChildProcess, spawn } from "node:child_process";
+import { readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { SignalQueueAdapter } from "./adapters/index.js";
-import { configure, getAdapter } from "./config.js";
+import { isSerializableAdapter, type SignalQueueAdapter } from "./adapters/index.js";
+import { MemoryAdapter } from "./adapters/memory.js";
+import { configure } from "./config.js";
 import { parseInterval } from "./interval.js";
 import type { AnySignal } from "./signal.js";
 import type { IPCMessage, SignalSubscriber } from "./subscribers/index.js";
-import { DEFAULT_MAX_ATTEMPTS, DEFAULT_TIMEOUT_MS, type QueueEntry } from "./types.js";
+import { ConsoleSubscriber } from "./subscribers/console.js";
+import { DEFAULT_MAX_ATTEMPTS, DEFAULT_TIMEOUT_MS, type Run, type Step } from "./types.js";
+import { isSignal } from "./util.js";
 
 const BOOTSTRAP = fileURLToPath(new URL("./bootstrap.js", import.meta.url));
 
 interface RegisteredSignal {
   name: string;
   filePath: string;
+  maxConcurrency?: number;
+}
+
+interface RecurringSchedule {
+  signalName: string;
+  filePath: string;
+  interval: string;
+  nextRunAt: Date;
+  timeout: number;
+  maxAttempts: number;
+  input?: string;
 }
 
 export interface SignalRunnerOptions {
@@ -22,64 +36,82 @@ export interface SignalRunnerOptions {
   pollIntervalMs?: number;
   /** Default max attempts for signals that don't specify their own. */
   maxAttempts?: number;
-  /**
-   * Path to a module that calls configure() to set up the shared adapter.
-   * The runner imports it on startup; bootstrap imports it in every spawned
-   * process before the signal file — ensuring the same adapter is used
-   * everywhere without any per-signal-file setup.
-   *
-   * @example
-   * // src/adapter.config.ts
-   * import { configure } from "simple-signal";
-   * import { RedisAdapter } from "./my-redis-adapter.js";
-   * configure({ adapter: new RedisAdapter(process.env.REDIS_URL!) });
-   *
-   * // src/runner.ts
-   * new SignalRunner({
-   *   signalsDir: "./src/signals",
-   *   configModule: fileURLToPath(new URL("./adapter.config.ts", import.meta.url)),
-   * });
-   */
-  configModule?: string;
   /** Subscribers notified of signal lifecycle events. */
   subscribers?: SignalSubscriber[];
+  /** Maximum number of concurrent child processes. @default 5 */
+  maxConcurrent?: number;
+  /** Base delay (ms) for exponential retry backoff. @default 1000 */
+  retryBackoffMs?: number;
 }
 
 export class SignalRunner {
   private adapter: SignalQueueAdapter;
   private pollIntervalMs: number;
   private signalsDir?: string;
-  private configModule?: string;
+  private adapterName?: string;
+  private adapterOptions?: Record<string, unknown>;
+  private adapterImport?: string;
   private defaultMaxAttempts: number;
+  private retryBackoffMs: number;
   private registry = new Map<string, RegisteredSignal>();
-  private scheduledRecurring = new Set<string>();
+  private recurringSchedules = new Map<string, RecurringSchedule>();
   private subscribers: SignalSubscriber[];
+  private maxConcurrent: number;
+  private activeCount = 0;
+  private activePerSignal = new Map<string, number>();
+  /** Map runId → child process for cancel/timeout kill. */
+  private childByRunId = new Map<string, ChildProcess>();
   private running = false;
+  private pollTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: SignalRunnerOptions = {}) {
-    // If an adapter is passed directly, promote it to the global so that
-    // signal.trigger() calls anywhere in this process use the same store.
-    if (options.adapter) {
-      configure({ adapter: options.adapter });
-    }
-    this.adapter = options.adapter ?? getAdapter();
+    const adapter = options.adapter ?? new MemoryAdapter();
+    configure({ adapter });
+    this.adapter = adapter;
     this.pollIntervalMs = options.pollIntervalMs ?? 1000;
     this.signalsDir = options.signalsDir;
-    this.configModule = options.configModule;
+
+    if (isSerializableAdapter(adapter)) {
+      const manifest = adapter.toManifest();
+      this.adapterName = manifest.name;
+      this.adapterOptions = manifest.options;
+      this.adapterImport = manifest.moduleUrl;
+    }
+
     this.defaultMaxAttempts = options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
+    this.retryBackoffMs = options.retryBackoffMs ?? 1000;
     this.subscribers = options.subscribers ? [...options.subscribers] : [];
+    this.maxConcurrent = options.maxConcurrent ?? 5;
   }
 
-  /** Manual registration — advanced use when not using signalsDir. */
-  register(name: string, filePath: string): this {
-    this.registry.set(name, { name, filePath: resolve(filePath) });
+  static create(signalsDir: string, options: Omit<SignalRunnerOptions, "signalsDir"> = {}): SignalRunner {
+    const subscribers = options.subscribers ?? [new ConsoleSubscriber()];
+    return new SignalRunner({ ...options, signalsDir, subscribers });
+  }
+
+  register(name: string, filePath: string, options?: { maxConcurrency?: number }): this {
+    this.registry.set(name, { name, filePath: resolve(filePath), maxConcurrency: options?.maxConcurrency });
     return this;
   }
 
-  /** Add a subscriber for signal lifecycle events. */
   subscribe(subscriber: SignalSubscriber): this {
     this.subscribers.push(subscriber);
     return this;
+  }
+
+  /** Get a run by ID. */
+  async getRun(id: string): Promise<Run | null> {
+    return this.adapter.getRun(id);
+  }
+
+  /** List all runs for a signal. */
+  async listRuns(signalName: string): Promise<Run[]> {
+    return this.adapter.listRuns(signalName);
+  }
+
+  /** Get steps for a run. */
+  async getSteps(runId: string): Promise<Step[]> {
+    return this.adapter.getSteps(runId);
   }
 
   private emit<K extends keyof SignalSubscriber>(
@@ -97,17 +129,6 @@ export class SignalRunner {
   }
 
   async start(): Promise<void> {
-    // If a configModule is provided, import it first so configure() runs and
-    // sets the global adapter before we discover signals or begin polling.
-    if (this.configModule) {
-      try {
-        await import(this.configModule);
-        this.adapter = getAdapter(); // pick up whatever the config module set
-      } catch (err) {
-        console.error(`[simple-signal] Failed to import configModule "${this.configModule}":`, err);
-      }
-    }
-
     if (this.signalsDir) {
       await this.discover(resolve(this.signalsDir));
     }
@@ -119,18 +140,83 @@ export class SignalRunner {
       } catch (err) {
         console.error("[simple-signal] tick() failed:", err);
       }
-      await sleep(this.pollIntervalMs);
+      await this.sleep(this.pollIntervalMs);
     }
   }
 
-  stop(): void {
+  /** Stop the runner and optionally wait for active children to exit. */
+  async stop(options?: { graceful?: boolean; timeoutMs?: number }): Promise<void> {
     this.running = false;
+    if (this.pollTimer) {
+      clearTimeout(this.pollTimer);
+      this.pollTimer = null;
+    }
+
+    if (options?.graceful && this.childByRunId.size > 0) {
+      const timeout = options.timeoutMs ?? 10_000;
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), timeout);
+      await this.waitForChildren(ac.signal);
+      clearTimeout(timer);
+
+      // Kill any remaining children after timeout
+      for (const child of this.childByRunId.values()) {
+        child.kill("SIGTERM");
+      }
+    }
+  }
+
+  /** Cancel a specific run. Marks it as cancelled and kills the child process. */
+  async cancel(runId: string): Promise<boolean> {
+    const run = await this.adapter.getRun(runId);
+    if (!run) return false;
+
+    if (run.status === "completed" || run.status === "failed" || run.status === "cancelled") {
+      return false;
+    }
+
+    await this.adapter.updateRun(runId, {
+      status: "cancelled",
+      completedAt: new Date(),
+    });
+
+    // Kill the child process if running
+    const child = this.childByRunId.get(runId);
+    if (child) {
+      child.kill("SIGTERM");
+    }
+
+    this.emit("onRunCancelled", { run });
+    return true;
+  }
+
+  private waitForChildren(abortSignal: AbortSignal): Promise<void> {
+    if (this.childByRunId.size === 0) return Promise.resolve();
+    return new Promise((resolve) => {
+      const interval = setInterval(() => {
+        if (this.childByRunId.size === 0 || abortSignal.aborted) {
+          clearInterval(interval);
+          resolve();
+        }
+      }, 100);
+      abortSignal.addEventListener("abort", () => {
+        clearInterval(interval);
+        resolve();
+      }, { once: true });
+    });
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((res) => {
+      this.pollTimer = setTimeout(res, ms);
+    });
   }
 
   private async discover(dir: string): Promise<void> {
     let files: string[];
     try {
-      files = (readdirSync(dir, { recursive: true }) as string[])
+      const entries = await readdir(dir, { recursive: true });
+      files = entries
         .filter((f) => f.endsWith(".ts") || f.endsWith(".js"))
         .map((f) => join(dir, f));
     } catch {
@@ -143,10 +229,14 @@ export class SignalRunner {
         const mod = await import(filePath);
         for (const value of Object.values(mod)) {
           if (isSignal(value)) {
-            this.registry.set(value.name, { name: value.name, filePath });
+            this.registry.set(value.name, {
+              name: value.name,
+              filePath,
+              maxConcurrency: value.maxConcurrency,
+            });
             this.emit("onSignalDiscovered", { signalName: value.name, filePath });
-            if (value.interval && !this.scheduledRecurring.has(value.name)) {
-              await this.scheduleRecurring(value);
+            if (value.interval && !this.recurringSchedules.has(value.name)) {
+              this.scheduleRecurring(value, filePath);
             }
           }
         }
@@ -156,174 +246,300 @@ export class SignalRunner {
     }
   }
 
-  private async scheduleRecurring(sig: AnySignal): Promise<void> {
-    this.scheduledRecurring.add(sig.name);
+  private scheduleRecurring(sig: AnySignal, filePath: string): void {
     const ms = parseInterval(sig.interval!);
-    const id = this.adapter.generateId();
-    const entry: QueueEntry = {
-      id,
+    this.recurringSchedules.set(sig.name, {
       signalName: sig.name,
-      kind: "recurring",
-      input: JSON.stringify({}),
-      status: "pending",
-      attempts: 0,
-      maxAttempts: sig.maxAttempts,
-      timeout: sig.timeout,
-      interval: sig.interval,
+      filePath,
+      interval: sig.interval!,
       nextRunAt: new Date(Date.now() + ms),
-      createdAt: new Date(),
-    };
-    await this.adapter.add(entry);
+      timeout: sig.timeout,
+      maxAttempts: sig.maxAttempts,
+      input: sig.recurringInput ? JSON.stringify(sig.recurringInput) : undefined,
+    });
   }
 
   private async tick(): Promise<void> {
     await this.checkTimeouts();
+    await this.tickRecurring();
 
-    const due = await this.adapter.getDue();
-    for (const entry of due) {
-      const sig = this.registry.get(entry.signalName);
+    const due = await this.adapter.getRunsDue();
+    for (const run of due) {
+      if (this.activeCount >= this.maxConcurrent) break;
+
+      const sig = this.registry.get(run.signalName);
       if (!sig) {
-        console.warn(`[simple-signal] No signal registered for "${entry.signalName}" (entry ${entry.id}) — skipping`);
+        const error = `No signal registered for "${run.signalName}"`;
+        this.emit("onRunFailed", { run, error });
+        await this.adapter.updateRun(run.id, {
+          status: "failed",
+          completedAt: new Date(),
+          error,
+        });
         continue;
       }
 
-      // Mark as running before spawning
-      await this.adapter.update(entry.id, {
+      // Per-signal concurrency check
+      if (sig.maxConcurrency !== undefined) {
+        const activeForSignal = this.activePerSignal.get(run.signalName) ?? 0;
+        if (activeForSignal >= sig.maxConcurrency) {
+          this.emit("onRunSkipped", {
+            run,
+            reason: `Concurrency limit (${sig.maxConcurrency}) reached for "${run.signalName}"`,
+          });
+          continue;
+        }
+      }
+
+      // Check retry backoff
+      if (run.attempts > 0 && run.lastRunAt) {
+        const backoffMs = this.retryBackoffMs * Math.pow(2, run.attempts - 1);
+        const elapsed = Date.now() - run.lastRunAt.getTime();
+        if (elapsed < backoffMs) continue;
+      }
+
+      // Mark as running — runner is single authority for run status (H1)
+      await this.adapter.updateRun(run.id, {
         status: "running",
         startedAt: new Date(),
-        attempts: entry.attempts + 1,
+        lastRunAt: new Date(),
+        attempts: run.attempts + 1,
       });
 
-      this.emit("onEntryDispatched", { entry });
-      this.dispatch(sig, entry);
+      const freshRun = await this.adapter.getRun(run.id);
+      this.activeCount++;
+      this.incrementPerSignal(run.signalName);
+      this.emit("onRunDispatched", { run: freshRun ?? run });
+      this.dispatch(sig, run);
+    }
+  }
 
-      // Recurring: schedule next run immediately so the slot isn't lost
-      if (entry.kind === "recurring" && entry.interval) {
-        const ms = parseInterval(entry.interval);
-        const nextRunAt = new Date(Date.now() + ms);
-        await this.adapter.update(entry.id, {
-          lastRunAt: new Date(),
-          nextRunAt,
-        });
-        this.emit("onEntryRescheduled", { entry, nextRunAt });
-      }
+  private async tickRecurring(): Promise<void> {
+    const now = new Date();
+    for (const [name, schedule] of this.recurringSchedules) {
+      if (schedule.nextRunAt > now) continue;
+
+      const id = this.adapter.generateId();
+      const run: Run = {
+        id,
+        signalName: name,
+        kind: "recurring",
+        input: schedule.input ?? JSON.stringify({}),
+        status: "pending",
+        attempts: 0,
+        maxAttempts: schedule.maxAttempts,
+        timeout: schedule.timeout,
+        interval: schedule.interval,
+        createdAt: new Date(),
+      };
+      await this.adapter.addRun(run);
+
+      const ms = parseInterval(schedule.interval);
+      schedule.nextRunAt = new Date(Date.now() + ms);
+
+      this.emit("onRunRescheduled", { run, nextRunAt: schedule.nextRunAt });
     }
   }
 
   private async checkTimeouts(): Promise<void> {
-    const running = await this.adapter.getRunning();
+    const running = await this.adapter.getRunsRunning();
 
-    for (const entry of running) {
-      if (!entry.startedAt) continue;
-      const elapsed = Date.now() - entry.startedAt.getTime();
-      if (elapsed < entry.timeout) continue;
+    for (const run of running) {
+      if (!run.startedAt) continue;
 
-      const maxAttempts = entry.maxAttempts ?? this.defaultMaxAttempts;
+      const elapsed = Date.now() - run.startedAt.getTime();
+      if (elapsed < run.timeout) continue;
 
-      this.emit("onEntryTimeout", { entry });
+      const maxAttempts = run.maxAttempts ?? this.defaultMaxAttempts;
 
-      if (entry.attempts < maxAttempts) {
-        // Retry: reset to pending
-        await this.adapter.update(entry.id, {
+      // Kill the child process (H4)
+      const child = this.childByRunId.get(run.id);
+      if (child) {
+        child.kill("SIGTERM");
+        // The exit handler will fire and handle cleanup/retry/fail
+        // but we update status here since exit handler checks current status
+      }
+
+      this.emit("onRunTimeout", { run });
+
+      const error = `Timed out after ${run.timeout}ms`;
+      if (run.attempts < maxAttempts) {
+        await this.adapter.updateRun(run.id, {
           status: "pending",
           startedAt: undefined,
+          lastRunAt: new Date(),
+          error,
         });
-        this.emit("onEntryRetry", { entry, attempt: entry.attempts, maxAttempts });
+        this.emit("onRunRetry", { run, attempt: run.attempts, maxAttempts });
       } else {
-        // Exhausted retries
-        if (entry.kind === "trigger") {
-          await this.adapter.update(entry.id, {
-            status: "failed",
-            completedAt: new Date(),
-          });
-          this.emit("onEntryFailed", { entry });
-        } else {
-          // Recurring: don't permanently fail — schedule the next run
-          const ms = parseInterval(entry.interval!);
-          const nextRunAt = new Date(Date.now() + ms);
-          await this.adapter.update(entry.id, {
-            status: "pending",
-            startedAt: undefined,
-            attempts: 0,
-            nextRunAt,
-          });
-          this.emit("onEntryRescheduled", { entry, nextRunAt });
-        }
+        await this.adapter.updateRun(run.id, {
+          status: "failed",
+          completedAt: new Date(),
+          error: `${error} (${maxAttempts} attempts exhausted)`,
+        });
+        this.emit("onRunFailed", { run, error });
       }
     }
   }
 
-  private dispatch(sig: RegisteredSignal, entry: QueueEntry): void {
+  private incrementPerSignal(signalName: string): void {
+    this.activePerSignal.set(signalName, (this.activePerSignal.get(signalName) ?? 0) + 1);
+  }
+
+  private decrementPerSignal(signalName: string): void {
+    const current = this.activePerSignal.get(signalName) ?? 0;
+    if (current <= 1) {
+      this.activePerSignal.delete(signalName);
+    } else {
+      this.activePerSignal.set(signalName, current - 1);
+    }
+  }
+
+  private dispatch(sig: RegisteredSignal, run: Run): void {
+    const env: Record<string, string> = {
+      ...process.env as Record<string, string>,
+      SIMPLE_SIGNAL_FILE: sig.filePath,
+      SIMPLE_SIGNAL_INPUT: run.input,
+      SIMPLE_SIGNAL_NAME: run.signalName,
+      SIMPLE_SIGNAL_RUN_ID: run.id,
+      SIMPLE_SIGNAL_TIMEOUT: String(run.timeout ?? DEFAULT_TIMEOUT_MS),
+    };
+
+    if (this.adapterName) {
+      env.SIMPLE_SIGNAL_ADAPTER = this.adapterName;
+      if (this.adapterOptions) {
+        env.SIMPLE_SIGNAL_ADAPTER_OPTIONS = JSON.stringify(this.adapterOptions);
+      }
+      if (this.adapterImport) {
+        env.SIMPLE_SIGNAL_ADAPTER_IMPORT = this.adapterImport;
+      }
+    }
+
     const child = spawn("node", ["--import", "tsx", BOOTSTRAP], {
-      env: {
-        ...process.env,
-        SIMPLE_SIGNAL_FILE: sig.filePath,
-        SIMPLE_SIGNAL_INPUT: entry.input,
-        SIMPLE_SIGNAL_NAME: entry.signalName,
-        SIMPLE_SIGNAL_ENTRY_ID: entry.id,
-        SIMPLE_SIGNAL_TIMEOUT: String(entry.timeout ?? DEFAULT_TIMEOUT_MS),
-        ...(this.configModule && {
-          SIMPLE_SIGNAL_CONFIG_MODULE: this.configModule,
-        }),
-      },
+      env,
       stdio: ["ignore", "pipe", "pipe", "ipc"],
-      detached: true,
     });
 
-    // IPC messages from bootstrap (lifecycle events)
+    this.childByRunId.set(run.id, child);
+    let resolved = false;
+
+    const cleanup = () => {
+      this.childByRunId.delete(run.id);
+    };
+
     child.on("message", async (msg: IPCMessage) => {
       switch (msg.type) {
-        case "entry:started":
-          this.emit("onEntryStarted", { entry });
+        case "run:started": {
+          const current = await this.adapter.getRun(run.id);
+          this.emit("onRunStarted", { run: current ?? run });
           break;
-        case "entry:completed":
-          this.emit("onEntryCompleted", { entry });
-          if (entry.kind === "recurring") {
-            // nextRunAt was already updated in tick() — reset status so getDue() picks it up next interval
-            await this.adapter.update(entry.id, { status: "pending" });
+        }
+        case "run:completed": {
+          // Set resolved BEFORE any await (H5)
+          resolved = true;
+          this.activeCount = Math.max(0, this.activeCount - 1);
+          this.decrementPerSignal(run.signalName);
+          cleanup();
+
+          const output = msg.data?.output as string | undefined;
+
+          // Check run wasn't already cancelled/failed by timeout
+          const current = await this.adapter.getRun(run.id);
+          if (current && (current.status === "cancelled" || current.status === "failed")) {
+            break; // Don't overwrite
+          }
+
+          await this.adapter.updateRun(run.id, { status: "completed", completedAt: new Date(), output });
+          this.emit("onRunCompleted", { run: current ?? run, output });
+          break;
+        }
+        case "run:failed": {
+          resolved = true;
+          this.activeCount = Math.max(0, this.activeCount - 1);
+          this.decrementPerSignal(run.signalName);
+          cleanup();
+
+          const error = (msg.data?.error as string) ?? undefined;
+          const retryable = msg.data?.retryable !== false;
+
+          // Check run wasn't already cancelled/failed by timeout
+          const currentRun = await this.adapter.getRun(run.id);
+          if (currentRun && (currentRun.status === "cancelled" || currentRun.status === "failed")) {
+            break;
+          }
+
+          const attempts = currentRun?.attempts ?? run.attempts;
+          const maxAttempts = run.maxAttempts ?? this.defaultMaxAttempts;
+
+          if (retryable && attempts < maxAttempts) {
+            await this.adapter.updateRun(run.id, {
+              status: "pending",
+              startedAt: undefined,
+              lastRunAt: new Date(),
+              error,
+            });
+            this.emit("onRunRetry", { run: currentRun ?? run, attempt: attempts, maxAttempts });
           } else {
-            await this.adapter.update(entry.id, { status: "completed", completedAt: new Date() });
+            await this.adapter.updateRun(run.id, { status: "failed", completedAt: new Date(), error });
+            this.emit("onRunFailed", { run: currentRun ?? run, error });
           }
           break;
-        case "entry:failed":
-          this.emit("onEntryFailed", {
-            entry,
-            error: (msg.data?.error as string) ?? undefined,
+        }
+        case "step:completed":
+          this.emit("onStepCompleted", {
+            run,
+            step: {
+              id: msg.data?.stepId as string,
+              runId: run.id,
+              name: msg.data?.stepName as string,
+              status: "completed",
+              output: msg.data?.output as string | undefined,
+              completedAt: new Date(),
+            },
           });
-          if (entry.kind === "trigger") {
-            await this.adapter.update(entry.id, { status: "failed", completedAt: new Date() });
-          }
           break;
       }
     });
 
-    // Capture child stdout/stderr as log output events
     child.stdout?.on("data", (chunk: Buffer) => {
-      this.emit("onLogOutput", { entry, level: "stdout", message: chunk.toString() });
+      this.emit("onLogOutput", { run, level: "stdout", message: chunk.toString() });
     });
     child.stderr?.on("data", (chunk: Buffer) => {
-      this.emit("onLogOutput", { entry, level: "stderr", message: chunk.toString() });
+      this.emit("onLogOutput", { run, level: "stderr", message: chunk.toString() });
     });
 
     child.on("error", (err) => {
+      resolved = true;
+      this.activeCount = Math.max(0, this.activeCount - 1);
+      this.decrementPerSignal(run.signalName);
+      cleanup();
       console.error(`[simple-signal] Failed to spawn process for "${sig.name}":`, err);
     });
-    child.unref();
+
+    child.on("exit", async () => {
+      cleanup();
+      if (resolved) return;
+
+      this.activeCount = Math.max(0, this.activeCount - 1);
+      this.decrementPerSignal(run.signalName);
+
+      // Check if the run was already handled (cancelled/timed out/completed)
+      const currentRun = await this.adapter.getRun(run.id);
+      if (!currentRun || currentRun.status === "cancelled" || currentRun.status === "completed" || currentRun.status === "failed") {
+        return;
+      }
+
+      const error = "Child process exited unexpectedly";
+      const attempts = currentRun.attempts;
+      const maxAttempts = run.maxAttempts ?? this.defaultMaxAttempts;
+
+      if (attempts < maxAttempts) {
+        await this.adapter.updateRun(run.id, { status: "pending", startedAt: undefined, lastRunAt: new Date(), error });
+        this.emit("onRunRetry", { run: currentRun, attempt: attempts, maxAttempts });
+      } else {
+        await this.adapter.updateRun(run.id, { status: "failed", completedAt: new Date(), error });
+        this.emit("onRunFailed", { run: currentRun, error });
+      }
+    });
   }
-}
-
-function isSignal(value: unknown): value is AnySignal {
-  if (typeof value !== "object" || value === null) return false;
-  const v = value as Record<string, unknown>;
-  return (
-    typeof v.name === "string" &&
-    typeof v.run === "function" &&
-    typeof v.inputSchema === "object" &&
-    v.inputSchema !== null &&
-    typeof (v.inputSchema as Record<string, unknown>).safeParse === "function"
-  );
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((res) => setTimeout(res, ms));
 }

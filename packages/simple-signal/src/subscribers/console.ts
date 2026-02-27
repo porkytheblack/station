@@ -1,4 +1,4 @@
-import type { QueueEntry } from "../types.js";
+import type { Run, Step } from "../types.js";
 import type { SignalSubscriber } from "./index.js";
 
 export class ConsoleSubscriber implements SignalSubscriber {
@@ -10,60 +10,75 @@ export class ConsoleSubscriber implements SignalSubscriber {
     );
   }
 
-  onEntryDispatched(event: { entry: QueueEntry }): void {
+  onRunDispatched(event: { run: Run }): void {
     console.log(
-      `${this.prefix} Dispatched "${event.entry.signalName}" (${event.entry.id})`,
+      `${this.prefix} Dispatched "${event.run.signalName}" (${event.run.id})`,
     );
   }
 
-  onEntryStarted(event: { entry: QueueEntry }): void {
+  onRunStarted(event: { run: Run }): void {
     console.log(
-      `${this.prefix} Started "${event.entry.signalName}" (${event.entry.id})`,
+      `${this.prefix} Started "${event.run.signalName}" (${event.run.id})`,
     );
   }
 
-  onEntryCompleted(event: { entry: QueueEntry }): void {
+  onRunCompleted(event: { run: Run; output?: string }): void {
+    const outputStr = event.output
+      ? ` → ${event.output.length > 200 ? event.output.slice(0, 200) + "…" : event.output}`
+      : "";
     console.log(
-      `${this.prefix} Completed "${event.entry.signalName}" (${event.entry.id})`,
+      `${this.prefix} Completed "${event.run.signalName}" (${event.run.id})${outputStr}`,
     );
   }
 
-  onEntryTimeout(event: { entry: QueueEntry }): void {
+  onRunTimeout(event: { run: Run }): void {
     console.warn(
-      `${this.prefix} Timeout "${event.entry.signalName}" (${event.entry.id})`,
+      `${this.prefix} Timeout "${event.run.signalName}" (${event.run.id})`,
     );
   }
 
-  onEntryRetry(event: {
-    entry: QueueEntry;
+  onRunRetry(event: {
+    run: Run;
     attempt: number;
     maxAttempts: number;
   }): void {
     console.log(
-      `${this.prefix} Retry "${event.entry.signalName}" (${event.entry.id}) — attempt ${event.attempt}/${event.maxAttempts}`,
+      `${this.prefix} Retry "${event.run.signalName}" (${event.run.id}) — attempt ${event.attempt}/${event.maxAttempts}`,
     );
   }
 
-  onEntryFailed(event: { entry: QueueEntry; error?: string }): void {
+  onRunFailed(event: { run: Run; error?: string }): void {
     console.error(
-      `${this.prefix} Failed "${event.entry.signalName}" (${event.entry.id})${event.error ? `: ${event.error}` : ""}`,
+      `${this.prefix} Failed "${event.run.signalName}" (${event.run.id})${event.error ? `: ${event.error}` : ""}`,
     );
   }
 
-  onEntryRescheduled(event: { entry: QueueEntry; nextRunAt: Date }): void {
+  onRunCancelled(event: { run: Run }): void {
     console.log(
-      `${this.prefix} Rescheduled "${event.entry.signalName}" (${event.entry.id}) — next at ${event.nextRunAt.toISOString()}`,
+      `${this.prefix} Cancelled "${event.run.signalName}" (${event.run.id})`,
+    );
+  }
+
+  onRunRescheduled(event: { run: Run; nextRunAt: Date }): void {
+    console.log(
+      `${this.prefix} Rescheduled "${event.run.signalName}" (${event.run.id}) — next at ${event.nextRunAt.toISOString()}`,
+    );
+  }
+
+  onStepCompleted(event: { run: Run; step: Step }): void {
+    console.log(
+      `${this.prefix} Step "${event.step.name}" completed for "${event.run.signalName}" (${event.run.id})`,
     );
   }
 
   onLogOutput(event: {
-    entry: QueueEntry;
+    run: Run;
     level: "stdout" | "stderr";
     message: string;
   }): void {
     const lines = event.message.trimEnd();
     if (!lines) return;
     const method = event.level === "stderr" ? console.error : console.log;
-    method(`${this.prefix} [${event.entry.signalName}] ${lines}`);
+    method(`${this.prefix} [${event.run.signalName}] ${lines}`);
   }
 }

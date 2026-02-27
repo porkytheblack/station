@@ -1,0 +1,16 @@
+import { configure } from "simple-signal";
+import { SqliteAdapter } from "@simple-signal/adapter-sqlite";
+import { sendEmail } from "./signals/send-email.js";
+
+const DB_PATH = "./examples/06-with-sqlite/jobs.db";
+
+configure({ adapter: new SqliteAdapter({ dbPath: DB_PATH }) });
+
+const id = await sendEmail.trigger({
+  to: "alice@example.com",
+  subject: "Hello from simple-signal",
+  body: "This run was persisted to SQLite and picked up by the runner.",
+});
+
+console.log(`Run triggered: ${id}`);
+console.log(`Persisted to ${DB_PATH} — start the runner to execute it.`);
