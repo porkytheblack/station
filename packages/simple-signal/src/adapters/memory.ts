@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { SignalQueueAdapter } from "./index.js";
-import type { Run, RunPatch, Step, StepPatch } from "../types.js";
+import type { Run, RunPatch, RunStatus, Step, StepPatch } from "../types.js";
 import { registerAdapter } from "./registry.js";
 
 /**
@@ -45,7 +45,14 @@ export class MemoryAdapter implements SignalQueueAdapter {
   async updateRun(id: string, patch: RunPatch): Promise<void> {
     const run = this.runs.get(id);
     if (run) {
-      Object.assign(run, patch);
+      const rec = run as unknown as Record<string, unknown>;
+      for (const [key, value] of Object.entries(patch)) {
+        if (value === undefined) {
+          delete rec[key];
+        } else {
+          rec[key] = value;
+        }
+      }
     }
   }
 
@@ -55,6 +62,27 @@ export class MemoryAdapter implements SignalQueueAdapter {
     );
   }
 
+  async hasRunWithStatus(signalName: string, statuses: RunStatus[]): Promise<boolean> {
+    const statusSet = new Set(statuses);
+    for (const run of this.runs.values()) {
+      if (run.signalName === signalName && statusSet.has(run.status)) return true;
+    }
+    return false;
+  }
+
+  async purgeRuns(olderThan: Date, statuses: RunStatus[]): Promise<number> {
+    const statusSet = new Set(statuses);
+    let purged = 0;
+    for (const [id, run] of this.runs) {
+      if (statusSet.has(run.status) && run.completedAt && run.completedAt < olderThan) {
+        this.runs.delete(id);
+        await this.removeSteps(id);
+        purged++;
+      }
+    }
+    return purged;
+  }
+
   async addStep(step: Step): Promise<void> {
     this.steps.set(step.id, step);
   }
@@ -62,7 +90,14 @@ export class MemoryAdapter implements SignalQueueAdapter {
   async updateStep(id: string, patch: StepPatch): Promise<void> {
     const step = this.steps.get(id);
     if (step) {
-      Object.assign(step, patch);
+      const rec = step as unknown as Record<string, unknown>;
+      for (const [key, value] of Object.entries(patch)) {
+        if (value === undefined) {
+          delete rec[key];
+        } else {
+          rec[key] = value;
+        }
+      }
     }
   }
 

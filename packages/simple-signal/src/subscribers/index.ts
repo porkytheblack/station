@@ -5,7 +5,7 @@ import type { Run, Step } from "../types.js";
  * via Node.js IPC channel.
  */
 export interface IPCMessage {
-  type: "run:started" | "run:completed" | "run:failed" | "step:completed";
+  type: "run:started" | "run:completed" | "run:failed" | "step:completed" | "onComplete:error";
   runId: string;
   signalName: string;
   timestamp: string;
@@ -51,8 +51,17 @@ export interface SignalSubscriber {
   /** Recurring run scheduled for its next execution. */
   onRunRescheduled?(event: { run: Run; nextRunAt: Date }): void;
 
+  /** A step within a run started. */
+  onStepStarted?(event: { run: Run; step: Pick<Step, "id" | "runId" | "name"> }): void;
+
   /** A step within a run completed. */
   onStepCompleted?(event: { run: Run; step: Step }): void;
+
+  /** A step within a run failed. */
+  onStepFailed?(event: { run: Run; step: Step }): void;
+
+  /** The onComplete handler threw an error (run still marked as completed). */
+  onCompleteError?(event: { run: Run; error: string }): void;
 
   /** Console output captured from the child process. */
   onLogOutput?(event: {

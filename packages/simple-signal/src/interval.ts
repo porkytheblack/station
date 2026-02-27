@@ -21,7 +21,9 @@ export function parseInterval(interval: string): number {
   const unit = match[2].toLowerCase();
   const ms = UNITS[unit];
   if (!ms || value <= 0) {
-    throw new Error(`Invalid interval "${interval}"`);
+    throw new Error(
+      `Invalid interval "${interval}". Value must be a positive integer (e.g. "5m", not "0m").`,
+    );
   }
   return value * ms;
 }

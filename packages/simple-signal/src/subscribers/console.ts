@@ -59,15 +59,39 @@ export class ConsoleSubscriber implements SignalSubscriber {
     );
   }
 
+  onRunSkipped(event: { run: Run; reason: string }): void {
+    console.log(
+      `${this.prefix} Skipped "${event.run.signalName}" (${event.run.id}): ${event.reason}`,
+    );
+  }
+
   onRunRescheduled(event: { run: Run; nextRunAt: Date }): void {
     console.log(
       `${this.prefix} Rescheduled "${event.run.signalName}" (${event.run.id}) — next at ${event.nextRunAt.toISOString()}`,
     );
   }
 
+  onStepStarted(event: { run: Run; step: Pick<Step, "id" | "runId" | "name"> }): void {
+    console.log(
+      `${this.prefix} Step "${event.step.name}" started for "${event.run.signalName}" (${event.run.id})`,
+    );
+  }
+
   onStepCompleted(event: { run: Run; step: Step }): void {
     console.log(
       `${this.prefix} Step "${event.step.name}" completed for "${event.run.signalName}" (${event.run.id})`,
+    );
+  }
+
+  onStepFailed(event: { run: Run; step: Step }): void {
+    console.error(
+      `${this.prefix} Step "${event.step.name}" failed for "${event.run.signalName}" (${event.run.id})${event.step.error ? `: ${event.step.error}` : ""}`,
+    );
+  }
+
+  onCompleteError(event: { run: Run; error: string }): void {
+    console.error(
+      `${this.prefix} onComplete handler failed for "${event.run.signalName}" (${event.run.id}): ${event.error}`,
     );
   }
 

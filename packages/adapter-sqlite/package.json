@@ -8,6 +8,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./broadcast": {
+      "types": "./dist/broadcast.d.ts",
+      "import": "./dist/broadcast.js"
     }
   },
   "files": [
@@ -30,6 +34,7 @@
     "@types/better-sqlite3": "^7.6.13"
   },
   "peerDependencies": {
-    "simple-signal": "workspace:*"
+    "simple-signal": "workspace:*",
+    "simple-broadcast": "workspace:*"
   }
 }

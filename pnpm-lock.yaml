@@ -20,6 +20,9 @@ importers:
       '@simple-signal/adapter-sqlite':
         specifier: workspace:*
         version: link:../packages/adapter-sqlite
+      simple-broadcast:
+        specifier: workspace:*
+        version: link:../packages/simple-broadcast
       simple-signal:
         specifier: workspace:*
         version: link:../packages/simple-signal
@@ -29,6 +32,9 @@ importers:
       better-sqlite3:
         specifier: ^11.9.1
         version: 11.10.0
+      simple-broadcast:
+        specifier: workspace:*
+        version: link:../simple-broadcast
       simple-signal:
         specifier: workspace:*
         version: link:../simple-signal
@@ -36,6 +42,18 @@ importers:
       '@types/better-sqlite3':
         specifier: ^7.6.13
         version: 7.6.13
+
+  packages/simple-broadcast:
+    devDependencies:
+      '@types/node':
+        specifier: ^25.3.0
+        version: 25.3.0
+      simple-signal:
+        specifier: workspace:*
+        version: link:../simple-signal
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
 
   packages/simple-signal:
     dependencies:

@@ -84,6 +84,11 @@ export class SignalRunner {
     this.maxConcurrent = options.maxConcurrent ?? 5;
   }
 
+  /** The underlying queue adapter. Useful for broadcast orchestration and advanced queries. */
+  getAdapter(): SignalQueueAdapter {
+    return this.adapter;
+  }
+
   static create(signalsDir: string, options: Omit<SignalRunnerOptions, "signalsDir"> = {}): SignalRunner {
     const subscribers = options.subscribers ?? [new ConsoleSubscriber()];
     return new SignalRunner({ ...options, signalsDir, subscribers });
@@ -114,6 +119,37 @@ export class SignalRunner {
     return this.adapter.getSteps(runId);
   }
 
+  /**
+   * Wait for a run to reach a terminal status (completed, failed, cancelled).
+   * If the run does not exist yet and `waitForExistence` is true, polls until it appears.
+   */
+  async waitForRun(runId: string, opts?: { pollMs?: number; timeoutMs?: number; waitForExistence?: boolean }): Promise<Run | null> {
+    const pollMs = opts?.pollMs ?? 200;
+    const timeoutMs = opts?.timeoutMs ?? 60_000;
+    const waitForExistence = opts?.waitForExistence ?? false;
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+      const run = await this.adapter.getRun(runId);
+      if (!run) {
+        if (!waitForExistence) return null;
+        await new Promise((r) => setTimeout(r, pollMs));
+        continue;
+      }
+      if (run.status === "completed" || run.status === "failed" || run.status === "cancelled") {
+        return run;
+      }
+      await new Promise((r) => setTimeout(r, pollMs));
+    }
+    return this.adapter.getRun(runId);
+  }
+
+  /** Purge completed/failed/cancelled runs older than the given age. */
+  async purgeCompleted(olderThanMs: number): Promise<number> {
+    const cutoff = new Date(Date.now() - olderThanMs);
+    return this.adapter.purgeRuns(cutoff, ["completed", "failed", "cancelled"]);
+  }
+
   private emit<K extends keyof SignalSubscriber>(
     event: K,
     data: Parameters<NonNullable<SignalSubscriber[K]>>[0],
@@ -133,6 +169,16 @@ export class SignalRunner {
       await this.discover(resolve(this.signalsDir));
     }
 
+    // M5: Install default SIGINT/SIGTERM handlers for graceful shutdown
+    const shutdown = () => {
+      console.log("[simple-signal] Received shutdown signal, stopping...");
+      this.stop({ graceful: true, timeoutMs: 10_000 }).catch((err) => {
+        console.error("[simple-signal] Error during shutdown:", err);
+      });
+    };
+    process.once("SIGINT", shutdown);
+    process.once("SIGTERM", shutdown);
+
     this.running = true;
     while (this.running) {
       try {
@@ -142,6 +188,9 @@ export class SignalRunner {
       }
       await this.sleep(this.pollIntervalMs);
     }
+
+    process.removeListener("SIGINT", shutdown);
+    process.removeListener("SIGTERM", shutdown);
   }
 
   /** Stop the runner and optionally wait for active children to exit. */
@@ -164,6 +213,9 @@ export class SignalRunner {
         child.kill("SIGTERM");
       }
     }
+
+    // M9: Close the adapter to release resources (e.g. database connections)
+    await this.adapter.close?.();
   }
 
   /** Cancel a specific run. Marks it as cancelled and kills the child process. */
@@ -229,6 +281,12 @@ export class SignalRunner {
         const mod = await import(filePath);
         for (const value of Object.values(mod)) {
           if (isSignal(value)) {
+            // L11: Warn on duplicate signal names
+            if (this.registry.has(value.name)) {
+              console.warn(
+                `[simple-signal] Duplicate signal name "${value.name}" — overwriting with ${filePath}`,
+              );
+            }
             this.registry.set(value.name, {
               name: value.name,
               filePath,
@@ -309,8 +367,9 @@ export class SignalRunner {
       const freshRun = await this.adapter.getRun(run.id);
       this.activeCount++;
       this.incrementPerSignal(run.signalName);
-      this.emit("onRunDispatched", { run: freshRun ?? run });
-      this.dispatch(sig, run);
+      const dispatchRun = freshRun ?? run;
+      this.emit("onRunDispatched", { run: dispatchRun });
+      this.dispatch(sig, dispatchRun);
     }
   }
 
@@ -318,6 +377,15 @@ export class SignalRunner {
     const now = new Date();
     for (const [name, schedule] of this.recurringSchedules) {
       if (schedule.nextRunAt > now) continue;
+
+      // M7: Skip if a pending or running run already exists for this signal
+      const hasPendingOrRunning = await this.adapter.hasRunWithStatus(name, ["pending", "running"]);
+      if (hasPendingOrRunning) {
+        // Advance schedule anyway to prevent tight-loop re-checks
+        const ms = parseInterval(schedule.interval);
+        schedule.nextRunAt = new Date(Date.now() + ms);
+        continue;
+      }
 
       const id = this.adapter.generateId();
       const run: Run = {
@@ -350,34 +418,36 @@ export class SignalRunner {
       const elapsed = Date.now() - run.startedAt.getTime();
       if (elapsed < run.timeout) continue;
 
-      const maxAttempts = run.maxAttempts ?? this.defaultMaxAttempts;
-
-      // Kill the child process (H4)
+      // Kill the child process
       const child = this.childByRunId.get(run.id);
       if (child) {
         child.kill("SIGTERM");
-        // The exit handler will fire and handle cleanup/retry/fail
-        // but we update status here since exit handler checks current status
       }
 
-      this.emit("onRunTimeout", { run });
+      // Re-read run status after kill — IPC may have already resolved it (H1)
+      const current = await this.adapter.getRun(run.id);
+      if (!current || current.status !== "running") continue;
 
-      const error = `Timed out after ${run.timeout}ms`;
-      if (run.attempts < maxAttempts) {
+      const maxAttempts = current.maxAttempts ?? this.defaultMaxAttempts;
+
+      this.emit("onRunTimeout", { run: current });
+
+      const error = `Timed out after ${current.timeout}ms`;
+      if (current.attempts < maxAttempts) {
         await this.adapter.updateRun(run.id, {
           status: "pending",
           startedAt: undefined,
           lastRunAt: new Date(),
           error,
         });
-        this.emit("onRunRetry", { run, attempt: run.attempts, maxAttempts });
+        this.emit("onRunRetry", { run: current, attempt: current.attempts, maxAttempts });
       } else {
         await this.adapter.updateRun(run.id, {
           status: "failed",
           completedAt: new Date(),
           error: `${error} (${maxAttempts} attempts exhausted)`,
         });
-        this.emit("onRunFailed", { run, error });
+        this.emit("onRunFailed", { run: current, error });
       }
     }
   }
@@ -498,6 +568,12 @@ export class SignalRunner {
             },
           });
           break;
+        case "onComplete:error":
+          this.emit("onCompleteError", {
+            run,
+            error: (msg.data?.error as string) ?? "Unknown onComplete error",
+          });
+          break;
       }
     });
 
@@ -518,14 +594,23 @@ export class SignalRunner {
 
     child.on("exit", async () => {
       cleanup();
+
+      // H2: Grace period — let pending IPC message handlers resolve before we act.
+      // Node can fire exit synchronously after the last IPC message, before the
+      // async message handler has run.
+      await new Promise((r) => setTimeout(r, 50));
+
+      // Always decrement counters first (prevents activeCount drift)
+      if (!resolved) {
+        this.activeCount = Math.max(0, this.activeCount - 1);
+        this.decrementPerSignal(run.signalName);
+      }
+
       if (resolved) return;
 
-      this.activeCount = Math.max(0, this.activeCount - 1);
-      this.decrementPerSignal(run.signalName);
-
-      // Check if the run was already handled (cancelled/timed out/completed)
+      // Check if the run was already handled (cancelled/timed out/completed/retried)
       const currentRun = await this.adapter.getRun(run.id);
-      if (!currentRun || currentRun.status === "cancelled" || currentRun.status === "completed" || currentRun.status === "failed") {
+      if (!currentRun || currentRun.status !== "running") {
         return;
       }
 

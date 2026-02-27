@@ -3,18 +3,6 @@
  * Provides structured, actionable errors with error codes.
  */
 
-export class AdapterNotConfiguredError extends Error {
-  readonly code = "ADAPTER_NOT_CONFIGURED" as const;
-
-  constructor() {
-    super(
-      'No adapter configured. Call configure({ adapter }) before triggering signals, ' +
-      'or pass an adapter to SignalRunner.',
-    );
-    this.name = "AdapterNotConfiguredError";
-  }
-}
-
 export class SignalValidationError extends Error {
   readonly code = "SIGNAL_VALIDATION_ERROR" as const;
   readonly signalName: string;
@@ -54,15 +42,3 @@ export class SignalNotFoundError extends Error {
   }
 }
 
-export class SignalConcurrencyError extends Error {
-  readonly code = "SIGNAL_CONCURRENCY_EXCEEDED" as const;
-  readonly signalName: string;
-  readonly maxConcurrencyPerSignal: number;
-
-  constructor(signalName: string, maxConcurrencyPerSignal: number) {
-    super(`Signal "${signalName}" has ${maxConcurrencyPerSignal} runs already active, skipping`);
-    this.name = "SignalConcurrencyError";
-    this.signalName = signalName;
-    this.maxConcurrencyPerSignal = maxConcurrencyPerSignal;
-  }
-}

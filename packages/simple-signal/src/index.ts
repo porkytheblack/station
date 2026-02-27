@@ -1,8 +1,9 @@
 export { signal, SignalBuilder, StepBuilder, type Signal, type AnySignal } from "./signal.js";
 export { SignalRunner, type SignalRunnerOptions } from "./signal-runner.js";
-export { configure, getAdapter } from "./config.js";
+export { configure, getAdapter, isConfigured } from "./config.js";
 export { parseInterval } from "./interval.js";
 
+export { DEFAULT_TIMEOUT_MS, DEFAULT_MAX_ATTEMPTS } from "./types.js";
 export type { Run, RunKind, RunStatus, RunPatch, Step, StepStatus, StepPatch, StepDefinition } from "./types.js";
 export {
   type SignalQueueAdapter,
@@ -22,11 +23,9 @@ export {
 } from "./subscribers/index.js";
 
 export {
-  AdapterNotConfiguredError,
   SignalValidationError,
   SignalTimeoutError,
   SignalNotFoundError,
-  SignalConcurrencyError,
 } from "./errors.js";
 
 export { isSignal, SIGNAL_BRAND } from "./util.js";

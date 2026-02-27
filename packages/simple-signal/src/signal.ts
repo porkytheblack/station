@@ -177,10 +177,25 @@ export class SignalBuilder<TInput = unknown, TOutput = void> {
     this._name = name;
   }
 
-  private _clone<TI, TO>(): SignalBuilder<TI, TO> {
-    const b = new SignalBuilder<TI, TO>(this._name);
-    b._inputSchema = this._inputSchema as unknown as z.ZodType<TI> | undefined;
-    b._outputSchema = this._outputSchema as unknown as z.ZodType<TO> | undefined;
+  // All builder methods return new instances (immutable builder pattern).
+  // This prevents footguns where branching from a shared builder mutates the original.
+
+  private _clone(): SignalBuilder<TInput, TOutput> {
+    const b = new SignalBuilder<TInput, TOutput>(this._name);
+    b._inputSchema = this._inputSchema;
+    b._outputSchema = this._outputSchema;
+    b._interval = this._interval;
+    b._timeout = this._timeout;
+    b._maxAttempts = this._maxAttempts;
+    b._maxConcurrency = this._maxConcurrency;
+    b._recurringInput = this._recurringInput;
+    return b;
+  }
+
+  input<T>(schema: z.ZodType<T>): SignalBuilder<T, TOutput> {
+    const b = new SignalBuilder<T, TOutput>(this._name);
+    b._inputSchema = schema;
+    b._outputSchema = this._outputSchema as unknown as z.ZodType<TOutput> | undefined;
     b._interval = this._interval;
     b._timeout = this._timeout;
     b._maxAttempts = this._maxAttempts;
@@ -188,47 +203,47 @@ export class SignalBuilder<TInput = unknown, TOutput = void> {
     return b;
   }
 
-  input<T>(schema: z.ZodType<T>): SignalBuilder<T, TOutput> {
-    const b = this._clone<T, TOutput>();
-    b._inputSchema = schema;
-    return b;
-  }
-
   output<T>(schema: z.ZodType<T>): SignalBuilder<TInput, T> {
-    const b = this._clone<TInput, T>();
+    const b = new SignalBuilder<TInput, T>(this._name);
+    b._inputSchema = this._inputSchema as unknown as z.ZodType<TInput> | undefined;
     b._outputSchema = schema;
+    b._interval = this._interval;
+    b._timeout = this._timeout;
+    b._maxAttempts = this._maxAttempts;
+    b._maxConcurrency = this._maxConcurrency;
+    b._recurringInput = this._recurringInput as unknown as TInput | undefined;
     return b;
   }
 
-  every(interval: string): this {
-    parseInterval(interval); // validate eagerly (L5)
-    const b = this._clone<TInput, TOutput>();
+  every(interval: string): SignalBuilder<TInput, TOutput> {
+    parseInterval(interval); // validate eagerly
+    const b = this._clone();
     b._interval = interval;
-    return b as unknown as this;
+    return b;
   }
 
-  timeout(ms: number): this {
-    const b = this._clone<TInput, TOutput>();
+  timeout(ms: number): SignalBuilder<TInput, TOutput> {
+    const b = this._clone();
     b._timeout = ms;
-    return b as unknown as this;
+    return b;
   }
 
-  retries(n: number): this {
-    const b = this._clone<TInput, TOutput>();
+  retries(n: number): SignalBuilder<TInput, TOutput> {
+    const b = this._clone();
     b._maxAttempts = n + 1;
-    return b as unknown as this;
+    return b;
   }
 
-  concurrency(n: number): this {
-    const b = this._clone<TInput, TOutput>();
+  concurrency(n: number): SignalBuilder<TInput, TOutput> {
+    const b = this._clone();
     b._maxConcurrency = n;
-    return b as unknown as this;
+    return b;
   }
 
-  withInput(input: TInput): this {
-    const b = this._clone<TInput, TOutput>();
+  withInput(input: TInput): SignalBuilder<TInput, TOutput> {
+    const b = this._clone();
     b._recurringInput = input;
-    return b as unknown as this;
+    return b;
   }
 
   private _config(): Omit<SignalConfig<TInput, TOutput>, "handler" | "steps" | "onCompleteHandler"> {

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
-import type { SerializableAdapter, AdapterManifest, Run, RunPatch, Step, StepPatch } from "simple-signal";
+import type { SerializableAdapter, AdapterManifest, Run, RunPatch, RunStatus, Step, StepPatch } from "simple-signal";
 import { registerAdapter } from "simple-signal";
 
 const MODULE_URL = import.meta.url;
@@ -165,6 +165,12 @@ export class SqliteAdapter implements SerializableAdapter {
         ON ${this.tableName} (status) WHERE status = 'running'
     `);
 
+    // M3: Index on signal_name for listRuns queries
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_${this.tableName}_signal_name
+        ON ${this.tableName} (signal_name)
+    `);
+
     // Steps table with foreign key
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS ${this.tableName}_steps (
@@ -266,11 +272,18 @@ export class SqliteAdapter implements SerializableAdapter {
     return row ? rowToRun(row) : null;
   }
 
+  /** Allowed RunPatch keys (L13: whitelist to prevent injection via unexpected keys). */
+  private static readonly RUN_PATCH_KEYS = new Set([
+    "input", "output", "error", "status", "attempts", "maxAttempts",
+    "timeout", "interval", "nextRunAt", "lastRunAt", "startedAt", "completedAt",
+  ]);
+
   async updateRun(id: string, patch: RunPatch): Promise<void> {
     const setClauses: string[] = [];
     const values: Record<string, unknown> = { id };
 
     for (const [key, value] of Object.entries(patch)) {
+      if (!SqliteAdapter.RUN_PATCH_KEYS.has(key)) continue;
       if (value === undefined) {
         const col = toColumn(key);
         const param = `p_${col}`;
@@ -303,6 +316,30 @@ export class SqliteAdapter implements SerializableAdapter {
     return rows.map(rowToRun);
   }
 
+  async hasRunWithStatus(signalName: string, statuses: RunStatus[]): Promise<boolean> {
+    if (statuses.length === 0) return false;
+    const placeholders = statuses.map(() => "?").join(", ");
+    const row = this.db
+      .prepare(
+        `SELECT 1 FROM ${this.tableName} WHERE signal_name = ? AND status IN (${placeholders}) LIMIT 1`,
+      )
+      .get(signalName, ...statuses);
+    return row !== undefined;
+  }
+
+  async purgeRuns(olderThan: Date, statuses: RunStatus[]): Promise<number> {
+    if (statuses.length === 0) return 0;
+    const placeholders = statuses.map(() => "?").join(", ");
+    const cutoff = olderThan.toISOString();
+    // Steps cascade via FOREIGN KEY ON DELETE CASCADE
+    const result = this.db
+      .prepare(
+        `DELETE FROM ${this.tableName} WHERE status IN (${placeholders}) AND completed_at IS NOT NULL AND completed_at < ?`,
+      )
+      .run(...statuses, cutoff);
+    return result.changes;
+  }
+
   async addStep(step: Step): Promise<void> {
     this.db
       .prepare(
@@ -324,11 +361,17 @@ export class SqliteAdapter implements SerializableAdapter {
       });
   }
 
+  /** Allowed StepPatch keys. */
+  private static readonly STEP_PATCH_KEYS = new Set([
+    "status", "input", "output", "error", "startedAt", "completedAt",
+  ]);
+
   async updateStep(id: string, patch: StepPatch): Promise<void> {
     const setClauses: string[] = [];
     const values: Record<string, unknown> = { id };
 
     for (const [key, value] of Object.entries(patch)) {
+      if (!SqliteAdapter.STEP_PATCH_KEYS.has(key)) continue;
       if (value === undefined) {
         const col = toStepColumn(key);
         const param = `p_${col}`;

@@ -11,7 +11,7 @@ import { configure, getAdapter } from "./config.js";
 import { createAdapter } from "./adapters/registry.js";
 // Ensure built-in adapters are registered
 import "./adapters/memory.js";
-import { SignalNotFoundError, SignalTimeoutError, SignalValidationError } from "./errors.js";
+import { SignalNotFoundError, SignalValidationError } from "./errors.js";
 import type { AnySignal } from "./signal.js";
 import type { Step } from "./types.js";
 import { isSignal } from "./util.js";
@@ -20,7 +20,6 @@ const signalName = process.env.SIMPLE_SIGNAL_NAME;
 const signalFile = process.env.SIMPLE_SIGNAL_FILE;
 const runId = process.env.SIMPLE_SIGNAL_RUN_ID;
 const rawInput = process.env.SIMPLE_SIGNAL_INPUT;
-const timeoutMs = parseInt(process.env.SIMPLE_SIGNAL_TIMEOUT ?? "300000", 10);
 const adapterName = process.env.SIMPLE_SIGNAL_ADAPTER;
 const adapterOptionsRaw = process.env.SIMPLE_SIGNAL_ADAPTER_OPTIONS;
 const adapterImport = process.env.SIMPLE_SIGNAL_ADAPTER_IMPORT;
@@ -30,20 +29,30 @@ if (!signalName || !signalFile || !runId || rawInput === undefined) {
   process.exit(1);
 }
 
-/** Send a lifecycle event to the parent runner via IPC (if available). */
+/**
+ * Send a lifecycle event to the parent runner via IPC (if available).
+ * Returns a promise that resolves once the message is flushed (H4).
+ */
 function sendIPC(
-  type: "run:started" | "run:completed" | "run:failed" | "step:completed",
+  type: "run:started" | "run:completed" | "run:failed" | "step:completed" | "onComplete:error",
   data?: Record<string, unknown>,
-): void {
-  if (typeof process.send === "function") {
-    process.send({
-      type,
-      runId,
-      signalName,
-      timestamp: new Date().toISOString(),
-      data,
-    });
-  }
+): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof process.send === "function") {
+      process.send(
+        {
+          type,
+          runId,
+          signalName,
+          timestamp: new Date().toISOString(),
+          data,
+        },
+        () => resolve(),
+      );
+    } else {
+      resolve();
+    }
+  });
 }
 
 /**
@@ -107,7 +116,7 @@ async function executeSteps(
         completedAt: new Date(),
       });
 
-      sendIPC("step:completed", {
+      await sendIPC("step:completed", {
         stepId,
         stepName,
         output: JSON.stringify(output),
@@ -135,7 +144,7 @@ try {
     const options = adapterOptionsRaw ? JSON.parse(adapterOptionsRaw) : {};
     configure({ adapter: createAdapter(adapterName, options) });
   } else {
-    // No adapter specified — use MemoryAdapter for in-process step tracking
+    // No serializable adapter — use MemoryAdapter for in-process step tracking.
     configure({ adapter: createAdapter("memory", {}) });
   }
 
@@ -144,40 +153,34 @@ try {
 
   for (const value of Object.values(mod)) {
     if (isSignal(value) && value.name === signalName) {
+      // H3: Warn when step-based signal runs without a serializable adapter
+      if (value.steps && !adapterName) {
+        console.warn(
+          `[simple-signal] Signal "${signalName}" uses steps but no serializable adapter is configured. ` +
+          "Step state will not persist across retries or crashes. Consider using SqliteAdapter.",
+        );
+      }
+
       const parsed: unknown = JSON.parse(rawInput);
       const result = value.inputSchema.safeParse(parsed);
 
       if (!result.success) {
         const err = new SignalValidationError(signalName, result.error?.message ?? "Unknown validation error");
         console.error(`[simple-signal] ${err.message}`);
-        sendIPC("run:failed", { error: err.message, retryable: false });
+        await sendIPC("run:failed", { error: err.message, retryable: false });
         process.exit(1);
       }
 
-      sendIPC("run:started");
+      await sendIPC("run:started");
 
-      // Execute handler or steps with timeout
+      // H5: No child-side timeout. The parent runner's checkTimeouts() is the
+      // single authority for timeout enforcement, preventing double-timeout races.
       let output: unknown;
-      let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
 
-      try {
-        await Promise.race([
-          (async () => {
-            if (value.steps) {
-              output = await executeSteps(value, result.data);
-            } else if (value.handler) {
-              output = await value.handler(result.data);
-            }
-          })(),
-          new Promise<never>((_, reject) => {
-            timeoutHandle = setTimeout(
-              () => reject(new SignalTimeoutError(signalName, timeoutMs)),
-              timeoutMs,
-            );
-          }),
-        ]);
-      } finally {
-        if (timeoutHandle) clearTimeout(timeoutHandle);
+      if (value.steps) {
+        output = await executeSteps(value, result.data);
+      } else if (value.handler) {
+        output = await value.handler(result.data);
       }
 
       // Validate output against schema if present
@@ -194,12 +197,21 @@ try {
 
       const serializedOutput = output !== undefined ? JSON.stringify(output) : undefined;
 
-      // Call onComplete handler in this child process
+      // M1: Call onComplete handler, report errors via IPC (don't fail the run)
       if (value.onCompleteHandler && output !== undefined) {
-        await value.onCompleteHandler(output, result.data);
+        try {
+          await value.onCompleteHandler(output, result.data);
+        } catch (onCompleteErr) {
+          const errMsg = onCompleteErr instanceof Error ? onCompleteErr.message : String(onCompleteErr);
+          console.error(
+            `[simple-signal] onComplete handler for "${signalName}" threw:`,
+            onCompleteErr,
+          );
+          await sendIPC("onComplete:error", { error: errMsg });
+        }
       }
 
-      sendIPC("run:completed", { output: serializedOutput });
+      await sendIPC("run:completed", { output: serializedOutput });
 
       found = true;
       break;
@@ -209,14 +221,17 @@ try {
   if (!found) {
     const err = new SignalNotFoundError(signalName, signalFile);
     console.error(`[simple-signal] ${err.message}`);
-    sendIPC("run:failed", { error: err.message, retryable: false });
+    await sendIPC("run:failed", { error: err.message, retryable: false });
     process.exit(1);
   }
 
-  process.exit(0);
+  // H4: Let the event loop drain naturally instead of process.exit(0)
+  // so IPC messages are fully flushed before the process ends.
 } catch (err) {
   const errorMsg = err instanceof Error ? err.message : String(err);
   console.error(`[simple-signal] Signal "${signalName}" failed:`, err);
-  sendIPC("run:failed", { error: errorMsg, retryable: true });
+  // Timeouts and validation errors are not retryable
+  const retryable = !(err instanceof SignalValidationError);
+  await sendIPC("run:failed", { error: errorMsg, retryable });
   process.exit(1);
 }

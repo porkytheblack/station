@@ -1,4 +1,4 @@
-import type { Run, RunPatch, Step, StepPatch } from "../types.js";
+import type { Run, RunPatch, RunStatus, Step, StepPatch } from "../types.js";
 
 export interface SignalQueueAdapter {
   // Run methods
@@ -9,6 +9,12 @@ export interface SignalQueueAdapter {
   getRun(id: string): Promise<Run | null>;
   updateRun(id: string, patch: RunPatch): Promise<void>;
   listRuns(signalName: string): Promise<Run[]>;
+
+  /** Check if any run for the given signal has one of the specified statuses. */
+  hasRunWithStatus(signalName: string, statuses: RunStatus[]): Promise<boolean>;
+
+  /** Purge runs in terminal statuses older than the given date. Returns count deleted. */
+  purgeRuns(olderThan: Date, statuses: RunStatus[]): Promise<number>;
 
   // Step methods
   addStep(step: Step): Promise<void>;

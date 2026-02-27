@@ -4,6 +4,7 @@
   "type": "module",
   "dependencies": {
     "simple-signal": "workspace:*",
+    "simple-broadcast": "workspace:*",
     "@simple-signal/adapter-sqlite": "workspace:*"
   }
 }
