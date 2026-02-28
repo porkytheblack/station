@@ -1,0 +1,1770 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Signal — Brand Guidelines</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;1,300;1,400&family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --rust: #8B5A2B;
+    --rust-light: #A0622D;
+    --rust-pale: #C4834A;
+    --patina: #4A6741;
+    --patina-light: #5C7C52;
+    --patina-pale: #6B9962;
+    --concrete: #F4F1EC;
+    --concrete-dark: #E8E4DC;
+    --concrete-mid: #D4CEBF;
+    --charcoal: #1C1C1E;
+    --charcoal-mid: #2C2C2E;
+    --wire: #3A3A3C;
+    --muted: #8A8A8E;
+    --muted-light: #AEAEB2;
+    --sky: #7FB2CC;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--concrete);
+    color: var(--charcoal);
+    font-family: 'Space Grotesk', sans-serif;
+    font-weight: 300;
+  }
+
+  /* GRAIN */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 9999;
+    opacity: 0.35;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+  }
+
+  /* ── NAV ── */
+  nav {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 3rem;
+    height: 52px;
+    background: rgba(244,241,236,0.9);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid rgba(139,90,43,0.12);
+  }
+
+  .nav-brand {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--charcoal);
+    display: flex; align-items: center; gap: 0.6rem;
+  }
+  .nav-brand::before {
+    content: '';
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--patina-pale);
+    animation: pulse-dot 2s ease-in-out infinite;
+  }
+  @keyframes pulse-dot {
+    0%,100% { opacity:1; box-shadow: 0 0 0 0 rgba(107,153,98,0.4); }
+    50% { opacity:0.7; box-shadow: 0 0 0 4px rgba(107,153,98,0); }
+  }
+
+  .nav-links {
+    display: flex; gap: 0;
+    list-style: none;
+  }
+  .nav-links a {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    text-decoration: none;
+    padding: 0 1.25rem;
+    height: 52px;
+    display: flex; align-items: center;
+    border-bottom: 2px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .nav-links a:hover { color: var(--charcoal); }
+  .nav-links a.active { color: var(--rust); border-bottom-color: var(--rust); }
+
+  /* ── SECTIONS ── */
+  section {
+    padding: 7rem 3rem 5rem;
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+
+  .section-head {
+    margin-bottom: 4rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid rgba(139,90,43,0.18);
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 2rem;
+  }
+
+  .section-eyebrow {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--rust);
+    margin-bottom: 0.75rem;
+    display: flex; align-items: center; gap: 0.75rem;
+  }
+  .section-eyebrow::before {
+    content: '';
+    width: 1.5rem; height: 1px;
+    background: var(--rust);
+  }
+
+  h2 {
+    font-family: 'Instrument Serif', serif;
+    font-size: clamp(1.8rem, 3.5vw, 2.8rem);
+    font-weight: 400;
+    line-height: 1.1;
+    color: var(--charcoal);
+  }
+
+  .section-desc {
+    max-width: 34ch;
+    font-size: 0.85rem;
+    color: var(--muted);
+    line-height: 1.65;
+    text-align: right;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  /* ── DIVIDER ── */
+  .full-divider {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(139,90,43,0.2) 15%, rgba(139,90,43,0.2) 85%, transparent);
+  }
+
+  /* ═══════════════════════════════════════════════
+     1. COLORS
+  ═══════════════════════════════════════════════ */
+
+  .color-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 1.5px;
+    background: rgba(139,90,43,0.12);
+    border: 1.5px solid rgba(139,90,43,0.12);
+    margin-bottom: 2.5rem;
+  }
+
+  .color-tile {
+    background: var(--concrete);
+    display: flex;
+    flex-direction: column;
+  }
+
+  .color-swatch {
+    height: 110px;
+    position: relative;
+    display: flex;
+    align-items: flex-end;
+    padding: 0.75rem;
+  }
+
+  .color-role {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.58rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    padding: 0.2rem 0.5rem;
+    display: inline-block;
+  }
+
+  .color-info {
+    padding: 1rem;
+  }
+
+  .color-name {
+    font-family: 'Instrument Serif', serif;
+    font-size: 1.1rem;
+    font-weight: 400;
+    color: var(--charcoal);
+    margin-bottom: 0.3rem;
+  }
+
+  .color-hex {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.72rem;
+    color: var(--muted);
+    letter-spacing: 0.08em;
+    margin-bottom: 0.5rem;
+  }
+
+  .color-note {
+    font-size: 0.78rem;
+    color: var(--wire);
+    line-height: 1.5;
+  }
+
+  /* Pairings row */
+  .pairing-row {
+    display: flex;
+    gap: 1rem;
+    margin-top: 1rem;
+  }
+
+  .pairing {
+    flex: 1;
+    border: 1px solid rgba(139,90,43,0.15);
+    padding: 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    position: relative;
+  }
+
+  .pairing-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.6rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 0.5rem;
+  }
+
+  .pairing-demo {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    height: 40px;
+  }
+
+  .pairing-block {
+    flex: 1;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.6rem;
+    letter-spacing: 0.1em;
+  }
+
+  /* ═══════════════════════════════════════════════
+     2. TYPOGRAPHY
+  ═══════════════════════════════════════════════ */
+
+  .type-specimen {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2px;
+    background: rgba(139,90,43,0.1);
+    margin-bottom: 2rem;
+  }
+
+  .type-cell {
+    background: var(--concrete);
+    padding: 2.5rem;
+  }
+
+  .type-cell.dark {
+    background: var(--charcoal);
+  }
+
+  .type-meta {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.6rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 1.5rem;
+    display: flex;
+    justify-content: space-between;
+  }
+
+  .type-cell.dark .type-meta { color: rgba(244,241,236,0.3); }
+
+  .type-scale {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .type-row {
+    display: flex;
+    align-items: baseline;
+    gap: 1.5rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid rgba(139,90,43,0.1);
+  }
+  .type-cell.dark .type-row { border-bottom-color: rgba(244,241,236,0.06); }
+  .type-row:last-child { border-bottom: none; padding-bottom: 0; }
+
+  .type-size-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.6rem;
+    color: var(--muted);
+    width: 3rem;
+    flex-shrink: 0;
+    letter-spacing: 0.08em;
+  }
+  .type-cell.dark .type-size-label { color: rgba(244,241,236,0.25); }
+
+  /* Usage rules table */
+  .type-rules {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 1.5px;
+    background: rgba(139,90,43,0.1);
+    margin-top: 1rem;
+  }
+
+  .type-rule-cell {
+    background: var(--concrete);
+    padding: 1.5rem;
+  }
+
+  .rule-font-name {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--rust);
+    margin-bottom: 0.75rem;
+  }
+
+  .rule-use-for {
+    font-size: 0.82rem;
+    color: var(--wire);
+    line-height: 1.6;
+    margin-bottom: 1rem;
+  }
+
+  .rule-never {
+    font-size: 0.75rem;
+    color: var(--muted);
+    line-height: 1.5;
+    padding-top: 0.75rem;
+    border-top: 1px solid rgba(139,90,43,0.15);
+  }
+
+  .tag-do {
+    display: inline-block;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.55rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 0.15rem 0.4rem;
+    background: rgba(74,103,65,0.12);
+    color: var(--patina);
+    margin-bottom: 0.4rem;
+  }
+
+  .tag-dont {
+    display: inline-block;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.55rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 0.15rem 0.4rem;
+    background: rgba(139,90,43,0.1);
+    color: var(--rust);
+    margin-bottom: 0.4rem;
+  }
+
+  /* ═══════════════════════════════════════════════
+     3. MOTION
+  ═══════════════════════════════════════════════ */
+
+  .motion-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5px;
+    background: rgba(139,90,43,0.1);
+    margin-bottom: 2rem;
+  }
+
+  .motion-cell {
+    background: var(--concrete);
+    padding: 2.5rem;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .motion-cell.dark {
+    background: var(--charcoal);
+  }
+
+  .motion-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.62rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--rust);
+    margin-bottom: 0.5rem;
+  }
+
+  .motion-cell.dark .motion-label { color: var(--rust-pale); }
+
+  .motion-name {
+    font-family: 'Instrument Serif', serif;
+    font-size: 1.25rem;
+    color: var(--charcoal);
+    margin-bottom: 0.5rem;
+  }
+
+  .motion-cell.dark .motion-name { color: var(--concrete); }
+
+  .motion-desc {
+    font-size: 0.82rem;
+    color: var(--muted);
+    line-height: 1.6;
+    margin-bottom: 2rem;
+    flex: 1;
+  }
+
+  .motion-cell.dark .motion-desc { color: rgba(244,241,236,0.4); }
+
+  /* Demo areas */
+  .motion-demo {
+    height: 80px;
+    border: 1px solid rgba(139,90,43,0.15);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    overflow: hidden;
+    cursor: pointer;
+  }
+
+  .motion-cell.dark .motion-demo {
+    border-color: rgba(244,241,236,0.08);
+    background: rgba(244,241,236,0.02);
+  }
+
+  .motion-replay {
+    position: absolute;
+    bottom: 6px; right: 8px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.55rem;
+    letter-spacing: 0.12em;
+    color: var(--muted);
+    text-transform: uppercase;
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+  .motion-demo:hover .motion-replay { opacity: 1; }
+
+  /* Easing values */
+  .easing-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1.5px;
+    background: rgba(139,90,43,0.1);
+  }
+
+  .easing-cell {
+    background: var(--concrete);
+    padding: 1.5rem;
+  }
+
+  .easing-name {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 0.12em;
+    color: var(--rust);
+    margin-bottom: 0.5rem;
+  }
+
+  .easing-value {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.7rem;
+    color: var(--charcoal);
+    margin-bottom: 0.5rem;
+  }
+
+  .easing-use {
+    font-size: 0.75rem;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+
+  /* ── ANIMATION DEMOS ── */
+
+  /* 1. Signal pulse */
+  @keyframes ring-expand {
+    0% { r: 0; opacity: 0.8; }
+    100% { r: 30; opacity: 0; }
+  }
+  .ring-a { animation: ring-expand 2.4s cubic-bezier(0.25,0.46,0.45,0.94) infinite; }
+  .ring-b { animation: ring-expand 2.4s cubic-bezier(0.25,0.46,0.45,0.94) 0.8s infinite; }
+  .ring-c { animation: ring-expand 2.4s cubic-bezier(0.25,0.46,0.45,0.94) 1.6s infinite; }
+
+  /* 2. Transmission ticker */
+  @keyframes ticker-slide {
+    0% { transform: translateX(0); }
+    100% { transform: translateX(-50%); }
+  }
+  .ticker-inner {
+    display: flex;
+    animation: ticker-slide 8s linear infinite;
+    white-space: nowrap;
+  }
+
+  /* 3. Status blink */
+  @keyframes status-blink {
+    0%, 45%, 55%, 100% { opacity: 1; }
+    50% { opacity: 0.15; }
+  }
+  .status-dot-anim { animation: status-blink 3s ease-in-out infinite; }
+
+  /* 4. Fade-up stagger */
+  @keyframes fade-up {
+    0% { opacity: 0; transform: translateY(10px); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
+  .stagger-item { opacity: 0; animation: fade-up 0.5s cubic-bezier(0.25,0.46,0.45,0.94) forwards; }
+  .stagger-1 { animation-delay: 0s; }
+  .stagger-2 { animation-delay: 0.12s; }
+  .stagger-3 { animation-delay: 0.24s; }
+  .stagger-4 { animation-delay: 0.36s; }
+
+  /* 5. Hover lift */
+  .lift-demo-btn {
+    background: var(--charcoal);
+    color: var(--concrete);
+    padding: 0.6rem 1.25rem;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
+    border: none;
+    cursor: pointer;
+    transition: background 0.2s cubic-bezier(0.25,0.46,0.45,0.94), transform 0.2s cubic-bezier(0.25,0.46,0.45,0.94);
+    position: relative;
+  }
+  .lift-demo-btn::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border: 1px solid transparent;
+    transition: border-color 0.2s;
+  }
+  .lift-demo-btn:hover {
+    background: var(--rust);
+    transform: translateY(-2px);
+  }
+  .lift-demo-btn:hover::after { border-color: rgba(255,255,255,0.1); }
+
+  /* 6. Loading bar */
+  @keyframes load-sweep {
+    0% { width: 0%; }
+    15% { width: 45%; }
+    40% { width: 62%; }
+    70% { width: 78%; }
+    90% { width: 93%; }
+    100% { width: 100%; }
+  }
+  .load-bar { width: 0%; animation: load-sweep 3.5s cubic-bezier(0.4, 0, 0.2, 1) infinite; }
+
+  /* ═══════════════════════════════════════════════
+     4. VOICE / TONE
+  ═══════════════════════════════════════════════ */
+
+  .voice-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5px;
+    background: rgba(139,90,43,0.1);
+    margin-bottom: 2rem;
+  }
+
+  .voice-cell {
+    background: var(--concrete);
+    padding: 2rem;
+  }
+
+  .voice-cell.invert {
+    background: var(--charcoal);
+  }
+
+  .voice-quality {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.62rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--rust);
+    margin-bottom: 0.75rem;
+  }
+
+  .voice-cell.invert .voice-quality { color: var(--rust-pale); }
+
+  .voice-headline {
+    font-family: 'Instrument Serif', serif;
+    font-size: 1.15rem;
+    color: var(--charcoal);
+    margin-bottom: 1rem;
+    line-height: 1.3;
+  }
+
+  .voice-cell.invert .voice-headline { color: var(--concrete); }
+
+  .do-dont {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-top: 1.25rem;
+  }
+
+  .do-item, .dont-item {
+    display: flex;
+    gap: 0.75rem;
+    font-size: 0.82rem;
+    line-height: 1.5;
+    padding: 0.75rem;
+  }
+
+  .do-item {
+    background: rgba(74,103,65,0.08);
+    color: var(--wire);
+    border-left: 2px solid var(--patina);
+  }
+
+  .dont-item {
+    background: rgba(139,90,43,0.06);
+    color: var(--muted);
+    border-left: 2px solid rgba(139,90,43,0.3);
+    text-decoration-line: none;
+  }
+
+  .voice-cell.invert .do-item {
+    background: rgba(74,103,65,0.15);
+    color: rgba(244,241,236,0.7);
+    border-left-color: var(--patina-pale);
+  }
+
+  .voice-cell.invert .dont-item {
+    background: rgba(255,255,255,0.04);
+    color: rgba(244,241,236,0.3);
+    border-left-color: rgba(139,90,43,0.4);
+  }
+
+  .do-mark {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.6rem;
+    letter-spacing: 0.1em;
+    flex-shrink: 0;
+    margin-top: 0.1rem;
+  }
+  .do-mark.yes { color: var(--patina); }
+  .do-mark.no { color: var(--rust); }
+
+  /* ═══════════════════════════════════════════════
+     5. ICONOGRAPHY
+  ═══════════════════════════════════════════════ */
+
+  .icon-grid {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 1.5px;
+    background: rgba(139,90,43,0.1);
+    margin-bottom: 2rem;
+  }
+
+  .icon-cell {
+    background: var(--concrete);
+    padding: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+    cursor: default;
+    transition: background 0.15s;
+  }
+
+  .icon-cell:hover { background: var(--concrete-dark); }
+
+  .icon-cell svg { display: block; }
+
+  .icon-name {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.6rem;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    text-align: center;
+  }
+
+  /* ═══════════════════════════════════════════════
+     6. SPACING & LAYOUT
+  ═══════════════════════════════════════════════ */
+
+  .spacing-row {
+    display: flex;
+    gap: 1.5px;
+    background: rgba(139,90,43,0.1);
+    margin-bottom: 2rem;
+    align-items: flex-end;
+  }
+
+  .spacing-cell {
+    background: var(--concrete);
+    padding: 1.25rem;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .spacing-bar {
+    background: rgba(139,90,43,0.2);
+    width: 100%;
+    border-top: 2px solid var(--rust);
+  }
+
+  .spacing-value {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.1em;
+    color: var(--rust);
+  }
+
+  .spacing-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.58rem;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    text-transform: uppercase;
+  }
+
+  /* ═══════════════════════════════════════════════
+     HERO SECTION
+  ═══════════════════════════════════════════════ */
+
+  .brand-hero {
+    background: var(--charcoal);
+    padding: 8rem 3rem 5rem;
+    position: relative;
+    overflow: hidden;
+    margin-bottom: 0;
+  }
+
+  .brand-hero::before {
+    content: 'BRAND';
+    position: absolute;
+    font-family: 'Instrument Serif', serif;
+    font-style: italic;
+    font-size: clamp(8rem, 20vw, 18rem);
+    color: rgba(244,241,236,0.02);
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%,-50%);
+    white-space: nowrap;
+    pointer-events: none;
+    letter-spacing: -0.02em;
+  }
+
+  .hero-inner {
+    max-width: 1100px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: end;
+    gap: 4rem;
+    position: relative;
+  }
+
+  .hero-eyebrow {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: rgba(244,241,236,0.3);
+    margin-bottom: 1.5rem;
+    display: flex; align-items: center; gap: 0.75rem;
+  }
+  .hero-eyebrow::before {
+    content: '';
+    width: 2rem; height: 1px;
+    background: var(--rust);
+  }
+
+  .hero-title {
+    font-family: 'Instrument Serif', serif;
+    font-size: clamp(3rem, 7vw, 6rem);
+    font-weight: 400;
+    color: var(--concrete);
+    line-height: 1.0;
+    margin-bottom: 1.5rem;
+  }
+
+  .hero-title em { color: var(--rust-pale); font-style: italic; }
+
+  .hero-sub {
+    font-size: 0.95rem;
+    color: rgba(244,241,236,0.4);
+    line-height: 1.7;
+    max-width: 46ch;
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 300;
+  }
+
+  .hero-version {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 0.15em;
+    color: rgba(244,241,236,0.2);
+    text-align: right;
+  }
+
+  .hero-version strong {
+    display: block;
+    font-size: 1.5rem;
+    color: rgba(244,241,236,0.15);
+    font-family: 'Instrument Serif', serif;
+    font-weight: 400;
+    letter-spacing: 0;
+    margin-bottom: 0.5rem;
+  }
+
+  /* ═══════════════════════════════════════════════
+     PRINCIPLE CARDS
+  ═══════════════════════════════════════════════ */
+
+  .principle-strip {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1.5px;
+    background: rgba(139,90,43,0.15);
+    border-top: 2px solid var(--rust);
+    margin-bottom: 0;
+  }
+
+  .principle-card {
+    background: var(--charcoal);
+    padding: 2rem 1.75rem;
+  }
+
+  .principle-num {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.6rem;
+    letter-spacing: 0.2em;
+    color: rgba(244,241,236,0.2);
+    margin-bottom: 1rem;
+  }
+
+  .principle-title {
+    font-family: 'Instrument Serif', serif;
+    font-size: 1.15rem;
+    font-style: italic;
+    color: var(--concrete);
+    margin-bottom: 0.75rem;
+  }
+
+  .principle-body {
+    font-size: 0.8rem;
+    color: rgba(244,241,236,0.4);
+    line-height: 1.65;
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 300;
+  }
+
+  /* Misc */
+  .mono { font-family: 'IBM Plex Mono', monospace; }
+  .serif { font-family: 'Instrument Serif', serif; }
+
+  /* Scroll target offset */
+  [id] { scroll-margin-top: 60px; }
+
+  @media (max-width: 800px) {
+    nav { padding: 0 1.25rem; }
+    .nav-links { display: none; }
+    section { padding: 5rem 1.25rem 3rem; }
+    .brand-hero { padding: 6rem 1.25rem 4rem; }
+    .hero-inner { grid-template-columns: 1fr; }
+    .type-specimen, .motion-grid, .voice-grid { grid-template-columns: 1fr; }
+    .icon-grid { grid-template-columns: repeat(3, 1fr); }
+    .principle-strip { grid-template-columns: 1fr 1fr; }
+    .color-grid { grid-template-columns: 1fr 1fr; }
+    .easing-row { grid-template-columns: 1fr 1fr; }
+    .type-rules { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <div class="nav-brand">Signal · Brand Guidelines</div>
+  <ul class="nav-links">
+    <li><a href="#colors" class="active">Colors</a></li>
+    <li><a href="#typography">Type</a></li>
+    <li><a href="#motion">Motion</a></li>
+    <li><a href="#voice">Voice</a></li>
+    <li><a href="#iconography">Icons</a></li>
+    <li><a href="#spacing">Spacing</a></li>
+  </ul>
+</nav>
+
+<!-- HERO -->
+<div class="brand-hero">
+  <div class="hero-inner">
+    <div>
+      <div class="hero-eyebrow">Brand Guidelines v1.0 — dterminal / Signal</div>
+      <h1 class="hero-title">The signal<br>keeps <em>going.</em></h1>
+      <p class="hero-sub">Signal's brand is built on one idea: infrastructure that outlasts attention. The rust, the overgrowth, the birds — these aren't decay. They're proof.</p>
+    </div>
+    <div class="hero-version">
+      <strong>v1.0</strong>
+      Last updated<br>Feb 2026<br><br>
+      © dterminal
+    </div>
+  </div>
+</div>
+
+<!-- PRINCIPLES STRIP -->
+<div class="principle-strip">
+  <div class="principle-card">
+    <div class="principle-num">01</div>
+    <div class="principle-title">Quiet confidence</div>
+    <p class="principle-body">Not loud. Not selling. Just transmitting. Signal doesn't need to announce itself.</p>
+  </div>
+  <div class="principle-card">
+    <div class="principle-num">02</div>
+    <div class="principle-title">Weathered, not worn</div>
+    <p class="principle-body">Patina equals trust. The brand has been running longer than you've been watching.</p>
+  </div>
+  <div class="principle-card">
+    <div class="principle-num">03</div>
+    <div class="principle-title">Indifferent to chaos</div>
+    <p class="principle-body">Nature overgrows, seasons change. Signal doesn't care. It just keeps running.</p>
+  </div>
+  <div class="principle-card">
+    <div class="principle-num">04</div>
+    <div class="principle-title">Utilitarian beauty</div>
+    <p class="principle-body">Beautiful because of structure, not decoration. Same as good developer experience.</p>
+  </div>
+</div>
+
+<div class="full-divider"></div>
+
+<!-- ── 1. COLORS ── -->
+<section id="colors">
+  <div class="section-head">
+    <div>
+      <div class="section-eyebrow">01 — Colors</div>
+      <h2>The palette of<br>working infrastructure.</h2>
+    </div>
+    <p class="section-desc">Four roles. No neon. No gradients. Colors that earn their meaning through material honesty.</p>
+  </div>
+
+  <div class="color-grid">
+    <!-- Rust -->
+    <div class="color-tile">
+      <div class="color-swatch" style="background:#8B5A2B;">
+        <span class="color-role" style="background:rgba(0,0,0,0.3); color:#F4F1EC;">Primary</span>
+      </div>
+      <div class="color-info">
+        <div class="color-name">Rust</div>
+        <div class="color-hex">#8B5A2B · rgb(139, 90, 43)</div>
+        <div class="color-note">The tower itself. Honest material showing age. Used for the icon, key UI elements, and brand accents.</div>
+      </div>
+    </div>
+    <!-- Rust Light -->
+    <div class="color-tile">
+      <div class="color-swatch" style="background:#A0622D;">
+        <span class="color-role" style="background:rgba(0,0,0,0.25); color:#F4F1EC;">Primary Alt</span>
+      </div>
+      <div class="color-info">
+        <div class="color-name">Rust Light</div>
+        <div class="color-hex">#A0622D · rgb(160, 98, 45)</div>
+        <div class="color-note">Hover states, highlight variants. Use when rust needs to lift slightly without losing character.</div>
+      </div>
+    </div>
+    <!-- Patina -->
+    <div class="color-tile">
+      <div class="color-swatch" style="background:#4A6741;">
+        <span class="color-role" style="background:rgba(0,0,0,0.3); color:#F4F1EC;">Secondary</span>
+      </div>
+      <div class="color-info">
+        <div class="color-name">Patina</div>
+        <div class="color-hex">#4A6741 · rgb(74, 103, 65)</div>
+        <div class="color-note">The overgrowth. Nature reclaiming but not winning. Used for vines, status indicators, "alive" signals.</div>
+      </div>
+    </div>
+    <!-- Patina Light / Signal Green -->
+    <div class="color-tile">
+      <div class="color-swatch" style="background:#6B9962;">
+        <span class="color-role" style="background:rgba(0,0,0,0.25); color:#F4F1EC;">Signal</span>
+      </div>
+      <div class="color-info">
+        <div class="color-name">Signal Green</div>
+        <div class="color-hex">#6B9962 · rgb(107, 153, 98)</div>
+        <div class="color-note">The live pulse dot. Used exclusively for "transmitting" / "active" states. Don't dilute by overusing.</div>
+      </div>
+    </div>
+    <!-- Concrete -->
+    <div class="color-tile">
+      <div class="color-swatch" style="background:#F4F1EC; border-bottom: 1px solid rgba(139,90,43,0.1);">
+        <span class="color-role" style="background:rgba(139,90,43,0.15); color:#8B5A2B;">Neutral</span>
+      </div>
+      <div class="color-info">
+        <div class="color-name">Concrete</div>
+        <div class="color-hex">#F4F1EC · rgb(244, 241, 236)</div>
+        <div class="color-note">Dominant surface. Warm, not pure white. Named after the weathered base of the tower. Default background.</div>
+      </div>
+    </div>
+    <!-- Concrete Dark -->
+    <div class="color-tile">
+      <div class="color-swatch" style="background:#E8E4DC; border-bottom: 1px solid rgba(139,90,43,0.1);">
+        <span class="color-role" style="background:rgba(139,90,43,0.12); color:#8B5A2B;">Surface Alt</span>
+      </div>
+      <div class="color-info">
+        <div class="color-name">Concrete Dark</div>
+        <div class="color-hex">#E8E4DC · rgb(232, 228, 220)</div>
+        <div class="color-note">Secondary surface. Cards, sidebar backgrounds, subtle differentiation between panels.</div>
+      </div>
+    </div>
+    <!-- Charcoal -->
+    <div class="color-tile">
+      <div class="color-swatch" style="background:#1C1C1E;">
+        <span class="color-role" style="background:rgba(255,255,255,0.1); color:#F4F1EC;">Dark</span>
+      </div>
+      <div class="color-info">
+        <div class="color-name">Charcoal</div>
+        <div class="color-hex">#1C1C1E · rgb(28, 28, 30)</div>
+        <div class="color-note">Primary text, dark backgrounds, code blocks, CTA sections. Never pure black — there's warmth here.</div>
+      </div>
+    </div>
+    <!-- Muted -->
+    <div class="color-tile">
+      <div class="color-swatch" style="background:#8A8A8E; border-bottom: 1px solid rgba(139,90,43,0.1);">
+        <span class="color-role" style="background:rgba(0,0,0,0.2); color:#F4F1EC;">Muted</span>
+      </div>
+      <div class="color-info">
+        <div class="color-name">Muted</div>
+        <div class="color-hex">#8A8A8E · rgb(138, 138, 142)</div>
+        <div class="color-note">Secondary text, labels, metadata. The chain-link fence color. Functional, not featured.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Pairings -->
+  <div style="margin-bottom: 0.75rem;">
+    <span class="section-eyebrow" style="margin-bottom: 1rem;">Approved pairings</span>
+  </div>
+  <div class="pairing-row">
+    <div class="pairing">
+      <div class="pairing-label">Primary UI</div>
+      <div class="pairing-demo">
+        <div class="pairing-block" style="background:#F4F1EC; color:#1C1C1E; font-size:0.65rem; letter-spacing:0.1em;">Concrete</div>
+        <div class="pairing-block" style="background:#8B5A2B; color:#F4F1EC; font-size:0.65rem; letter-spacing:0.1em;">Rust</div>
+        <div class="pairing-block" style="background:#1C1C1E; color:#F4F1EC; font-size:0.65rem; letter-spacing:0.1em;">Charcoal</div>
+      </div>
+    </div>
+    <div class="pairing">
+      <div class="pairing-label">Dark mode</div>
+      <div class="pairing-demo">
+        <div class="pairing-block" style="background:#1C1C1E; color:#F4F1EC; font-size:0.65rem; letter-spacing:0.1em;">Charcoal</div>
+        <div class="pairing-block" style="background:#A0622D; color:#F4F1EC; font-size:0.65rem; letter-spacing:0.1em;">Rust Lt</div>
+        <div class="pairing-block" style="background:#6B9962; color:#1C1C1E; font-size:0.65rem; letter-spacing:0.1em;">Signal</div>
+      </div>
+    </div>
+    <div class="pairing">
+      <div class="pairing-label">Status / alive</div>
+      <div class="pairing-demo">
+        <div class="pairing-block" style="background:#2C2C2E; color:#F4F1EC; font-size:0.65rem; letter-spacing:0.1em;">Dark</div>
+        <div class="pairing-block" style="background:#6B9962; color:#1C1C1E; font-size:0.65rem; letter-spacing:0.1em; font-weight:500;">●&nbsp;Active</div>
+      </div>
+    </div>
+    <div class="pairing">
+      <div class="pairing-label">⚠ Avoid</div>
+      <div class="pairing-demo" style="position:relative;">
+        <div class="pairing-block" style="background:#8A8A8E; color:#F4F1EC; font-size:0.65rem; letter-spacing:0.1em; opacity:0.5;">Muted bg</div>
+        <div class="pairing-block" style="background:#4A6741; color:#1C1C1E; font-size:0.65rem; letter-spacing:0.1em; opacity:0.5;">Patina text</div>
+        <div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center;">
+          <span style="font-family:'IBM Plex Mono',monospace; font-size:0.65rem; letter-spacing:0.1em; color:#A0622D; background:rgba(244,241,236,0.9); padding: 0.2rem 0.5rem;">Low contrast</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="full-divider"></div>
+
+<!-- ── 2. TYPOGRAPHY ── -->
+<section id="typography">
+  <div class="section-head">
+    <div>
+      <div class="section-eyebrow">02 — Typography</div>
+      <h2>Three fonts.<br>Three roles. No overlap.</h2>
+    </div>
+    <p class="section-desc">Each typeface carries a specific meaning. Using them out of role weakens the system.</p>
+  </div>
+
+  <div class="type-specimen">
+    <!-- Instrument Serif -->
+    <div class="type-cell">
+      <div class="type-meta">
+        <span>Instrument Serif — Display / Headings</span>
+        <span>Google Fonts</span>
+      </div>
+      <div class="type-scale">
+        <div class="type-row">
+          <span class="type-size-label">72px</span>
+          <span style="font-family:'Instrument Serif',serif; font-size:3.5rem; font-weight:400; color:var(--charcoal); line-height:1;">Transmit</span>
+        </div>
+        <div class="type-row">
+          <span class="type-size-label">48px</span>
+          <span style="font-family:'Instrument Serif',serif; font-size:2.5rem; font-weight:400; color:var(--charcoal); line-height:1;">Set it. Forget it.</span>
+        </div>
+        <div class="type-row">
+          <span class="type-size-label">32px</span>
+          <span style="font-family:'Instrument Serif',serif; font-size:1.75rem; font-style:italic; color:var(--rust);">Weathered, not worn.</span>
+        </div>
+        <div class="type-row">
+          <span class="type-size-label">24px</span>
+          <span style="font-family:'Instrument Serif',serif; font-size:1.35rem; color:var(--charcoal);">The signal doesn't care what season it is.</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- IBM Plex Mono on dark -->
+    <div class="type-cell dark">
+      <div class="type-meta">
+        <span>IBM Plex Mono — UI / Code / Labels</span>
+        <span>Google Fonts</span>
+      </div>
+      <div class="type-scale">
+        <div class="type-row">
+          <span class="type-size-label" style="color:rgba(244,241,236,0.25);">16px</span>
+          <span style="font-family:'IBM Plex Mono',monospace; font-size:1rem; color:#F4F1EC; letter-spacing:0.02em;">schedule: "*/15 * * * *"</span>
+        </div>
+        <div class="type-row">
+          <span class="type-size-label" style="color:rgba(244,241,236,0.25);">14px</span>
+          <span style="font-family:'IBM Plex Mono',monospace; font-size:0.875rem; color:rgba(244,241,236,0.7);">Last run: 14 seconds ago</span>
+        </div>
+        <div class="type-row">
+          <span class="type-size-label" style="color:rgba(244,241,236,0.25);">12px</span>
+          <span style="font-family:'IBM Plex Mono',monospace; font-size:0.75rem; letter-spacing:0.15em; text-transform:uppercase; color:var(--rust-pale);">Transmitting</span>
+        </div>
+        <div class="type-row">
+          <span class="type-size-label" style="color:rgba(244,241,236,0.25);">10px</span>
+          <span style="font-family:'IBM Plex Mono',monospace; font-size:0.65rem; letter-spacing:0.2em; text-transform:uppercase; color:rgba(244,241,236,0.3);">Background jobs infrastructure</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Space Grotesk -->
+    <div class="type-cell" style="grid-column: 1 / -1; background: var(--concrete-dark);">
+      <div class="type-meta">
+        <span>Space Grotesk — Body / Prose</span>
+        <span>Used at 14–18px, weight 300–400 only</span>
+      </div>
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 3rem;">
+        <div>
+          <p style="font-family:'Space Grotesk',sans-serif; font-size:1.05rem; line-height:1.75; color:var(--wire); font-weight:300; margin-bottom:1rem;">Background jobs shouldn't require babysitting. Signal runs your scheduled tasks with the reliability of infrastructure that's been running longer than anyone's been watching — and asks nothing from you in return.</p>
+          <p style="font-family:'Space Grotesk',sans-serif; font-size:0.875rem; line-height:1.7; color:var(--muted); font-weight:300;">The rust, the overgrown fence, the bird nests — these aren't decay. They're proof of time passing without failure.</p>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:1rem;">
+          <div style="display:flex; align-items:baseline; gap:1rem; padding-bottom:0.75rem; border-bottom:1px solid rgba(139,90,43,0.12);">
+            <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:var(--muted); width:3.5rem; flex-shrink:0;">300</span>
+            <span style="font-family:'Space Grotesk',sans-serif; font-weight:300; font-size:1.1rem;">The infrastructure runs.</span>
+          </div>
+          <div style="display:flex; align-items:baseline; gap:1rem; padding-bottom:0.75rem; border-bottom:1px solid rgba(139,90,43,0.12);">
+            <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:var(--muted); width:3.5rem; flex-shrink:0;">400</span>
+            <span style="font-family:'Space Grotesk',sans-serif; font-weight:400; font-size:1.1rem;">The infrastructure runs.</span>
+          </div>
+          <div style="display:flex; align-items:baseline; gap:1rem;">
+            <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:var(--muted); width:3.5rem; flex-shrink:0;">500</span>
+            <span style="font-family:'Space Grotesk',sans-serif; font-weight:500; font-size:1.1rem;">The infrastructure runs.</span>
+          </div>
+          <div style="margin-top:0.5rem; padding-top:0.75rem; border-top:1px solid rgba(139,90,43,0.12);">
+            <span class="tag-dont">Never 600+</span>
+            <p style="font-family:'Space Grotesk',sans-serif; font-size:0.75rem; color:var(--muted); margin-top:0.4rem;">Space Grotesk at 600+ weight loses its quiet character. Stay at 300–500.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="type-rules">
+    <div class="type-rule-cell">
+      <div class="rule-font-name">Instrument Serif</div>
+      <p class="rule-use-for">Page titles, section headings, hero text, pull quotes, product names. Italic variant for emphasis — never faked italic.</p>
+      <div class="tag-do">Use for</div>
+      <p style="font-size:0.78rem; color:var(--wire); margin-bottom:0.5rem; line-height:1.5;">H1–H3, hero headlines, feature names, editorial pull quotes</p>
+      <div class="rule-never">
+        <div class="tag-dont">Never for</div>
+        <p style="margin-top:0.4rem; line-height:1.5;">Body copy, UI labels, code, captions, navigation items, anything under 16px</p>
+      </div>
+    </div>
+    <div class="type-rule-cell">
+      <div class="rule-font-name">IBM Plex Mono</div>
+      <p class="rule-use-for">All UI text, labels, navigation, code blocks, metadata, timestamps, status indicators.</p>
+      <div class="tag-do">Use for</div>
+      <p style="font-size:0.78rem; color:var(--wire); margin-bottom:0.5rem; line-height:1.5;">Nav, labels, tags, timestamps, code, monospace data, eyebrows, footers</p>
+      <div class="rule-never">
+        <div class="tag-dont">Never for</div>
+        <p style="margin-top:0.4rem; line-height:1.5;">Long-form body copy. At 16px+ it becomes laborious to read in paragraphs</p>
+      </div>
+    </div>
+    <div class="type-rule-cell">
+      <div class="rule-font-name">Space Grotesk</div>
+      <p class="rule-use-for">Long-form prose, feature descriptions, marketing copy, explanatory text over 2 lines.</p>
+      <div class="tag-do">Use for</div>
+      <p style="font-size:0.78rem; color:var(--wire); margin-bottom:0.5rem; line-height:1.5;">Body paragraphs, feature descriptions, hero subheadings, landing page prose</p>
+      <div class="rule-never">
+        <div class="tag-dont">Never for</div>
+        <p style="margin-top:0.4rem; line-height:1.5;">Display headings, UI labels, code. Don't use at weight 600+</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="full-divider"></div>
+
+<!-- ── 3. MOTION ── -->
+<section id="motion">
+  <div class="section-head">
+    <div>
+      <div class="section-eyebrow">03 — Motion</div>
+      <h2>Motion that<br><em>doesn't shout.</em></h2>
+    </div>
+    <p class="section-desc">Animation should feel like the tower — patient, purposeful, indifferent to being noticed.</p>
+  </div>
+
+  <div class="motion-grid">
+
+    <!-- Signal Pulse -->
+    <div class="motion-cell dark">
+      <div class="motion-label">Pattern 01</div>
+      <div class="motion-name">Signal Pulse</div>
+      <p class="motion-desc">Expanding rings from the antenna tip. Used for status indicators, the logo mark, "transmitting" states. Three rings offset by 800ms each. Never speeds up — it's always the same cadence.</p>
+      <div class="motion-demo" onclick="this.querySelector('svg').outerHTML; this.innerHTML = this.innerHTML">
+        <svg width="120" height="80" viewBox="0 0 120 80">
+          <circle cx="60" cy="40" r="4" fill="#8B5A2B"/>
+          <circle cx="60" cy="40" r="2" fill="#A0622D"/>
+          <circle cx="60" cy="40" r="0" stroke="#6B9962" stroke-width="1" fill="none" class="ring-a"/>
+          <circle cx="60" cy="40" r="0" stroke="#6B9962" stroke-width="1" fill="none" class="ring-b"/>
+          <circle cx="60" cy="40" r="0" stroke="#6B9962" stroke-width="1" fill="none" class="ring-c"/>
+        </svg>
+        <span class="motion-replay">replay</span>
+      </div>
+      <div style="margin-top:1.25rem; display:flex; gap:1rem; flex-wrap:wrap;">
+        <div style="font-family:'IBM Plex Mono',monospace; font-size:0.65rem; color:rgba(244,241,236,0.3); line-height:1.6;">
+          duration: <span style="color:var(--rust-pale);">2.4s</span><br>
+          offset: <span style="color:var(--rust-pale);">800ms</span><br>
+          easing: <span style="color:var(--rust-pale);">ease-out</span><br>
+          count: <span style="color:var(--rust-pale);">infinite</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Status Blink -->
+    <div class="motion-cell">
+      <div class="motion-label">Pattern 02</div>
+      <div class="motion-name">Status Blink</div>
+      <p class="motion-desc">A single dot that dims briefly at the 50% mark. Not a strobe — barely perceptible. Used only for "live" indicators. The blinking should feel like a heartbeat, not an alarm.</p>
+      <div class="motion-demo">
+        <div style="display:flex; align-items:center; gap:0.75rem;">
+          <div style="width:8px; height:8px; border-radius:50%; background:#6B9962;" class="status-dot-anim"></div>
+          <span style="font-family:'IBM Plex Mono',monospace; font-size:0.75rem; color:var(--charcoal); letter-spacing:0.1em;">TRANSMITTING</span>
+        </div>
+        <span class="motion-replay">replay</span>
+      </div>
+      <div style="margin-top:1.25rem; font-family:'IBM Plex Mono',monospace; font-size:0.65rem; color:var(--muted); line-height:1.8;">
+        duration: <span style="color:var(--rust);">3s</span> &nbsp;·&nbsp;
+        keyframes: <span style="color:var(--rust);">0% 45% 55% 100%</span><br>
+        opacity range: <span style="color:var(--rust);">1 → 0.15</span> &nbsp;·&nbsp;
+        easing: <span style="color:var(--rust);">ease-in-out</span>
+      </div>
+    </div>
+
+    <!-- Transmission Ticker -->
+    <div class="motion-cell dark">
+      <div class="motion-label">Pattern 03</div>
+      <div class="motion-name">Ticker / Marquee</div>
+      <p class="motion-desc">Continuous horizontal scroll for live status data. Constant speed, no ease-in/out. The pace should feel like a teletype — deliberate and unhurried at ~60–80px per second.</p>
+      <div class="motion-demo" style="overflow:hidden;">
+        <div class="ticker-inner" style="gap:3rem;">
+          <span style="font-family:'IBM Plex Mono',monospace; font-size:0.7rem; color:rgba(244,241,236,0.5); white-space:nowrap; display:flex; align-items:center; gap:0.5rem;"><span style="color:#6B9962;">●</span>Job queue: nominal</span>
+          <span style="font-family:'IBM Plex Mono',monospace; font-size:0.7rem; color:rgba(244,241,236,0.5); white-space:nowrap; display:flex; align-items:center; gap:0.5rem;"><span style="color:#6B9962;">●</span>99.97% uptime</span>
+          <span style="font-family:'IBM Plex Mono',monospace; font-size:0.7rem; color:rgba(244,241,236,0.5); white-space:nowrap; display:flex; align-items:center; gap:0.5rem;"><span style="color:#6B9962;">●</span>Scheduler: active</span>
+          <span style="font-family:'IBM Plex Mono',monospace; font-size:0.7rem; color:rgba(244,241,236,0.5); white-space:nowrap; display:flex; align-items:center; gap:0.5rem;"><span style="color:#6B9962;">●</span>0 missed runs this month</span>
+          <!-- duplicate -->
+          <span style="font-family:'IBM Plex Mono',monospace; font-size:0.7rem; color:rgba(244,241,236,0.5); white-space:nowrap; display:flex; align-items:center; gap:0.5rem;"><span style="color:#6B9962;">●</span>Job queue: nominal</span>
+          <span style="font-family:'IBM Plex Mono',monospace; font-size:0.7rem; color:rgba(244,241,236,0.5); white-space:nowrap; display:flex; align-items:center; gap:0.5rem;"><span style="color:#6B9962;">●</span>99.97% uptime</span>
+          <span style="font-family:'IBM Plex Mono',monospace; font-size:0.7rem; color:rgba(244,241,236,0.5); white-space:nowrap; display:flex; align-items:center; gap:0.5rem;"><span style="color:#6B9962;">●</span>Scheduler: active</span>
+          <span style="font-family:'IBM Plex Mono',monospace; font-size:0.7rem; color:rgba(244,241,236,0.5); white-space:nowrap; display:flex; align-items:center; gap:0.5rem;"><span style="color:#6B9962;">●</span>0 missed runs this month</span>
+        </div>
+        <span class="motion-replay" style="color:rgba(244,241,236,0.3);">replay</span>
+      </div>
+      <div style="margin-top:1.25rem; font-family:'IBM Plex Mono',monospace; font-size:0.65rem; color:rgba(244,241,236,0.3); line-height:1.8;">
+        animation: <span style="color:var(--rust-pale);">translateX(-50%)</span><br>
+        duration: <span style="color:var(--rust-pale);">linear · infinite</span> &nbsp;·&nbsp; speed: <span style="color:var(--rust-pale);">8–12s</span>
+      </div>
+    </div>
+
+    <!-- Fade-up Stagger -->
+    <div class="motion-cell" id="staggerCell">
+      <div class="motion-label">Pattern 04</div>
+      <div class="motion-name">Staggered Reveal</div>
+      <p class="motion-desc">Page-load entrance for content. Each element fades up with a 120ms offset from the previous. One coordinated breath, not scattered twitches.</p>
+      <div class="motion-demo" id="staggerDemo" onclick="replayStagger()" style="flex-direction:column; gap:6px; align-items:flex-start; padding:1rem; cursor:pointer;">
+        <div class="stagger-item stagger-1" style="font-family:'IBM Plex Mono',monospace; font-size:0.7rem; color:var(--charcoal); padding:0.35rem 0.75rem; border-left:2px solid var(--rust);">syncUsageMetrics — running</div>
+        <div class="stagger-item stagger-2" style="font-family:'IBM Plex Mono',monospace; font-size:0.7rem; color:var(--charcoal); padding:0.35rem 0.75rem; border-left:2px solid var(--rust);">dailyDigest — scheduled</div>
+        <div class="stagger-item stagger-3" style="font-family:'IBM Plex Mono',monospace; font-size:0.7rem; color:var(--charcoal); padding:0.35rem 0.75rem; border-left:2px solid rgba(139,90,43,0.3);">weeklyReport — idle</div>
+        <div class="stagger-item stagger-4" style="font-family:'IBM Plex Mono',monospace; font-size:0.7rem; color:var(--charcoal); padding:0.35rem 0.75rem; border-left:2px solid rgba(139,90,43,0.3);">cleanupJob — idle</div>
+        <span class="motion-replay" style="bottom:8px; right:8px; position:absolute;">tap to replay</span>
+      </div>
+      <div style="margin-top:1.25rem; font-family:'IBM Plex Mono',monospace; font-size:0.65rem; color:var(--muted); line-height:1.8;">
+        duration: <span style="color:var(--rust);">500ms</span> &nbsp;·&nbsp;
+        offset: <span style="color:var(--rust);">120ms per item</span><br>
+        easing: <span style="color:var(--rust);">cubic-bezier(0.25, 0.46, 0.45, 0.94)</span>
+      </div>
+    </div>
+
+    <!-- Lift hover -->
+    <div class="motion-cell">
+      <div class="motion-label">Pattern 05</div>
+      <div class="motion-name">Button Lift</div>
+      <p class="motion-desc">On hover, primary buttons rise 2px and shift to rust. No bounce, no scale. Just a clean lift. The interaction should feel like pressing a physical key, not a toy.</p>
+      <div class="motion-demo">
+        <button class="lift-demo-btn">Start transmitting →</button>
+        <span class="motion-replay">hover the button</span>
+      </div>
+      <div style="margin-top:1.25rem; font-family:'IBM Plex Mono',monospace; font-size:0.65rem; color:var(--muted); line-height:1.8;">
+        translateY: <span style="color:var(--rust);">0 → -2px</span> &nbsp;·&nbsp;
+        duration: <span style="color:var(--rust);">200ms</span><br>
+        bg: <span style="color:var(--rust);">charcoal → rust</span> &nbsp;·&nbsp;
+        easing: <span style="color:var(--rust);">ease-out</span>
+      </div>
+    </div>
+
+    <!-- Load bar -->
+    <div class="motion-cell dark">
+      <div class="motion-label">Pattern 06</div>
+      <div class="motion-name">Progress / Load</div>
+      <p class="motion-desc">An indeterminate-feeling progress bar that moves in non-linear jumps. Mimics real work being done — fast at first, slowing as it approaches completion.</p>
+      <div class="motion-demo" style="flex-direction:column; gap:0.75rem; align-items:stretch; padding:1.5rem;">
+        <div style="font-family:'IBM Plex Mono',monospace; font-size:0.65rem; color:rgba(244,241,236,0.4); letter-spacing:0.1em; text-transform:uppercase;">Deploying jobs…</div>
+        <div style="height:2px; background:rgba(244,241,236,0.08); overflow:hidden;">
+          <div class="load-bar" style="height:100%; background:var(--rust);"></div>
+        </div>
+        <span class="motion-replay" style="color:rgba(244,241,236,0.25);">replay</span>
+      </div>
+      <div style="margin-top:1.25rem; font-family:'IBM Plex Mono',monospace; font-size:0.65rem; color:rgba(244,241,236,0.3); line-height:1.8;">
+        duration: <span style="color:var(--rust-pale);">3.5s</span> &nbsp;·&nbsp;
+        easing: <span style="color:var(--rust-pale);">cubic-bezier(0.4, 0, 0.2, 1)</span><br>
+        keyframes: <span style="color:var(--rust-pale);">0% 15% 40% 70% 90% 100%</span>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Easing reference -->
+  <div style="margin-bottom:1rem;">
+    <span class="section-eyebrow">Easing reference</span>
+  </div>
+  <div class="easing-row">
+    <div class="easing-cell">
+      <div class="easing-name">Standard</div>
+      <div class="easing-value">cubic-bezier(0.25, 0.46, 0.45, 0.94)</div>
+      <p class="easing-use">Default for all UI transitions: buttons, panels, modals. Comfortable, not sluggish.</p>
+    </div>
+    <div class="easing-cell">
+      <div class="easing-name">Enter</div>
+      <div class="easing-value">cubic-bezier(0.0, 0.0, 0.2, 1.0)</div>
+      <p class="easing-use">Elements entering the screen: drawers, toasts, page content. Decelerates into place.</p>
+    </div>
+    <div class="easing-cell">
+      <div class="easing-name">Exit</div>
+      <div class="easing-value">cubic-bezier(0.4, 0.0, 1.0, 1.0)</div>
+      <p class="easing-use">Elements leaving the screen. Accelerates out — gone quickly, no lingering.</p>
+    </div>
+    <div class="easing-cell">
+      <div class="easing-name">Linear</div>
+      <div class="easing-value">linear</div>
+      <p class="easing-use">Tickers, looping progress indicators, rotation. Anything that should feel mechanical and constant.</p>
+    </div>
+  </div>
+
+  <!-- Motion don'ts -->
+  <div style="margin-top:2rem; border:1px solid rgba(139,90,43,0.2); padding:2rem;">
+    <div style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; letter-spacing:0.18em; text-transform:uppercase; color:var(--rust); margin-bottom:1rem;">Motion anti-patterns</div>
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:1.5rem;">
+      <div>
+        <span class="tag-dont">Never</span>
+        <p style="font-size:0.8rem; color:var(--muted); margin-top:0.4rem; line-height:1.55;">Spring/bounce physics. The tower doesn't bounce. Nothing bounces.</p>
+      </div>
+      <div>
+        <span class="tag-dont">Never</span>
+        <p style="font-size:0.8rem; color:var(--muted); margin-top:0.4rem; line-height:1.55;">Scale transforms on buttons (&gt;1.02x). Lifts only, never swells.</p>
+      </div>
+      <div>
+        <span class="tag-dont">Never</span>
+        <p style="font-size:0.8rem; color:var(--muted); margin-top:0.4rem; line-height:1.55;">Fast micro-animations under 150ms. Signal doesn't rush.</p>
+      </div>
+      <div>
+        <span class="tag-dont">Never</span>
+        <p style="font-size:0.8rem; color:var(--muted); margin-top:0.4rem; line-height:1.55;">Decorative looping animations in the product UI. Reserve motion for meaning.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="full-divider"></div>
+
+<!-- ── 4. VOICE ── -->
+<section id="voice">
+  <div class="section-head">
+    <div>
+      <div class="section-eyebrow">04 — Voice & Tone</div>
+      <h2>Transmitting,<br>not selling.</h2>
+    </div>
+    <p class="section-desc">Signal speaks like infrastructure. Confident because it's reliable, not because it's loud.</p>
+  </div>
+
+  <div class="voice-grid">
+    <div class="voice-cell">
+      <div class="voice-quality">Quiet confidence</div>
+      <div class="voice-headline">States what's true.<br>Doesn't explain why that's impressive.</div>
+      <div class="do-dont">
+        <div class="do-item"><span class="do-mark yes">DO</span> "Set it up. It runs." </div>
+        <div class="dont-item"><span class="do-mark no">NO</span> "Our best-in-class scheduler guarantees 99.9% uptime with enterprise-grade reliability."</div>
+        <div class="do-item"><span class="do-mark yes">DO</span> "0 missed executions this month."</div>
+        <div class="dont-item"><span class="do-mark no">NO</span> "We're proud to announce zero missed job executions in the past 30 days!"</div>
+      </div>
+    </div>
+
+    <div class="voice-cell invert">
+      <div class="voice-quality">Utilitarian precision</div>
+      <div class="voice-headline">Exact words. No filler. No softening qualifiers.</div>
+      <div class="do-dont">
+        <div class="do-item"><span class="do-mark yes">DO</span> "Job failed. Retry in 30s."</div>
+        <div class="dont-item"><span class="do-mark no">NO</span> "We noticed something may have gone wrong. Don't worry, we're on it!"</div>
+        <div class="do-item"><span class="do-mark yes">DO</span> "3 jobs running. 847ms avg."</div>
+        <div class="dont-item"><span class="do-mark no">NO</span> "Your jobs are processing right now at a great average speed!"</div>
+      </div>
+    </div>
+
+    <div class="voice-cell">
+      <div class="voice-quality">Indifferent to weather</div>
+      <div class="voice-headline">Error messages that inform, not alarm.</div>
+      <div class="do-dont">
+        <div class="do-item"><span class="do-mark yes">DO</span> "Timeout after 30s. Check your handler's external dependencies."</div>
+        <div class="dont-item"><span class="do-mark no">NO</span> "Uh oh! Something went wrong 😬 Please try again or contact support."</div>
+        <div class="do-item"><span class="do-mark yes">DO</span> "Rate limited. Backoff: 2min."</div>
+        <div class="dont-item"><span class="do-mark no">NO</span> "Oops! It looks like we hit a rate limit. Hang tight while we sort this out!"</div>
+      </div>
+    </div>
+
+    <div class="voice-cell invert">
+      <div class="voice-quality">Patina, not polish</div>
+      <div class="voice-headline">Documentation that assumes intelligence.</div>
+      <div class="do-dont">
+        <div class="do-item"><span class="do-mark yes">DO</span> "Handler receives the job context. Throw to trigger retry."</div>
+        <div class="dont-item"><span class="do-mark no">NO</span> "Welcome! In this step, we'll show you how your handler function works — exciting stuff!"</div>
+        <div class="do-item"><span class="do-mark yes">DO</span> "Idempotency keys prevent duplicate runs. Generate once per dispatch."</div>
+        <div class="dont-item"><span class="do-mark no">NO</span> "Great news! Signal's idempotency key feature makes sure your jobs won't run twice."</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="full-divider"></div>
+
+<!-- ── 5. ICONOGRAPHY ── -->
+<section id="iconography">
+  <div class="section-head">
+    <div>
+      <div class="section-eyebrow">05 — Iconography</div>
+      <h2>Linework.<br>No fills.</h2>
+    </div>
+    <p class="section-desc">Icons are engineering diagrams, not illustrations. 1.5px stroke, consistent cap/join, no decoration.</p>
+  </div>
+
+  <div class="icon-grid">
+    <!-- Schedule/cron -->
+    <div class="icon-cell">
+      <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="#8B5A2B" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="14" cy="14" r="10"/>
+        <path d="M14 7v7l4 4"/>
+      </svg>
+      <span class="icon-name">schedule</span>
+    </div>
+    <!-- Status -->
+    <div class="icon-cell">
+      <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="#8B5A2B" stroke-width="1.5" stroke-linecap="round">
+        <circle cx="14" cy="14" r="10"/>
+        <path d="M9 14l3.5 3.5L19 10"/>
+      </svg>
+      <span class="icon-name">success</span>
+    </div>
+    <!-- Retry -->
+    <div class="icon-cell">
+      <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="#8B5A2B" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M5 14A9 9 0 0 1 20 7"/>
+        <path d="M23 14A9 9 0 0 1 8 21"/>
+        <polyline points="18,4 20,7 17,9"/>
+        <polyline points="10,24 8,21 11,19"/>
+      </svg>
+      <span class="icon-name">retry</span>
+    </div>
+    <!-- Log/history -->
+    <div class="icon-cell">
+      <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="#8B5A2B" stroke-width="1.5" stroke-linecap="round">
+        <rect x="6" y="4" width="16" height="20" rx="1"/>
+        <line x1="10" y1="10" x2="18" y2="10"/>
+        <line x1="10" y1="14" x2="18" y2="14"/>
+        <line x1="10" y1="18" x2="14" y2="18"/>
+      </svg>
+      <span class="icon-name">history</span>
+    </div>
+    <!-- Concurrency -->
+    <div class="icon-cell">
+      <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="#8B5A2B" stroke-width="1.5" stroke-linecap="round">
+        <line x1="7" y1="22" x2="7" y2="6"/>
+        <line x1="14" y1="22" x2="14" y2="11"/>
+        <line x1="21" y1="22" x2="21" y2="15"/>
+        <line x1="4" y1="22" x2="24" y2="22"/>
+      </svg>
+      <span class="icon-name">concurrency</span>
+    </div>
+    <!-- Alert/error -->
+    <div class="icon-cell">
+      <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="#8B5A2B" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14 4L3 23h22L14 4z"/>
+        <line x1="14" y1="13" x2="14" y2="17"/>
+        <circle cx="14" cy="20" r="0.75" fill="#8B5A2B"/>
+      </svg>
+      <span class="icon-name">alert</span>
+    </div>
+    <!-- Queue -->
+    <div class="icon-cell">
+      <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="#8B5A2B" stroke-width="1.5" stroke-linecap="round">
+        <rect x="5" y="8" width="18" height="4" rx="0.5"/>
+        <rect x="5" y="16" width="13" height="4" rx="0.5" opacity="0.5"/>
+        <line x1="20" y1="18" x2="24" y2="18"/>
+        <line x1="22" y1="16" x2="22" y2="20"/>
+      </svg>
+      <span class="icon-name">queue</span>
+    </div>
+    <!-- Webhook -->
+    <div class="icon-cell">
+      <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="#8B5A2B" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="9" cy="20" r="3"/>
+        <circle cx="19" cy="8" r="3"/>
+        <path d="M12 19.5l4-11"/>
+        <path d="M9 17l8-5"/>
+      </svg>
+      <span class="icon-name">webhook</span>
+    </div>
+    <!-- Delay/pause -->
+    <div class="icon-cell">
+      <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="#8B5A2B" stroke-width="1.5" stroke-linecap="round">
+        <circle cx="14" cy="14" r="10"/>
+        <line x1="14" y1="14" x2="14" y2="8"/>
+        <line x1="14" y1="14" x2="18" y2="17"/>
+        <line x1="3" y1="14" x2="1" y2="14"/>
+        <line x1="25" y1="14" x2="27" y2="14"/>
+      </svg>
+      <span class="icon-name">delay</span>
+    </div>
+    <!-- Chain -->
+    <div class="icon-cell">
+      <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="#8B5A2B" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="8" cy="14" r="3"/>
+        <circle cx="20" cy="14" r="3"/>
+        <line x1="11" y1="14" x2="17" y2="14"/>
+        <path d="M8 11V6"/>
+        <path d="M20 11V6"/>
+        <path d="M8 17v5"/>
+        <path d="M20 17v5"/>
+      </svg>
+      <span class="icon-name">chain</span>
+    </div>
+    <!-- API key -->
+    <div class="icon-cell">
+      <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="#8B5A2B" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="10" cy="14" r="5"/>
+        <line x1="15" y1="14" x2="26" y2="14"/>
+        <line x1="22" y1="14" x2="22" y2="17"/>
+        <line x1="25" y1="14" x2="25" y2="17"/>
+      </svg>
+      <span class="icon-name">api key</span>
+    </div>
+    <!-- Metrics -->
+    <div class="icon-cell">
+      <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="#8B5A2B" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 20 L8 14 L12 17 L17 9 L22 13 L26 8"/>
+        <line x1="4" y1="23" x2="26" y2="23"/>
+      </svg>
+      <span class="icon-name">metrics</span>
+    </div>
+  </div>
+
+  <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:1.5px; background:rgba(139,90,43,0.1); margin-top:1rem;">
+    <div style="background:var(--concrete); padding:1.5rem;">
+      <span class="tag-do">Stroke rules</span>
+      <p style="font-size:0.8rem; color:var(--wire); margin-top:0.6rem; line-height:1.6;">Always 1.5px stroke-width. Round linecap, round linejoin. No fill except the signal-green dot. Viewbox: 28×28.</p>
+    </div>
+    <div style="background:var(--concrete); padding:1.5rem;">
+      <span class="tag-do">Color rules</span>
+      <p style="font-size:0.8rem; color:var(--wire); margin-top:0.6rem; line-height:1.6;">Rust (#8B5A2B) on light backgrounds. Concrete (#F4F1EC) on dark. Never patina green for icons — that's reserved for status only.</p>
+    </div>
+    <div style="background:var(--concrete); padding:1.5rem;">
+      <span class="tag-dont">Never</span>
+      <p style="font-size:0.8rem; color:var(--muted); margin-top:0.6rem; line-height:1.6;">Filled icons. Rounded-corner icon containers/badges. Emoji. Icons from icon packs without adapting to 1.5px stroke weight.</p>
+    </div>
+  </div>
+</section>
+
+<div class="full-divider"></div>
+
+<!-- ── 6. SPACING ── -->
+<section id="spacing">
+  <div class="section-head">
+    <div>
+      <div class="section-eyebrow">06 — Spacing & Layout</div>
+      <h2>A 4px base.<br>Generous breathing room.</h2>
+    </div>
+    <p class="section-desc">The lattice tower is beautiful because of its proportions. Spacing should be too.</p>
+  </div>
+
+  <div class="spacing-row">
+    <div class="spacing-cell">
+      <div class="spacing-bar" style="height:4px;"></div>
+      <div class="spacing-value">4</div>
+      <div class="spacing-label">xs</div>
+    </div>
+    <div class="spacing-cell">
+      <div class="spacing-bar" style="height:8px;"></div>
+      <div class="spacing-value">8</div>
+      <div class="spacing-label">sm</div>
+    </div>
+    <div class="spacing-cell">
+      <div class="spacing-bar" style="height:12px;"></div>
+      <div class="spacing-value">12</div>
+      <div class="spacing-label">—</div>
+    </div>
+    <div class="spacing-cell">
+      <div class="spacing-bar" style="height:16px;"></div>
+      <div class="spacing-value">16</div>
+      <div class="spacing-label">md</div>
+    </div>
+    <div class="spacing-cell">
+      <div class="spacing-bar" style="height:24px;"></div>
+      <div class="spacing-value">24</div>
+      <div class="spacing-label">lg</div>
+    </div>
+    <div class="spacing-cell">
+      <div class="spacing-bar" style="height:32px;"></div>
+      <div class="spacing-value">32</div>
+      <div class="spacing-label">xl</div>
+    </div>
+    <div class="spacing-cell">
+      <div class="spacing-bar" style="height:48px;"></div>
+      <div class="spacing-value">48</div>
+      <div class="spacing-label">2xl</div>
+    </div>
+    <div class="spacing-cell">
+      <div class="spacing-bar" style="height:64px;"></div>
+      <div class="spacing-value">64</div>
+      <div class="spacing-label">3xl</div>
+    </div>
+    <div class="spacing-cell">
+      <div class="spacing-bar" style="height:80px;"></div>
+      <div class="spacing-value">80</div>
+      <div class="spacing-label">section</div>
+    </div>
+    <div class="spacing-cell">
+      <div class="spacing-bar" style="height:96px;"></div>
+      <div class="spacing-value">96+</div>
+      <div class="spacing-label">hero</div>
+    </div>
+  </div>
+
+  <div style="display:grid; grid-template-columns:1fr 1fr; gap:1.5px; background:rgba(139,90,43,0.1); margin-top:1rem;">
+    <div style="background:var(--concrete); padding:2rem;">
+      <div style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; letter-spacing:0.18em; text-transform:uppercase; color:var(--rust); margin-bottom:1rem;">Layout grid</div>
+      <p style="font-size:0.85rem; color:var(--wire); line-height:1.7; margin-bottom:1rem;">Max content width: 1100px. Page padding: 3rem (desktop) / 1.25rem (mobile). Internal grids use CSS grid with <code style="font-family:'IBM Plex Mono',monospace; font-size:0.8rem; color:var(--rust); background:rgba(139,90,43,0.08); padding:0.1rem 0.3rem;">gap: 1.5px</code> and a rust-tinted background to create the bordered-grid aesthetic.</p>
+      <p style="font-size:0.85rem; color:var(--wire); line-height:1.7;">The "gap as border" pattern comes from the lattice itself — negative space between structural members, not decorative lines drawn on top.</p>
+    </div>
+    <div style="background:var(--concrete); padding:2rem;">
+      <div style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; letter-spacing:0.18em; text-transform:uppercase; color:var(--rust); margin-bottom:1rem;">Spacing principles</div>
+      <div style="display:flex; flex-direction:column; gap:0.75rem;">
+        <div class="do-item"><span class="do-mark yes">DO</span> Use 3rem+ padding on section containers. The brand needs to breathe.</div>
+        <div class="do-item"><span class="do-mark yes">DO</span> Prefer asymmetric layouts — content weight on one side, negative space on the other.</div>
+        <div class="dont-item"><span class="do-mark no">NO</span> Equal padding on all sides of every element. That's furniture catalog, not infrastructure.</div>
+        <div class="dont-item"><span class="do-mark no">NO</span> Tight line-height under 1.6 for body text. Cramped text undermines the brand's patience.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<div style="background:var(--charcoal); padding:2rem 3rem; margin-top:0; display:flex; align-items:center; justify-content:space-between; border-top: 2px solid var(--rust);">
+  <div style="font-family:'IBM Plex Mono',monospace; font-size:0.7rem; letter-spacing:0.15em; text-transform:uppercase; color:rgba(244,241,236,0.3);">Signal · Brand Guidelines v1.0</div>
+  <div style="font-family:'IBM Plex Mono',monospace; font-size:0.65rem; color:rgba(244,241,236,0.15); letter-spacing:0.08em;">dterminal · Feb 2026 · Internal use</div>
+</div>
+
+<script>
+  // Active nav link on scroll
+  const sections = document.querySelectorAll('section[id]');
+  const navLinks = document.querySelectorAll('.nav-links a');
+
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        navLinks.forEach(link => link.classList.remove('active'));
+        const active = document.querySelector(`.nav-links a[href="#${entry.target.id}"]`);
+        if (active) active.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-30% 0px -60% 0px' });
+
+  sections.forEach(s => observer.observe(s));
+
+  // Stagger replay
+  function replayStagger() {
+    const items = document.querySelectorAll('#staggerDemo .stagger-item');
+    items.forEach(el => {
+      el.style.animation = 'none';
+      el.style.opacity = '0';
+    });
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        items.forEach(el => {
+          el.style.animation = '';
+        });
+      });
+    });
+  }
+
+  // Load bar replay on click
+  document.querySelector('.load-bar').closest('.motion-cell').addEventListener('click', () => {
+    const bar = document.querySelector('.load-bar');
+    bar.style.animation = 'none';
+    bar.style.width = '0%';
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        bar.style.animation = '';
+      });
+    });
+  });
+</script>
+
+</body>
+</html>

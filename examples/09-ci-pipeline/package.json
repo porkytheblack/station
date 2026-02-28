@@ -1,0 +1,19 @@
+{
+  "name": "@simple-signal/example-09-ci-pipeline",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx runner.ts",
+    "start:feature": "tsx runner.ts feature/auth",
+    "station": "station"
+  },
+  "dependencies": {
+    "simple-signal": "workspace:*",
+    "simple-broadcast": "workspace:*",
+    "@simple-signal/adapter-sqlite": "workspace:*",
+    "@simple-signal/station": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0"
+  }
+}

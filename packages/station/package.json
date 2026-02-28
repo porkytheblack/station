@@ -1,0 +1,49 @@
+{
+  "name": "@simple-signal/station",
+  "version": "1.0.0",
+  "description": "Dashboard for simple-signal — inspect and control signals and broadcasts",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "station": "./dist/cli.js"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "simple-signal": "workspace:*",
+    "simple-broadcast": "workspace:*"
+  },
+  "dependencies": {
+    "hono": "^4",
+    "@hono/node-server": "^1",
+    "better-sqlite3": "^11.9.1",
+    "ws": "^8",
+    "next": "^15",
+    "react": "^19",
+    "react-dom": "^19",
+    "tsx": "^4.21.0"
+  },
+  "devDependencies": {
+    "simple-signal": "workspace:*",
+    "simple-broadcast": "workspace:*",
+    "typescript": "^5.9.3",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^25.3.0",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@types/ws": "^8"
+  }
+}

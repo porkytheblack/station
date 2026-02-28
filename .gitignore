@@ -8,3 +8,7 @@ build/
 coverage/
 .turbo/
 *.db
+*.db-shm
+*.db-wal
+dist 
+.next

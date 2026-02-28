@@ -3,12 +3,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "tsx runner.ts"
+    "start": "tsx runner.ts",
+    "station": "station"
   },
   "dependencies": {
     "simple-signal": "workspace:*"
   },
   "devDependencies": {
-    "tsx": "^4.21.0"
+    "tsx": "^4.21.0",
+    "@simple-signal/station": "workspace:*"
   }
 }
