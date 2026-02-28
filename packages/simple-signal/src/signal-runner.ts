@@ -13,6 +13,7 @@ import { DEFAULT_MAX_ATTEMPTS, DEFAULT_TIMEOUT_MS, type Run, type Step } from ".
 import { isSignal } from "./util.js";
 
 const BOOTSTRAP = fileURLToPath(new URL("./bootstrap.js", import.meta.url));
+const TSX_IMPORT = import.meta.resolve("tsx");
 
 interface RegisteredSignal {
   name: string;
@@ -485,7 +486,7 @@ export class SignalRunner {
       }
     }
 
-    const child = spawn("node", ["--import", "tsx", BOOTSTRAP], {
+    const child = spawn("node", ["--import", TSX_IMPORT, BOOTSTRAP], {
       env,
       stdio: ["ignore", "pipe", "pipe", "ipc"],
     });

@@ -1,9 +1,10 @@
+import path from "node:path";
 import { SignalRunner, ConsoleSubscriber } from "simple-signal";
 import { BroadcastRunner, ConsoleBroadcastSubscriber } from "simple-broadcast";
 import { orderPipeline } from "./broadcasts/order-pipeline.js";
 
 const signalRunner = new SignalRunner({
-  signalsDir: "./examples/07-broadcast/signals",
+  signalsDir: path.join(import.meta.dirname, "signals"),
   subscribers: [new ConsoleSubscriber()],
 });
 
@@ -32,8 +33,6 @@ setTimeout(async () => {
   await signalRunner.stop();
 }, 500);
 
-// Start both runners
-await Promise.all([
-  signalRunner.start(),
-  broadcastRunner.start(),
-]);
+// Start both runners (long-running loops, don't await at top level)
+signalRunner.start();
+broadcastRunner.start();

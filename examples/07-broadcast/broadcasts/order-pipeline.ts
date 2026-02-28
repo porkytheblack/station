@@ -8,7 +8,10 @@ import { notifyWarehouse } from "../signals/notify-warehouse.js";
 export const orderPipeline = broadcast("order-pipeline")
   .input(validateOrder)
   .then(chargePayment, {
-    when: (prev) => (prev["validate-order"] as { valid: boolean }).valid === true,
+    when: (prev) => {
+      console.log("Prev value::", prev)
+      return (prev["validate-order"] as { valid: boolean }).valid === true
+    },
   })
   .then(sendReceipt, notifyWarehouse)
   .build();

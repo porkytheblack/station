@@ -1,0 +1,15 @@
+{
+  "name": "@simple-signal/example-07-broadcast",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx runner.ts"
+  },
+  "dependencies": {
+    "simple-signal": "workspace:*",
+    "simple-broadcast": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0"
+  }
+}

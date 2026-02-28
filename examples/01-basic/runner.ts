@@ -1,7 +1,8 @@
+import path from "node:path";
 import { SignalRunner } from "simple-signal";
 import { greet } from "./signals/greet.js";
 
-const runner = SignalRunner.create("./examples/01-basic/signals");
+const runner = SignalRunner.create(path.join(import.meta.dirname, "signals"));
 
 // Trigger in-process after a short delay (MemoryAdapter is process-local)
 setTimeout(async () => {

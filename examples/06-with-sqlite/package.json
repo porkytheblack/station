@@ -1,0 +1,16 @@
+{
+  "name": "@simple-signal/example-06-with-sqlite",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx runner.ts",
+    "trigger": "tsx trigger.ts"
+  },
+  "dependencies": {
+    "simple-signal": "workspace:*",
+    "@simple-signal/adapter-sqlite": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0"
+  }
+}

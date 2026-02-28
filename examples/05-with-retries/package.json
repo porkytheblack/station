@@ -1,0 +1,14 @@
+{
+  "name": "@simple-signal/example-05-with-retries",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx runner.ts"
+  },
+  "dependencies": {
+    "simple-signal": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0"
+  }
+}

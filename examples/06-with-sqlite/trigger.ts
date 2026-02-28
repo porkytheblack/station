@@ -1,8 +1,9 @@
+import path from "node:path";
 import { configure } from "simple-signal";
 import { SqliteAdapter } from "@simple-signal/adapter-sqlite";
 import { sendEmail } from "./signals/send-email.js";
 
-const DB_PATH = "./examples/06-with-sqlite/jobs.db";
+const DB_PATH = path.join(import.meta.dirname, "jobs.db");
 
 configure({ adapter: new SqliteAdapter({ dbPath: DB_PATH }) });
 

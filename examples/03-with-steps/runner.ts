@@ -1,8 +1,9 @@
+import path from "node:path";
 import { SignalRunner, ConsoleSubscriber } from "simple-signal";
 import { processOrder } from "./signals/process-order.js";
 
 const runner = new SignalRunner({
-  signalsDir: "./examples/03-with-steps/signals",
+  signalsDir: path.join(import.meta.dirname, "signals"),
   subscribers: [
     new ConsoleSubscriber(),
     {

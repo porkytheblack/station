@@ -1,0 +1,14 @@
+{
+  "name": "@simple-signal/example-03-with-steps",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx runner.ts"
+  },
+  "dependencies": {
+    "simple-signal": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0"
+  }
+}
