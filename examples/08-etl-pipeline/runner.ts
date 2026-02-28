@@ -1,8 +1,8 @@
 import path from "node:path";
 import { SignalRunner, ConsoleSubscriber } from "simple-signal";
 import { BroadcastRunner, ConsoleBroadcastSubscriber } from "simple-broadcast";
-import { SqliteAdapter } from "@simple-signal/adapter-sqlite";
-import { BroadcastSqliteAdapter } from "@simple-signal/adapter-sqlite/broadcast";
+import { SqliteAdapter } from "simple-adapter-sqlite";
+import { BroadcastSqliteAdapter } from "simple-adapter-sqlite/broadcast";
 import { etlPipeline } from "./broadcasts/etl-pipeline.js";
 
 const DB_PATH = path.join(import.meta.dirname, "jobs.db");

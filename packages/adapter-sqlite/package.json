@@ -1,5 +1,5 @@
 {
-  "name": "@simple-signal/adapter-sqlite",
+  "name": "simple-adapter-sqlite",
   "version": "1.0.0",
   "description": "SQLite adapter for simple-signal using better-sqlite3",
   "main": "dist/index.js",

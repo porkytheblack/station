@@ -36,15 +36,12 @@ export function runRoutes(deps: RunDeps) {
 
       // Also get runs from known signals
       if (deps.signalRunner) {
-        const registry = (deps.signalRunner as any).registry as Map<string, any> | undefined;
-        if (registry) {
-          for (const [name] of registry) {
-            const signalRuns = await deps.signalAdapter.listRuns(name);
-            for (const r of signalRuns) {
-              if (!seen.has(r.id)) {
-                seen.add(r.id);
-                runs.push(r);
-              }
+        for (const { name } of deps.signalRunner.listRegistered()) {
+          const signalRuns = await deps.signalAdapter.listRuns(name);
+          for (const r of signalRuns) {
+            if (!seen.has(r.id)) {
+              seen.add(r.id);
+              runs.push(r);
             }
           }
         }
@@ -77,15 +74,12 @@ export function runRoutes(deps: RunDeps) {
     const seen = new Set(allRuns.map((r) => r.id));
 
     if (deps.signalRunner) {
-      const registry = (deps.signalRunner as any).registry as Map<string, any> | undefined;
-      if (registry) {
-        for (const [name] of registry) {
-          const signalRuns = await deps.signalAdapter.listRuns(name);
-          for (const r of signalRuns) {
-            if (!seen.has(r.id)) {
-              seen.add(r.id);
-              allRuns.push(r);
-            }
+      for (const { name } of deps.signalRunner.listRegistered()) {
+        const signalRuns = await deps.signalAdapter.listRuns(name);
+        for (const r of signalRuns) {
+          if (!seen.has(r.id)) {
+            seen.add(r.id);
+            allRuns.push(r);
           }
         }
       }

@@ -1,4 +1,4 @@
-import { defineConfig } from "@simple-signal/station";
+import { defineConfig } from "simple-station";
 
 
 

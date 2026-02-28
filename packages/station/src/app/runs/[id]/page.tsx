@@ -92,8 +92,8 @@ export default function RunDetailPage() {
           timestamp: (latest.data.timestamp as string) ?? latest.timestamp,
         }]);
       } else {
-        api.getRun(id).then((r) => setRun(r.data)).catch(() => {});
-        api.getRunSteps(id).then((r) => setSteps(r.data)).catch(() => {});
+        api.getRun(id).then((r) => setRun(r.data)).catch((e) => console.error("Failed to refresh run:", e));
+        api.getRunSteps(id).then((r) => setSteps(r.data)).catch((e) => console.error("Failed to refresh steps:", e));
       }
     }
   }, [events.length, id]);

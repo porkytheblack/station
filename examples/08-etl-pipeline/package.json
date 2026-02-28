@@ -1,5 +1,5 @@
 {
-  "name": "@simple-signal/example-08-etl-pipeline",
+  "name": "simple-example-08-etl-pipeline",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,8 +9,8 @@
   "dependencies": {
     "simple-signal": "workspace:*",
     "simple-broadcast": "workspace:*",
-    "@simple-signal/adapter-sqlite": "workspace:*",
-    "@simple-signal/station": "workspace:*"
+    "simple-adapter-sqlite": "workspace:*",
+    "simple-station": "workspace:*"
   },
   "devDependencies": {
     "tsx": "^4.21.0"

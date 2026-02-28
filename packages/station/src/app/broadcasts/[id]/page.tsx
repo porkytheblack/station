@@ -67,7 +67,7 @@ function BroadcastNameView({ name }: { name: string }) {
   );
 
   const loadRuns = useCallback(() => {
-    api.getBroadcastRuns(name).then((r) => setBroadcastRuns(r.data)).catch(() => {});
+    api.getBroadcastRuns(name).then((r) => setBroadcastRuns(r.data)).catch((e) => console.error("Failed to refresh broadcast runs:", e));
   }, [name]);
 
   useEffect(() => {
@@ -95,7 +95,7 @@ function BroadcastNameView({ name }: { name: string }) {
     if (rootNodes.length === 1) {
       api.getSignal(rootNodes[0].signalName)
         .then((res) => setRootInputSchema(res.data.inputSchema))
-        .catch(() => {});
+        .catch((e) => console.error("Failed to load root input schema:", e));
     }
   }, [broadcast]);
 
@@ -299,7 +299,7 @@ function BroadcastRunView({ id }: { id: string }) {
         if (runRes.data.broadcastName) {
           api.getBroadcast(runRes.data.broadcastName)
             .then((r) => setBroadcastMeta(r.data))
-            .catch(() => {});
+            .catch((e) => console.error("Failed to load broadcast meta:", e));
         }
       } catch (err: unknown) {
         if (err instanceof Error) {
@@ -331,7 +331,7 @@ function BroadcastRunView({ id }: { id: string }) {
     }
 
     if (latest.type.startsWith("broadcast:") || latest.type.startsWith("node:")) {
-      api.getBroadcastRun(id).then((r) => setBroadcastRun(r.data)).catch(() => {});
+      api.getBroadcastRun(id).then((r) => setBroadcastRun(r.data)).catch((e) => console.error("Failed to refresh broadcast run:", e));
       api.getBroadcastRunNodes(id).then((r) => {
         setNodeRuns(r.data);
         const ids = new Set<string>();
@@ -339,7 +339,7 @@ function BroadcastRunView({ id }: { id: string }) {
           if (nr.signalRunId) ids.add(nr.signalRunId);
         }
         signalRunIdsRef.current = ids;
-      }).catch(() => {});
+      }).catch((e) => console.error("Failed to refresh node runs:", e));
     }
   }, [events.length, id, nodeRuns]);
 

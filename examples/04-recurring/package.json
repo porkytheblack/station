@@ -1,5 +1,5 @@
 {
-  "name": "@simple-signal/example-04-recurring",
+  "name": "simple-example-04-recurring",
   "private": true,
   "type": "module",
   "scripts": {

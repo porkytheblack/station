@@ -54,7 +54,7 @@ export default function SignalDetailPage() {
   );
 
   const loadRuns = useCallback(() => {
-    api.getSignalRuns(name).then((r) => setRuns(r.data)).catch(() => {});
+    api.getSignalRuns(name).then((r) => setRuns(r.data)).catch((e) => console.error("Failed to refresh runs:", e));
   }, [name]);
 
   useEffect(() => {

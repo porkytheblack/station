@@ -5,16 +5,9 @@ import { registerAdapter } from "simple-signal";
 
 const MODULE_URL = import.meta.url;
 
-/** Validate table name to prevent SQL injection (alphanumeric + underscores only). */
-function validateTableName(name: string): string {
-  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
-    throw new Error(`Invalid table name "${name}". Only alphanumeric characters and underscores are allowed.`);
-  }
-  return name;
-}
+import { validateTableName, dateToStr, createColumnMapper, rowToObject } from "./shared.js";
 
-/** Column name mapping: camelCase Run → snake_case SQLite */
-const COLUMN_MAP: Record<string, string> = {
+const { toColumn, toField } = createColumnMapper({
   signalName: "signal_name",
   maxAttempts: "max_attempts",
   nextRunAt: "next_run_at",
@@ -22,90 +15,21 @@ const COLUMN_MAP: Record<string, string> = {
   startedAt: "started_at",
   completedAt: "completed_at",
   createdAt: "created_at",
-};
+});
+const DATE_FIELDS = new Set(["nextRunAt", "lastRunAt", "startedAt", "completedAt", "createdAt"]);
 
-/** Pre-computed reverse map: snake_case → camelCase (L8) */
-const REVERSE_COLUMN_MAP: Record<string, string> = Object.fromEntries(
-  Object.entries(COLUMN_MAP).map(([k, v]) => [v, k]),
-);
-
-/** Fields that are stored as ISO-8601 text in SQLite */
-const DATE_FIELDS = new Set([
-  "nextRunAt",
-  "lastRunAt",
-  "startedAt",
-  "completedAt",
-  "createdAt",
-]);
-
-/** Column name mapping for Step records */
-const STEP_COLUMN_MAP: Record<string, string> = {
+const { toColumn: toStepColumn, toField: toStepField } = createColumnMapper({
   runId: "run_id",
   startedAt: "started_at",
   completedAt: "completed_at",
-};
-
-const REVERSE_STEP_COLUMN_MAP: Record<string, string> = Object.fromEntries(
-  Object.entries(STEP_COLUMN_MAP).map(([k, v]) => [v, k]),
-);
-
+});
 const STEP_DATE_FIELDS = new Set(["startedAt", "completedAt"]);
 
-function toColumn(key: string): string {
-  return COLUMN_MAP[key] ?? key;
-}
-
-function toField(col: string): string {
-  return REVERSE_COLUMN_MAP[col] ?? col;
-}
-
-function toStepColumn(key: string): string {
-  return STEP_COLUMN_MAP[key] ?? key;
-}
-
-function toStepField(col: string): string {
-  return REVERSE_STEP_COLUMN_MAP[col] ?? col;
-}
-
-/** Serialise a Date to ISO string, or pass through null/undefined. */
-function dateToStr(value: unknown): string | null {
-  if (value instanceof Date) return value.toISOString();
-  if (value === undefined || value === null) return null;
-  return String(value);
-}
-
-/** Deserialise an ISO string back to Date, or return undefined. */
-function strToDate(value: unknown): Date | undefined {
-  if (typeof value === "string") return new Date(value);
-  return undefined;
-}
-
-/** Map a raw SQLite row to a Run. */
 function rowToRun(row: Record<string, unknown>): Run {
-  const run: Record<string, unknown> = {};
-  for (const [col, value] of Object.entries(row)) {
-    const field = toField(col);
-    if (DATE_FIELDS.has(field)) {
-      run[field] = value != null ? strToDate(value) : undefined;
-    } else {
-      run[field] = value;
-    }
-  }
-  return run as unknown as Run;
+  return rowToObject<Run>(row, toField, DATE_FIELDS);
 }
-
-/** Map a raw SQLite row to a Step. */
 function rowToStep(row: Record<string, unknown>): Step {
-  const step: Record<string, unknown> = {};
-  for (const [col, value] of Object.entries(row)) {
-    const field = toStepField(col);
-    if (STEP_DATE_FIELDS.has(field)) {
-      step[field] = value != null ? strToDate(value) : undefined;
-    } else {
-      step[field] = value;
-    }
-  }
-  return step as unknown as Step;
+  return rowToObject<Step>(row, toStepField, STEP_DATE_FIELDS);
 }
 
 export interface SqliteAdapterOptions {

@@ -26,17 +26,7 @@ export function broadcastRoutes(deps: BroadcastDeps) {
     if (!deps.broadcastRunner) {
       return c.json({ data: [] });
     }
-    const registry = (deps.broadcastRunner as any).registry as Map<string, any> | undefined;
-    const result: Array<{ name: string; nodeCount: number; failurePolicy: string }> = [];
-    if (registry) {
-      for (const [name, def] of registry) {
-        result.push({
-          name,
-          nodeCount: def.nodes?.length ?? 0,
-          failurePolicy: def.failurePolicy ?? "fail-fast",
-        });
-      }
-    }
+    const result = deps.broadcastRunner.listRegistered();
     return c.json({ data: result });
   });
 
@@ -53,16 +43,9 @@ export function broadcastRoutes(deps: BroadcastDeps) {
 
     // Fallback: check registry
     if (deps.broadcastRunner) {
-      const registry = (deps.broadcastRunner as any).registry as Map<string, any> | undefined;
-      const def = registry?.get(name);
-      if (def) {
-        return c.json({
-          data: {
-            name,
-            nodeCount: def.nodes?.length ?? 0,
-            failurePolicy: def.failurePolicy ?? "fail-fast",
-          },
-        });
+      const entry = deps.broadcastRunner.listRegistered().find((b) => b.name === name);
+      if (entry) {
+        return c.json({ data: entry });
       }
     }
 
@@ -82,8 +65,9 @@ export function broadcastRoutes(deps: BroadcastDeps) {
     try {
       const id = await deps.broadcastRunner.trigger(name, input);
       return c.json({ data: { id } });
-    } catch (err: any) {
-      return c.json({ error: "trigger_failed", message: err.message }, 400);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: "trigger_failed", message }, 400);
     }
   });
 

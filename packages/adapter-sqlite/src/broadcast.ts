@@ -9,31 +9,19 @@ import type {
   BroadcastNodeRunPatch,
 } from "simple-broadcast";
 
-/** Validate table name to prevent SQL injection. */
-function validateTableName(name: string): string {
-  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
-    throw new Error(`Invalid table name "${name}". Only alphanumeric characters and underscores are allowed.`);
-  }
-  return name;
-}
+import { validateTableName, dateToStr, createColumnMapper, rowToObject } from "./shared.js";
 
-const BROADCAST_RUN_COLUMN_MAP: Record<string, string> = {
+const { toColumn: toBroadcastRunCol, toField: toBroadcastRunField } = createColumnMapper({
   broadcastName: "broadcast_name",
   failurePolicy: "failure_policy",
   nextRunAt: "next_run_at",
   startedAt: "started_at",
   completedAt: "completed_at",
   createdAt: "created_at",
-  // "timeout" maps to itself — no rename needed
-};
-
-const REVERSE_BROADCAST_RUN_COLUMN_MAP: Record<string, string> = Object.fromEntries(
-  Object.entries(BROADCAST_RUN_COLUMN_MAP).map(([k, v]) => [v, k]),
-);
-
+});
 const BROADCAST_RUN_DATE_FIELDS = new Set(["nextRunAt", "startedAt", "completedAt", "createdAt"]);
 
-const NODE_RUN_COLUMN_MAP: Record<string, string> = {
+const { toColumn: toNodeRunCol, toField: toNodeRunField } = createColumnMapper({
   broadcastRunId: "broadcast_run_id",
   nodeName: "node_name",
   signalName: "signal_name",
@@ -41,54 +29,14 @@ const NODE_RUN_COLUMN_MAP: Record<string, string> = {
   skipReason: "skip_reason",
   startedAt: "started_at",
   completedAt: "completed_at",
-};
-
-const REVERSE_NODE_RUN_COLUMN_MAP: Record<string, string> = Object.fromEntries(
-  Object.entries(NODE_RUN_COLUMN_MAP).map(([k, v]) => [v, k]),
-);
-
+});
 const NODE_RUN_DATE_FIELDS = new Set(["startedAt", "completedAt"]);
 
-function toBroadcastRunCol(key: string): string { return BROADCAST_RUN_COLUMN_MAP[key] ?? key; }
-function toBroadcastRunField(col: string): string { return REVERSE_BROADCAST_RUN_COLUMN_MAP[col] ?? col; }
-function toNodeRunCol(key: string): string { return NODE_RUN_COLUMN_MAP[key] ?? key; }
-function toNodeRunField(col: string): string { return REVERSE_NODE_RUN_COLUMN_MAP[col] ?? col; }
-
-function dateToStr(value: unknown): string | null {
-  if (value instanceof Date) return value.toISOString();
-  if (value === undefined || value === null) return null;
-  return String(value);
-}
-
-function strToDate(value: unknown): Date | undefined {
-  if (typeof value === "string") return new Date(value);
-  return undefined;
-}
-
 function rowToBroadcastRun(row: Record<string, unknown>): BroadcastRun {
-  const run: Record<string, unknown> = {};
-  for (const [col, value] of Object.entries(row)) {
-    const field = toBroadcastRunField(col);
-    if (BROADCAST_RUN_DATE_FIELDS.has(field)) {
-      run[field] = value != null ? strToDate(value) : undefined;
-    } else {
-      run[field] = value;
-    }
-  }
-  return run as unknown as BroadcastRun;
+  return rowToObject<BroadcastRun>(row, toBroadcastRunField, BROADCAST_RUN_DATE_FIELDS);
 }
-
 function rowToNodeRun(row: Record<string, unknown>): BroadcastNodeRun {
-  const nr: Record<string, unknown> = {};
-  for (const [col, value] of Object.entries(row)) {
-    const field = toNodeRunField(col);
-    if (NODE_RUN_DATE_FIELDS.has(field)) {
-      nr[field] = value != null ? strToDate(value) : undefined;
-    } else {
-      nr[field] = value;
-    }
-  }
-  return nr as unknown as BroadcastNodeRun;
+  return rowToObject<BroadcastNodeRun>(row, toNodeRunField, NODE_RUN_DATE_FIELDS);
 }
 
 export interface BroadcastSqliteAdapterOptions {

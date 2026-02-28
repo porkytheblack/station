@@ -21,7 +21,7 @@ importers:
         specifier: workspace:*
         version: link:../../packages/simple-signal
     devDependencies:
-      '@simple-signal/station':
+      simple-station:
         specifier: workspace:*
         version: link:../../packages/station
       tsx:
@@ -70,7 +70,7 @@ importers:
 
   examples/06-with-sqlite:
     dependencies:
-      '@simple-signal/adapter-sqlite':
+      simple-adapter-sqlite:
         specifier: workspace:*
         version: link:../../packages/adapter-sqlite
       simple-signal:
@@ -96,18 +96,18 @@ importers:
 
   examples/08-etl-pipeline:
     dependencies:
-      '@simple-signal/adapter-sqlite':
+      simple-adapter-sqlite:
         specifier: workspace:*
         version: link:../../packages/adapter-sqlite
-      '@simple-signal/station':
-        specifier: workspace:*
-        version: link:../../packages/station
       simple-broadcast:
         specifier: workspace:*
         version: link:../../packages/simple-broadcast
       simple-signal:
         specifier: workspace:*
         version: link:../../packages/simple-signal
+      simple-station:
+        specifier: workspace:*
+        version: link:../../packages/station
     devDependencies:
       tsx:
         specifier: ^4.21.0
@@ -115,18 +115,18 @@ importers:
 
   examples/09-ci-pipeline:
     dependencies:
-      '@simple-signal/adapter-sqlite':
+      simple-adapter-sqlite:
         specifier: workspace:*
         version: link:../../packages/adapter-sqlite
-      '@simple-signal/station':
-        specifier: workspace:*
-        version: link:../../packages/station
       simple-broadcast:
         specifier: workspace:*
         version: link:../../packages/simple-broadcast
       simple-signal:
         specifier: workspace:*
         version: link:../../packages/simple-signal
+      simple-station:
+        specifier: workspace:*
+        version: link:../../packages/station
     devDependencies:
       tsx:
         specifier: ^4.21.0
@@ -134,18 +134,18 @@ importers:
 
   examples/10-fleet-monitor:
     dependencies:
-      '@simple-signal/adapter-sqlite':
+      simple-adapter-sqlite:
         specifier: workspace:*
         version: link:../../packages/adapter-sqlite
-      '@simple-signal/station':
-        specifier: workspace:*
-        version: link:../../packages/station
       simple-broadcast:
         specifier: workspace:*
         version: link:../../packages/simple-broadcast
       simple-signal:
         specifier: workspace:*
         version: link:../../packages/simple-signal
+      simple-station:
+        specifier: workspace:*
+        version: link:../../packages/station
     devDependencies:
       tsx:
         specifier: ^4.21.0

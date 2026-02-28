@@ -25,13 +25,7 @@ export function signalRoutes(deps: SignalDeps) {
     if (!deps.signalRunner) {
       return c.json({ data: [] });
     }
-    const registry = (deps.signalRunner as any).registry as Map<string, any> | undefined;
-    const result: Array<{ name: string; filePath?: string }> = [];
-    if (registry) {
-      for (const [name, entry] of registry) {
-        result.push({ name, filePath: entry.filePath });
-      }
-    }
+    const result = deps.signalRunner.listRegistered().map(({ name, filePath }) => ({ name, filePath }));
     return c.json({ data: result });
   });
 
@@ -92,8 +86,7 @@ export function signalRoutes(deps: SignalDeps) {
 
     // Fallback: check registry
     if (deps.signalRunner) {
-      const registry = (deps.signalRunner as any).registry as Map<string, any> | undefined;
-      const entry = registry?.get(name);
+      const entry = deps.signalRunner.listRegistered().find((s) => s.name === name);
       if (entry) {
         return c.json({ data: { name, filePath: entry.filePath } });
       }
@@ -109,8 +102,7 @@ export function signalRoutes(deps: SignalDeps) {
       return c.json({ error: "read_only", message: "Station is in read-only mode." }, 403);
     }
 
-    const registry = (deps.signalRunner as any).registry as Map<string, any> | undefined;
-    if (!registry?.has(name)) {
+    if (!deps.signalRunner.hasSignal(name)) {
       return c.json({ error: "not_found", message: `Signal "${name}" not found.` }, 404);
     }
 

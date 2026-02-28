@@ -1,5 +1,5 @@
 {
-  "name": "@simple-signal/example-07-broadcast",
+  "name": "simple-example-07-broadcast",
   "private": true,
   "type": "module",
   "scripts": {

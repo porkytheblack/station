@@ -1,5 +1,5 @@
 {
-  "name": "@simple-signal/station",
+  "name": "simple-station",
   "version": "1.0.0",
   "description": "Dashboard for simple-signal — inspect and control signals and broadcasts",
   "type": "module",

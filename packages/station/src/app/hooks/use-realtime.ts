@@ -36,7 +36,9 @@ export function useRealtime(onEvent: (event: StationEvent) => void): { connected
         try {
           const event = JSON.parse(e.data) as StationEvent;
           onEventRef.current(event);
-        } catch {}
+        } catch (err) {
+          console.error("Failed to parse WebSocket message:", err);
+        }
       };
 
       ws.onclose = () => {

@@ -54,6 +54,22 @@ export class BroadcastRunner {
     this.subscribers = options.subscribers ? [...options.subscribers] : [];
   }
 
+  /** List all registered broadcast definitions with metadata. */
+  listRegistered(): Array<{ name: string; nodeCount: number; failurePolicy: FailurePolicy; timeout?: number; interval?: string }> {
+    return Array.from(this.registry.values()).map((def) => ({
+      name: def.name,
+      nodeCount: def.nodes.length,
+      failurePolicy: def.failurePolicy,
+      timeout: def.timeout,
+      interval: def.interval,
+    }));
+  }
+
+  /** Check whether a broadcast is registered by name. */
+  hasBroadcast(name: string): boolean {
+    return this.registry.has(name);
+  }
+
   /** Register a broadcast definition explicitly (alternative to auto-discovery). */
   register(definition: BroadcastDefinition): this {
     if (this.registry.has(definition.name)) {

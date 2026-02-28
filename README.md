@@ -61,7 +61,9 @@ await sendEmail.trigger({ to: "user@example.com", subject: "Hello", body: "World
 | Package | Description |
 |---------|-------------|
 | [`simple-signal`](./packages/simple-signal) | Core framework -- signals, runner, queue, adapters |
-| [`@simple-signal/adapter-sqlite`](./packages/adapter-sqlite) | SQLite adapter using better-sqlite3 |
+| [`simple-broadcast`](./packages/simple-broadcast) | DAG workflow orchestration for signals |
+| [`simple-adapter-sqlite`](./packages/adapter-sqlite) | SQLite adapter using better-sqlite3 |
+| [`simple-station`](./packages/station) | Dashboard — inspect and control signals and broadcasts |
 
 ## License
 

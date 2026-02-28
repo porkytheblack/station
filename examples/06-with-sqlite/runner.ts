@@ -1,6 +1,6 @@
 import path from "node:path";
 import { SignalRunner, ConsoleSubscriber } from "simple-signal";
-import { SqliteAdapter } from "@simple-signal/adapter-sqlite";
+import { SqliteAdapter } from "simple-adapter-sqlite";
 
 const DB_PATH = path.join(import.meta.dirname, "jobs.db");
 

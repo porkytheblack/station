@@ -45,16 +45,16 @@ console.log(`[station] Dashboard on http://${config.host}:${nextPort}`);
 // Open browser
 if (config.open) {
   const url = `http://${config.host}:${nextPort}`;
-  const openModule = await import("node:child_process");
+  const { execFile } = await import("node:child_process");
   const platform = process.platform;
 
-  await new Promise((res)=> setTimeout(()=> res(true), 5000))
+  await new Promise((res) => setTimeout(() => res(true), 5000));
   if (platform === "darwin") {
-    openModule.exec(`open "${url}"`);
+    execFile("open", [url]);
   } else if (platform === "linux") {
-    openModule.exec(`xdg-open "${url}"`);
+    execFile("xdg-open", [url]);
   } else if (platform === "win32") {
-    openModule.exec(`start "${url}"`);
+    execFile("cmd", ["/c", "start", url]);
   }
 }
 

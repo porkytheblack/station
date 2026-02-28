@@ -1,5 +1,5 @@
 {
-  "name": "@simple-signal/example-01-basic",
+  "name": "simple-example-01-basic",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,6 +11,6 @@
   },
   "devDependencies": {
     "tsx": "^4.21.0",
-    "@simple-signal/station": "workspace:*"
+    "simple-station": "workspace:*"
   }
 }

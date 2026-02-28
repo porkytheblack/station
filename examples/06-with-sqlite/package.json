@@ -1,5 +1,5 @@
 {
-  "name": "@simple-signal/example-06-with-sqlite",
+  "name": "simple-example-06-with-sqlite",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,7 +8,7 @@
   },
   "dependencies": {
     "simple-signal": "workspace:*",
-    "@simple-signal/adapter-sqlite": "workspace:*"
+    "simple-adapter-sqlite": "workspace:*"
   },
   "devDependencies": {
     "tsx": "^4.21.0"

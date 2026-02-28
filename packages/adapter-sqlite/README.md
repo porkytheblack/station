@@ -1,11 +1,11 @@
-# @simple-signal/adapter-sqlite
+# simple-adapter-sqlite
 
 SQLite storage adapter for simple-signal using better-sqlite3.
 
 ## Install
 
 ```bash
-pnpm add @simple-signal/adapter-sqlite
+pnpm add simple-adapter-sqlite
 ```
 
 Requires `simple-signal` as a peer dependency.
@@ -16,7 +16,7 @@ Configure globally:
 
 ```ts
 import { configure } from "simple-signal";
-import { SqliteAdapter } from "@simple-signal/adapter-sqlite";
+import { SqliteAdapter } from "simple-adapter-sqlite";
 
 configure({ adapter: new SqliteAdapter() });
 ```
@@ -49,7 +49,7 @@ The `configModule` pattern lets you share a single adapter instance across the r
 
 ```ts
 import { configure } from "simple-signal";
-import { SqliteAdapter } from "@simple-signal/adapter-sqlite";
+import { SqliteAdapter } from "simple-adapter-sqlite";
 
 configure({ adapter: new SqliteAdapter({ dbPath: "./jobs.db" }) });
 ```

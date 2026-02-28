@@ -81,9 +81,9 @@ export default function OverviewPage() {
     if (events.length === 0) return;
     const latestEvent = events[0];
     if (latestEvent.type.startsWith("run:")) {
-      api.getRunStats().then((r) => setStats(r.data)).catch(() => {});
-      api.getRuns({ status: "failed" }).then((r) => setFailedRuns(r.data.slice(0, 10))).catch(() => {});
-      api.getScheduledSignals().then((r) => setScheduled(r.data)).catch(() => {});
+      api.getRunStats().then((r) => setStats(r.data)).catch((e) => console.error("Failed to refresh stats:", e));
+      api.getRuns({ status: "failed" }).then((r) => setFailedRuns(r.data.slice(0, 10))).catch((e) => console.error("Failed to refresh failed runs:", e));
+      api.getScheduledSignals().then((r) => setScheduled(r.data)).catch((e) => console.error("Failed to refresh scheduled:", e));
     }
   }, [events.length]);
 

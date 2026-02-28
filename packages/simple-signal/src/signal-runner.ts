@@ -95,6 +95,16 @@ export class SignalRunner {
     return new SignalRunner({ ...options, signalsDir, subscribers });
   }
 
+  /** List all registered signals with metadata. */
+  listRegistered(): Array<{ name: string; filePath: string; maxConcurrency?: number }> {
+    return Array.from(this.registry.values());
+  }
+
+  /** Check whether a signal is registered by name. */
+  hasSignal(name: string): boolean {
+    return this.registry.has(name);
+  }
+
   register(name: string, filePath: string, options?: { maxConcurrency?: number }): this {
     this.registry.set(name, { name, filePath: resolve(filePath), maxConcurrency: options?.maxConcurrency });
     return this;

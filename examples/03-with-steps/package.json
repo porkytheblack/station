@@ -1,5 +1,5 @@
 {
-  "name": "@simple-signal/example-03-with-steps",
+  "name": "simple-example-03-with-steps",
   "private": true,
   "type": "module",
   "scripts": {

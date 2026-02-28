@@ -1,6 +1,6 @@
 import path from "node:path";
 import { configure } from "simple-signal";
-import { SqliteAdapter } from "@simple-signal/adapter-sqlite";
+import { SqliteAdapter } from "simple-adapter-sqlite";
 import { sendEmail } from "./signals/send-email.js";
 
 const DB_PATH = path.join(import.meta.dirname, "jobs.db");
