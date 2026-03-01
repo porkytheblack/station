@@ -9,7 +9,7 @@ export const metadata: Metadata = {
   },
   description:
     "Type-safe background jobs, recurring tasks, and DAG workflows for TypeScript. Define signals with Zod schemas, run them in isolated processes with retries and timeouts.",
-  metadataBase: new URL("https://github.com/porkytheblack/station"),
+  metadataBase: new URL("https://station.dterminal.net"),
   openGraph: {
     title: "Station — Background jobs for TypeScript",
     description:
