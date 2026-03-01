@@ -8,6 +8,7 @@ const sections = [
     label: "Guide",
     links: [
       { href: "/docs/getting-started", label: "Getting started" },
+      { href: "/docs/dashboard", label: "Dashboard" },
     ],
   },
   {
