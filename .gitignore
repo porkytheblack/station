@@ -12,3 +12,4 @@ coverage/
 *.db-wal
 dist 
 .next
+out
