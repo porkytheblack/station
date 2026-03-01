@@ -1,6 +1,6 @@
 {
   "name": "station-broadcast",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Workflow orchestration for station-signal — connect signals into DAGs",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
