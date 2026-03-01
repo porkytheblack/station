@@ -1,4 +1,4 @@
-import { broadcast } from "simple-broadcast";
+import { broadcast } from "station-broadcast";
 import { extractUsers } from "../signals/extract-users.js";
 import { transformUsers } from "../signals/transform-users.js";
 import { loadUsers } from "../signals/load-users.js";

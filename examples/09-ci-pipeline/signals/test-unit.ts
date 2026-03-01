@@ -1,4 +1,4 @@
-import { signal, z } from "simple-signal";
+import { signal, z } from "station-signal";
 
 export const testUnit = signal("test-unit")
   .input(z.object({ repo: z.string(), branch: z.string(), commitSha: z.string(), workdir: z.string() }))

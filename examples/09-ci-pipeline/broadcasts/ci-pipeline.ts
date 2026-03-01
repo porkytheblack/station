@@ -1,4 +1,4 @@
-import { broadcast } from "simple-broadcast";
+import { broadcast } from "station-broadcast";
 import { checkout } from "../signals/checkout.js";
 import { lint } from "../signals/lint.js";
 import { testUnit } from "../signals/test-unit.js";

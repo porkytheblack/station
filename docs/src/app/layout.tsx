@@ -3,7 +3,7 @@ import { Nav } from "./components/Nav";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Signal — Background jobs for TypeScript",
+  title: "Station — Background jobs for TypeScript",
   description:
     "Type-safe background job framework. Signals, broadcasts, adapters. Fire and forget.",
 };

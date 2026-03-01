@@ -1,4 +1,4 @@
-import { broadcast } from "simple-broadcast";
+import { broadcast } from "station-broadcast";
 import { initHealthCheck } from "../signals/init-health-check.js";
 import { checkApi } from "../signals/check-api.js";
 import { checkDatabase } from "../signals/check-database.js";

@@ -1,4 +1,4 @@
-import { signal, z } from "simple-signal";
+import { signal, z } from "station-signal";
 
 export const validateOrder = signal("validate-order")
   .input(z.object({ orderId: z.string(), amount: z.number() }))

@@ -3,7 +3,7 @@ import Link from "next/link";
 import { Code } from "../../components/Code";
 
 export const metadata: Metadata = {
-  title: "Adapters — Signal",
+  title: "Adapters — Station",
 };
 
 export default function AdaptersPage() {
@@ -18,7 +18,7 @@ export default function AdaptersPage() {
         through it.
       </p>
       <p>
-        Two built-in adapters ship with Signal. You can write custom adapters
+        Two built-in adapters ship with Station. You can write custom adapters
         by implementing the <code>SignalQueueAdapter</code> interface (for
         signals) or <code>BroadcastQueueAdapter</code> interface (for
         broadcasts).
@@ -45,7 +45,7 @@ export default function AdaptersPage() {
           in-memory data
         </li>
       </ul>
-      <Code>{`import { SignalRunner } from "simple-signal";
+      <Code>{`import { SignalRunner } from "station-signal";
 
 // MemoryAdapter is the default — no configuration needed
 const runner = new SignalRunner({
@@ -54,7 +54,7 @@ const runner = new SignalRunner({
       <p>
         To explicitly construct one (for example, to pass to Station):
       </p>
-      <Code>{`import { MemoryAdapter } from "simple-signal";
+      <Code>{`import { MemoryAdapter } from "station-signal";
 
 const adapter = new MemoryAdapter();`}</Code>
 
@@ -83,10 +83,10 @@ const adapter = new MemoryAdapter();`}</Code>
       </p>
 
       <h4>Install</h4>
-      <Code>{`pnpm add simple-adapter-sqlite`}</Code>
+      <Code>{`pnpm add station-adapter-sqlite`}</Code>
 
       <h4>Usage</h4>
-      <Code>{`import { SqliteAdapter } from "simple-adapter-sqlite";
+      <Code>{`import { SqliteAdapter } from "station-adapter-sqlite";
 
 const adapter = new SqliteAdapter({
   dbPath: "./jobs.db",
@@ -106,7 +106,7 @@ const adapter = new SqliteAdapter({
           <tr>
             <td><code>dbPath</code></td>
             <td><code>string</code></td>
-            <td><code>{`"simple-signal.db"`}</code></td>
+            <td><code>{`"station.db"`}</code></td>
             <td>
               Path to the SQLite database file. Created automatically if it
               does not exist.
@@ -276,10 +276,10 @@ const adapter = new SqliteAdapter({
       </p>
 
       <h4>Install</h4>
-      <Code>{`pnpm add simple-adapter-sqlite`}</Code>
+      <Code>{`pnpm add station-adapter-sqlite`}</Code>
 
       <h4>Usage</h4>
-      <Code>{`import { BroadcastSqliteAdapter } from "simple-adapter-sqlite/broadcast";
+      <Code>{`import { BroadcastSqliteAdapter } from "station-adapter-sqlite/broadcast";
 
 const broadcastAdapter = new BroadcastSqliteAdapter({
   dbPath: "./jobs.db",
@@ -306,7 +306,7 @@ const broadcastAdapter = new BroadcastSqliteAdapter({
           <tr>
             <td><code>dbPath</code></td>
             <td><code>string</code></td>
-            <td><code>{`"simple-signal.db"`}</code></td>
+            <td><code>{`"station.db"`}</code></td>
             <td>Path to the SQLite database file.</td>
           </tr>
           <tr>
@@ -349,8 +349,8 @@ const broadcastAdapter = new BroadcastSqliteAdapter({
         configuration is needed.
       </p>
       <Code>{`import path from "node:path";
-import { SignalRunner } from "simple-signal";
-import { SqliteAdapter } from "simple-adapter-sqlite";
+import { SignalRunner } from "station-signal";
+import { SqliteAdapter } from "station-adapter-sqlite";
 
 // SqliteAdapter is serializable — child processes
 // reconstruct it from the manifest automatically.
@@ -367,16 +367,16 @@ const runner = new SignalRunner({
         calls <code>configure()</code>, and point the runner at it:
       </p>
       <Code>{`// config.ts
-import { configure } from "simple-signal";
-import { SqliteAdapter } from "simple-adapter-sqlite";
+import { configure } from "station-signal";
+import { SqliteAdapter } from "station-adapter-sqlite";
 
 configure({
   adapter: new SqliteAdapter({ dbPath: "./jobs.db" }),
 });`}</Code>
       <Code>{`// runner.ts
 import path from "node:path";
-import { SignalRunner } from "simple-signal";
-import { SqliteAdapter } from "simple-adapter-sqlite";
+import { SignalRunner } from "station-signal";
+import { SqliteAdapter } from "station-adapter-sqlite";
 
 const runner = new SignalRunner({
   signalsDir: path.join(import.meta.dirname, "signals"),
@@ -710,7 +710,7 @@ interface AdapterManifest {
         Register your adapter with a factory function so the child process
         can reconstruct it from the manifest:
       </p>
-      <Code>{`import { registerAdapter } from "simple-signal";
+      <Code>{`import { registerAdapter } from "station-signal";
 
 registerAdapter("my-adapter", (options) => {
   return new MyAdapter(options as MyAdapterOptions);

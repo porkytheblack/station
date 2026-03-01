@@ -1,8 +1,8 @@
 import path from "node:path";
-import { SignalRunner, ConsoleSubscriber } from "simple-signal";
-import { BroadcastRunner, ConsoleBroadcastSubscriber } from "simple-broadcast";
-import { SqliteAdapter } from "simple-adapter-sqlite";
-import { BroadcastSqliteAdapter } from "simple-adapter-sqlite/broadcast";
+import { SignalRunner, ConsoleSubscriber } from "station-signal";
+import { BroadcastRunner, ConsoleBroadcastSubscriber } from "station-broadcast";
+import { SqliteAdapter } from "station-adapter-sqlite";
+import { BroadcastSqliteAdapter } from "station-adapter-sqlite/broadcast";
 import { ciPipeline } from "./broadcasts/ci-pipeline.js";
 
 const DB_PATH = path.join(import.meta.dirname, "jobs.db");

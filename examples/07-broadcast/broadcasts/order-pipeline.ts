@@ -1,4 +1,4 @@
-import { broadcast } from "simple-broadcast";
+import { broadcast } from "station-broadcast";
 import { validateOrder } from "../signals/validate-order.js";
 import { chargePayment } from "../signals/charge-payment.js";
 import { sendReceipt } from "../signals/send-receipt.js";

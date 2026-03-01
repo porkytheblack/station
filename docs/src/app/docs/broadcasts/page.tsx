@@ -2,7 +2,7 @@ import { Metadata } from "next";
 import { Code } from "../../components/Code";
 
 export const metadata: Metadata = {
-  title: "Broadcasts API — Signal",
+  title: "Broadcasts API — Station",
 };
 
 export default function BroadcastsPage() {
@@ -30,8 +30,8 @@ export default function BroadcastsPage() {
         underscores. Returns a builder that connects signals into a dependency
         graph.
       </p>
-      <Code>{`import { broadcast } from "simple-broadcast";
-import { signal, z } from "simple-signal";
+      <Code>{`import { broadcast } from "station-broadcast";
+import { signal, z } from "station-signal";
 
 const validate = signal("validate")
   .input(z.object({ orderId: z.string() }))
@@ -421,8 +421,8 @@ if (result?.status === "completed") {
         <code>SignalRunner</code> instance to execute individual signals and
         monitor their completion.
       </p>
-      <Code>{`import { BroadcastRunner, ConsoleBroadcastSubscriber } from "simple-broadcast";
-import { BroadcastSqliteAdapter } from "@simple-signal/adapter-sqlite";
+      <Code>{`import { BroadcastRunner, ConsoleBroadcastSubscriber } from "station-broadcast";
+import { BroadcastSqliteAdapter } from "station-adapter-sqlite";
 
 const broadcastRunner = new BroadcastRunner({
   signalRunner: runner,
@@ -609,8 +609,8 @@ await signalRunner.stop({ graceful: true });`}</Code>
         The adapter interface for broadcast storage. Manages broadcast runs and
         their node runs. Two adapters ship with the framework:{" "}
         <code>BroadcastMemoryAdapter</code> (built into{" "}
-        <code>simple-broadcast</code>) and <code>BroadcastSqliteAdapter</code>{" "}
-        (from <code>@simple-signal/adapter-sqlite</code>).
+        <code>station-broadcast</code>) and <code>BroadcastSqliteAdapter</code>{" "}
+        (from <code>station-adapter-sqlite</code>).
       </p>
       <table className="api-table">
         <thead>
@@ -991,7 +991,7 @@ await signalRunner.stop({ graceful: true });`}</Code>
 
       <p>
         The built-in <code>ConsoleBroadcastSubscriber</code> logs all events to
-        stdout with a <code>[simple-broadcast]</code> prefix.
+        stdout with a <code>[station-broadcast]</code> prefix.
       </p>
     </>
   );

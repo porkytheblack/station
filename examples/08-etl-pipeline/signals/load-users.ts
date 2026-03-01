@@ -1,4 +1,4 @@
-import { signal, z } from "simple-signal";
+import { signal, z } from "station-signal";
 
 const userRecord = z.object({ id: z.number(), name: z.string(), email: z.string() });
 

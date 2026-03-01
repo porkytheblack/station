@@ -2,7 +2,7 @@ import { Metadata } from "next";
 import { Code } from "../../components/Code";
 
 export const metadata: Metadata = {
-  title: "Examples — Signal",
+  title: "Examples — Station",
 };
 
 export default function ExamplesPage() {
@@ -23,7 +23,7 @@ export default function ExamplesPage() {
       </p>
 
       <h4>signals/greet.ts</h4>
-      <Code>{`import { signal, z } from "simple-signal";
+      <Code>{`import { signal, z } from "station-signal";
 
 export const greet = signal("greet")
   .input(z.object({ name: z.string() }))
@@ -34,7 +34,7 @@ export const greet = signal("greet")
 
       <h4>runner.ts</h4>
       <Code>{`import path from "node:path";
-import { SignalRunner } from "simple-signal";
+import { SignalRunner } from "station-signal";
 import { greet } from "./signals/greet.js";
 
 const runner = SignalRunner.create(path.join(import.meta.dirname, "signals"));
@@ -57,7 +57,7 @@ await runner.start();`}</Code>
 
       <p>
         <strong>Run it:</strong>{" "}
-        <code>pnpm --filter simple-example-basic start</code>
+        <code>pnpm --filter example-basic start</code>
       </p>
 
       {/* ── 02 With Output ── */}
@@ -68,7 +68,7 @@ await runner.start();`}</Code>
       </p>
 
       <h4>signals/add.ts</h4>
-      <Code>{`import { signal, z } from "simple-signal";
+      <Code>{`import { signal, z } from "station-signal";
 
 export const add = signal("add")
   .input(z.object({ a: z.number(), b: z.number() }))
@@ -92,7 +92,7 @@ export const add = signal("add")
 
       <p>
         <strong>Run it:</strong>{" "}
-        <code>pnpm --filter simple-example-with-output start</code>
+        <code>pnpm --filter example-with-output start</code>
       </p>
 
       {/* ── 03 With Steps ── */}
@@ -103,7 +103,7 @@ export const add = signal("add")
       </p>
 
       <h4>signals/process-order.ts</h4>
-      <Code>{`import { signal, z } from "simple-signal";
+      <Code>{`import { signal, z } from "station-signal";
 
 export const processOrder = signal("processOrder")
   .input(z.object({ orderId: z.string(), amount: z.number() }))
@@ -150,7 +150,7 @@ export const processOrder = signal("processOrder")
 
       <p>
         <strong>Run it:</strong>{" "}
-        <code>pnpm --filter simple-example-with-steps start</code>
+        <code>pnpm --filter example-with-steps start</code>
       </p>
 
       {/* ── 04 Recurring ── */}
@@ -161,7 +161,7 @@ export const processOrder = signal("processOrder")
       </p>
 
       <h4>signals/heartbeat.ts</h4>
-      <Code>{`import { signal } from "simple-signal";
+      <Code>{`import { signal } from "station-signal";
 
 export const heartbeat = signal("heartbeat")
   .every("5s")
@@ -179,7 +179,7 @@ export const heartbeat = signal("heartbeat")
 
       <p>
         <strong>Run it:</strong>{" "}
-        <code>pnpm --filter simple-example-recurring start</code>
+        <code>pnpm --filter example-recurring start</code>
       </p>
 
       {/* ── 05 With Retries ── */}
@@ -190,7 +190,7 @@ export const heartbeat = signal("heartbeat")
       </p>
 
       <h4>signals/flaky-task.ts</h4>
-      <Code>{`import { signal, z } from "simple-signal";
+      <Code>{`import { signal, z } from "station-signal";
 
 export const flakyTask = signal("flakyTask")
   .input(z.object({ message: z.string() }))
@@ -217,7 +217,7 @@ export const flakyTask = signal("flakyTask")
 
       <p>
         <strong>Run it:</strong>{" "}
-        <code>pnpm --filter simple-example-with-retries start</code>
+        <code>pnpm --filter example-with-retries start</code>
       </p>
 
       {/* ── 06 With SQLite ── */}
@@ -230,7 +230,7 @@ export const flakyTask = signal("flakyTask")
       </p>
 
       <h4>signals/send-email.ts</h4>
-      <Code>{`import { signal, z } from "simple-signal";
+      <Code>{`import { signal, z } from "station-signal";
 
 export const sendEmail = signal("sendEmail")
   .input(z.object({ to: z.string(), subject: z.string(), body: z.string() }))
@@ -251,8 +251,8 @@ export const sendEmail = signal("sendEmail")
 
       <h4>runner.ts</h4>
       <Code>{`import path from "node:path";
-import { SignalRunner, ConsoleSubscriber } from "simple-signal";
-import { SqliteAdapter } from "simple-adapter-sqlite";
+import { SignalRunner, ConsoleSubscriber } from "station-signal";
+import { SqliteAdapter } from "station-adapter-sqlite";
 
 const DB_PATH = path.join(import.meta.dirname, "jobs.db");
 
@@ -266,8 +266,8 @@ await runner.start();`}</Code>
 
       <h4>trigger.ts</h4>
       <Code>{`import path from "node:path";
-import { configure } from "simple-signal";
-import { SqliteAdapter } from "simple-adapter-sqlite";
+import { configure } from "station-signal";
+import { SqliteAdapter } from "station-adapter-sqlite";
 import { sendEmail } from "./signals/send-email.js";
 
 const DB_PATH = path.join(import.meta.dirname, "jobs.db");
@@ -275,7 +275,7 @@ configure({ adapter: new SqliteAdapter({ dbPath: DB_PATH }) });
 
 const id = await sendEmail.trigger({
   to: "alice@example.com",
-  subject: "Hello from simple-signal",
+  subject: "Hello from station-signal",
   body: "This run was persisted to SQLite.",
 });
 
@@ -292,7 +292,7 @@ console.log(\`Run triggered: \${id}\`);`}</Code>
 
       <p>
         <strong>Run it:</strong>{" "}
-        <code>pnpm --filter simple-example-with-sqlite start</code>
+        <code>pnpm --filter example-with-sqlite start</code>
       </p>
 
       {/* ── 07 Broadcast ── */}
@@ -304,7 +304,7 @@ console.log(\`Run triggered: \${id}\`);`}</Code>
       </p>
 
       <h4>signals/validate-order.ts</h4>
-      <Code>{`import { signal, z } from "simple-signal";
+      <Code>{`import { signal, z } from "station-signal";
 
 export const validateOrder = signal("validate-order")
   .input(z.object({ orderId: z.string(), amount: z.number() }))
@@ -315,7 +315,7 @@ export const validateOrder = signal("validate-order")
   });`}</Code>
 
       <h4>signals/charge-payment.ts</h4>
-      <Code>{`import { signal, z } from "simple-signal";
+      <Code>{`import { signal, z } from "station-signal";
 
 export const chargePayment = signal("charge-payment")
   .input(z.object({ orderId: z.string(), amount: z.number(), valid: z.boolean() }))
@@ -327,7 +327,7 @@ export const chargePayment = signal("charge-payment")
   });`}</Code>
 
       <h4>signals/send-receipt.ts</h4>
-      <Code>{`import { signal, z } from "simple-signal";
+      <Code>{`import { signal, z } from "station-signal";
 
 export const sendReceipt = signal("send-receipt")
   .input(z.object({ orderId: z.string(), chargeId: z.string() }))
@@ -336,7 +336,7 @@ export const sendReceipt = signal("send-receipt")
   });`}</Code>
 
       <h4>signals/notify-warehouse.ts</h4>
-      <Code>{`import { signal, z } from "simple-signal";
+      <Code>{`import { signal, z } from "station-signal";
 
 export const notifyWarehouse = signal("notify-warehouse")
   .input(z.object({ orderId: z.string(), chargeId: z.string() }))
@@ -345,7 +345,7 @@ export const notifyWarehouse = signal("notify-warehouse")
   });`}</Code>
 
       <h4>broadcasts/order-pipeline.ts</h4>
-      <Code>{`import { broadcast } from "simple-broadcast";
+      <Code>{`import { broadcast } from "station-broadcast";
 import { validateOrder } from "../signals/validate-order.js";
 import { chargePayment } from "../signals/charge-payment.js";
 import { sendReceipt } from "../signals/send-receipt.js";
@@ -361,8 +361,8 @@ export const orderPipeline = broadcast("order-pipeline")
 
       <h4>runner.ts</h4>
       <Code>{`import path from "node:path";
-import { SignalRunner, ConsoleSubscriber } from "simple-signal";
-import { BroadcastRunner, ConsoleBroadcastSubscriber } from "simple-broadcast";
+import { SignalRunner, ConsoleSubscriber } from "station-signal";
+import { BroadcastRunner, ConsoleBroadcastSubscriber } from "station-broadcast";
 import { orderPipeline } from "./broadcasts/order-pipeline.js";
 
 const signalRunner = new SignalRunner({
@@ -409,7 +409,7 @@ broadcastRunner.start();`}</Code>
 
       <p>
         <strong>Run it:</strong>{" "}
-        <code>pnpm --filter simple-example-broadcast start</code>
+        <code>pnpm --filter example-broadcast start</code>
       </p>
 
       {/* ── 08 ETL Pipeline ── */}
@@ -422,7 +422,7 @@ broadcastRunner.start();`}</Code>
       </p>
 
       <h4>broadcasts/etl-pipeline.ts</h4>
-      <Code>{`import { broadcast } from "simple-broadcast";
+      <Code>{`import { broadcast } from "station-broadcast";
 import { extractUsers } from "../signals/extract-users.js";
 import { transformUsers } from "../signals/transform-users.js";
 import { loadUsers } from "../signals/load-users.js";
@@ -437,7 +437,7 @@ export const etlPipeline = broadcast("etl-pipeline")
   .build();`}</Code>
 
       <h4>signals/extract-users.ts</h4>
-      <Code>{`import { signal, z } from "simple-signal";
+      <Code>{`import { signal, z } from "station-signal";
 
 export const extractUsers = signal("extract-users")
   .input(z.object({ source: z.string(), batchSize: z.number() }))
@@ -484,7 +484,7 @@ export const extractUsers = signal("extract-users")
   .build();`}</Code>
 
       <h4>signals/load-users.ts</h4>
-      <Code>{`import { signal, z } from "simple-signal";
+      <Code>{`import { signal, z } from "station-signal";
 
 const userRecord = z.object({ id: z.number(), name: z.string(), email: z.string() });
 
@@ -532,7 +532,7 @@ export const loadUsers = signal("load-users")
 
       <p>
         <strong>Run it:</strong>{" "}
-        <code>pnpm --filter simple-example-etl-pipeline start</code>
+        <code>pnpm --filter example-etl-pipeline start</code>
       </p>
 
       {/* ── 09 CI Pipeline ── */}
@@ -557,7 +557,7 @@ export const loadUsers = signal("load-users")
         notify            (fallback: uses staging output if prod skipped)`}</Code>
 
       <h4>broadcasts/ci-pipeline.ts</h4>
-      <Code>{`import { broadcast } from "simple-broadcast";
+      <Code>{`import { broadcast } from "station-broadcast";
 import { checkout } from "../signals/checkout.js";
 import { lint } from "../signals/lint.js";
 import { testUnit } from "../signals/test-unit.js";
@@ -595,7 +595,7 @@ export const ciPipeline = broadcast("ci-pipeline")
   .build();`}</Code>
 
       <h4>signals/checkout.ts</h4>
-      <Code>{`import { signal, z } from "simple-signal";
+      <Code>{`import { signal, z } from "station-signal";
 
 export const checkout = signal("checkout")
   .input(z.object({ repo: z.string(), branch: z.string(), commitSha: z.string() }))
@@ -616,10 +616,10 @@ export const checkout = signal("checkout")
 
       <h4>runner.ts</h4>
       <Code>{`import path from "node:path";
-import { SignalRunner, ConsoleSubscriber } from "simple-signal";
-import { BroadcastRunner, ConsoleBroadcastSubscriber } from "simple-broadcast";
-import { SqliteAdapter } from "simple-adapter-sqlite";
-import { BroadcastSqliteAdapter } from "simple-adapter-sqlite/broadcast";
+import { SignalRunner, ConsoleSubscriber } from "station-signal";
+import { BroadcastRunner, ConsoleBroadcastSubscriber } from "station-broadcast";
+import { SqliteAdapter } from "station-adapter-sqlite";
+import { BroadcastSqliteAdapter } from "station-adapter-sqlite/broadcast";
 import { ciPipeline } from "./broadcasts/ci-pipeline.js";
 
 const DB_PATH = path.join(import.meta.dirname, "jobs.db");
@@ -677,14 +677,14 @@ broadcastRunner.start();`}</Code>
       <div className="warn-box">
         <p>
           Pass a branch name as a CLI argument to test the guard:{" "}
-          <code>pnpm --filter simple-example-ci-pipeline start -- feature/xyz</code>{" "}
+          <code>pnpm --filter example-ci-pipeline start -- feature/xyz</code>{" "}
           skips the prod deploy step.
         </p>
       </div>
 
       <p>
         <strong>Run it:</strong>{" "}
-        <code>pnpm --filter simple-example-ci-pipeline start</code>
+        <code>pnpm --filter example-ci-pipeline start</code>
       </p>
 
       {/* ── 10 Fleet Monitor ── */}
@@ -697,7 +697,7 @@ broadcastRunner.start();`}</Code>
       </p>
 
       <h4>broadcasts/full-health-check.ts</h4>
-      <Code>{`import { broadcast } from "simple-broadcast";
+      <Code>{`import { broadcast } from "station-broadcast";
 import { initHealthCheck } from "../signals/init-health-check.js";
 import { checkApi } from "../signals/check-api.js";
 import { checkDatabase } from "../signals/check-database.js";
@@ -716,7 +716,7 @@ export const fullHealthCheck = broadcast("full-health-check")
   .build();`}</Code>
 
       <h4>signals/check-api.ts</h4>
-      <Code>{`import { signal, z } from "simple-signal";
+      <Code>{`import { signal, z } from "station-signal";
 
 export const checkApi = signal("check-api")
   .output(z.object({
@@ -745,10 +745,10 @@ export const checkApi = signal("check-api")
 
       <h4>runner.ts</h4>
       <Code>{`import path from "node:path";
-import { SignalRunner, ConsoleSubscriber } from "simple-signal";
-import { BroadcastRunner, ConsoleBroadcastSubscriber } from "simple-broadcast";
-import { SqliteAdapter } from "simple-adapter-sqlite";
-import { BroadcastSqliteAdapter } from "simple-adapter-sqlite/broadcast";
+import { SignalRunner, ConsoleSubscriber } from "station-signal";
+import { BroadcastRunner, ConsoleBroadcastSubscriber } from "station-broadcast";
+import { SqliteAdapter } from "station-adapter-sqlite";
+import { BroadcastSqliteAdapter } from "station-adapter-sqlite/broadcast";
 import { fullHealthCheck } from "./broadcasts/full-health-check.js";
 
 const DB_PATH = path.join(import.meta.dirname, "jobs.db");
@@ -803,7 +803,7 @@ broadcastRunner.start();`}</Code>
 
       <p>
         <strong>Run it:</strong>{" "}
-        <code>pnpm --filter simple-example-fleet-monitor start</code>
+        <code>pnpm --filter example-fleet-monitor start</code>
       </p>
     </>
   );

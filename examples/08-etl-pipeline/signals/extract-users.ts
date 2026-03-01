@@ -1,4 +1,4 @@
-import { signal, z } from "simple-signal";
+import { signal, z } from "station-signal";
 
 export const extractUsers = signal("extract-users")
   .input(z.object({ source: z.string(), batchSize: z.number() }))

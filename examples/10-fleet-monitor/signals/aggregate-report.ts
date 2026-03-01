@@ -1,4 +1,4 @@
-import { signal, z } from "simple-signal";
+import { signal, z } from "station-signal";
 
 export const aggregateReport = signal("aggregate-report")
   .output(z.object({ totalChecks: z.number(), healthy: z.number(), failed: z.number(), reportedAt: z.string() }))

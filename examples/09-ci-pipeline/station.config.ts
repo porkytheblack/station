@@ -1,6 +1,6 @@
-import { defineConfig } from "simple-station";
-import { SqliteAdapter } from "simple-adapter-sqlite";
-import { BroadcastSqliteAdapter } from "simple-adapter-sqlite/broadcast";
+import { defineConfig } from "station-kit";
+import { SqliteAdapter } from "station-adapter-sqlite";
+import { BroadcastSqliteAdapter } from "station-adapter-sqlite/broadcast";
 
 export default defineConfig({
   port: 4400,

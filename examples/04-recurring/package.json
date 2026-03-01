@@ -6,7 +6,7 @@
     "start": "tsx runner.ts"
   },
   "dependencies": {
-    "simple-signal": "workspace:*"
+    "station-signal": "workspace:*"
   },
   "devDependencies": {
     "tsx": "^4.21.0"

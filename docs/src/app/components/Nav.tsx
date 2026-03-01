@@ -18,7 +18,7 @@ export function Nav() {
     <nav className="site-nav">
       <Link href="/" className="site-nav-brand">
         <span className="pulse-dot" />
-        Signal
+        Station
       </Link>
       <ul className="site-nav-links">
         {navLinks.map((link) => {
@@ -40,7 +40,7 @@ export function Nav() {
         })}
         <li>
           <a
-            href="https://github.com/dterminal/simple-signal"
+            href="https://github.com/dterminal/station"
             target="_blank"
             rel="noopener noreferrer"
           >

@@ -1,4 +1,4 @@
-import { signal, z } from "simple-signal";
+import { signal, z } from "station-signal";
 
 export const deployStaging = signal("deploy-staging")
   .input(z.object({ artifactId: z.string(), sizeKb: z.number() }))

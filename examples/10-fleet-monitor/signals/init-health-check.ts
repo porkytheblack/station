@@ -1,4 +1,4 @@
-import { signal, z } from "simple-signal";
+import { signal, z } from "station-signal";
 
 // Entry point for the full-health-check broadcast.
 // Accepts an optional label, passes through to downstream checks.

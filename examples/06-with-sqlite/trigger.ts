@@ -1,6 +1,6 @@
 import path from "node:path";
-import { configure } from "simple-signal";
-import { SqliteAdapter } from "simple-adapter-sqlite";
+import { configure } from "station-signal";
+import { SqliteAdapter } from "station-adapter-sqlite";
 import { sendEmail } from "./signals/send-email.js";
 
 const DB_PATH = path.join(import.meta.dirname, "jobs.db");
@@ -9,7 +9,7 @@ configure({ adapter: new SqliteAdapter({ dbPath: DB_PATH }) });
 
 const id = await sendEmail.trigger({
   to: "alice@example.com",
-  subject: "Hello from simple-signal",
+  subject: "Hello from station-signal",
   body: "This run was persisted to SQLite and picked up by the runner.",
 });
 

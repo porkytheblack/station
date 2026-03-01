@@ -1,4 +1,4 @@
-import { signal, z } from "simple-signal";
+import { signal, z } from "station-signal";
 
 export const add = signal("add")
   .input(z.object({ a: z.number(), b: z.number() }))

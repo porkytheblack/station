@@ -3,7 +3,7 @@ import Link from "next/link";
 import { Code } from "../../components/Code";
 
 export const metadata: Metadata = {
-  title: "Station — Signal",
+  title: "Station Dashboard — Station",
 };
 
 export default function StationPage() {
@@ -12,7 +12,7 @@ export default function StationPage() {
       <div className="eyebrow">API Reference</div>
       <h2 style={{ marginTop: 0 }}>Station</h2>
       <p>
-        Station is a monitoring dashboard for Signal. It connects to your
+        Station is a monitoring dashboard for Station. It connects to your
         signal and broadcast adapters and provides a web interface for
         inspecting registered signals, browsing run history, and watching
         broadcast DAG execution in real time.
@@ -43,7 +43,7 @@ export default function StationPage() {
       {/* ── Install ── */}
 
       <h3>Install</h3>
-      <Code>{`pnpm add simple-station`}</Code>
+      <Code>{`pnpm add station-kit`}</Code>
 
       <hr className="divider" />
 
@@ -54,9 +54,9 @@ export default function StationPage() {
         Create a <code>station.config.ts</code> (or <code>.js</code> / <code>.mjs</code>)
         in your project root:
       </p>
-      <Code>{`import { defineConfig } from "simple-station";
-import { SqliteAdapter } from "simple-adapter-sqlite";
-import { BroadcastSqliteAdapter } from "simple-adapter-sqlite/broadcast";
+      <Code>{`import { defineConfig } from "station-kit";
+import { SqliteAdapter } from "station-adapter-sqlite";
+import { BroadcastSqliteAdapter } from "station-adapter-sqlite/broadcast";
 
 export default defineConfig({
   port: 4400,
@@ -247,7 +247,7 @@ export default defineConfig({
       {/* ── Running Station ── */}
 
       <h3>Running Station</h3>
-      <Code>{`npx simple-station`}</Code>
+      <Code>{`npx station-kit`}</Code>
       <p>
         Station looks for <code>station.config.ts</code> (or <code>.js</code> / <code>.mjs</code>)
         in the current working directory. If no config file is found, it starts
@@ -718,8 +718,8 @@ export default defineConfig({
 
       <Code>{`// runner.ts — executes signals
 import path from "node:path";
-import { SignalRunner } from "simple-signal";
-import { SqliteAdapter } from "simple-adapter-sqlite";
+import { SignalRunner } from "station-signal";
+import { SqliteAdapter } from "station-adapter-sqlite";
 
 const runner = new SignalRunner({
   signalsDir: path.join(import.meta.dirname, "signals"),
@@ -729,9 +729,9 @@ const runner = new SignalRunner({
 runner.start();`}</Code>
 
       <Code>{`// station.config.ts — read-only monitoring
-import { defineConfig } from "simple-station";
-import { SqliteAdapter } from "simple-adapter-sqlite";
-import { BroadcastSqliteAdapter } from "simple-adapter-sqlite/broadcast";
+import { defineConfig } from "station-kit";
+import { SqliteAdapter } from "station-adapter-sqlite";
+import { BroadcastSqliteAdapter } from "station-adapter-sqlite/broadcast";
 
 export default defineConfig({
   port: 4400,

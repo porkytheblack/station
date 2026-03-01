@@ -1,4 +1,4 @@
-# simple-signal
+# station
 
 A lightweight, type-safe background job framework for TypeScript.
 
@@ -16,14 +16,14 @@ A lightweight, type-safe background job framework for TypeScript.
 ### 1. Install
 
 ```bash
-pnpm add simple-signal
+pnpm add station-signal
 ```
 
 ### 2. Define a signal
 
 ```ts
 // src/signals/send-email.ts
-import { signal, z } from "simple-signal";
+import { signal, z } from "station-signal";
 
 export const sendEmail = signal("sendEmail")
   .input(z.object({ to: z.string(), subject: z.string(), body: z.string() }))
@@ -39,7 +39,7 @@ export const sendEmail = signal("sendEmail")
 
 ```ts
 // src/runner.ts
-import { SignalRunner } from "simple-signal";
+import { SignalRunner } from "station-signal";
 
 const runner = new SignalRunner({
   signalsDir: "./src/signals",
@@ -60,10 +60,10 @@ await sendEmail.trigger({ to: "user@example.com", subject: "Hello", body: "World
 
 | Package | Description |
 |---------|-------------|
-| [`simple-signal`](./packages/simple-signal) | Core framework -- signals, runner, queue, adapters |
-| [`simple-broadcast`](./packages/simple-broadcast) | DAG workflow orchestration for signals |
-| [`simple-adapter-sqlite`](./packages/adapter-sqlite) | SQLite adapter using better-sqlite3 |
-| [`simple-station`](./packages/station) | Dashboard — inspect and control signals and broadcasts |
+| [`station-signal`](./packages/station-signal) | Core framework -- signals, runner, queue, adapters |
+| [`station-broadcast`](./packages/station-broadcast) | DAG workflow orchestration for signals |
+| [`station-adapter-sqlite`](./packages/station-adapter-sqlite) | SQLite adapter using better-sqlite3 |
+| [`station-kit`](./packages/station-kit) | Dashboard — inspect and control signals and broadcasts |
 
 ## License
 

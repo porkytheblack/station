@@ -1,4 +1,4 @@
-import { signal, z } from "simple-signal";
+import { signal, z } from "station-signal";
 
 export const checkDisk = signal("check-disk")
   .output(z.object({ service: z.string(), healthy: z.boolean(), usedPercent: z.number(), availableGb: z.number(), checkedAt: z.string() }))

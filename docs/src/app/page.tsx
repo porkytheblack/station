@@ -130,7 +130,7 @@ export default function LandingPage() {
           </h1>
           <p className="landing-hero-sub">
             Background jobs usually mean either a Redis cluster or another cloud
-            bill. Signal is an npm package. Install it, define your jobs in
+            bill. Station is an npm package. Install it, define your jobs in
             TypeScript, run them on your existing infrastructure. Retries,
             scheduling, and persistence included.
           </p>
@@ -262,7 +262,7 @@ export default function LandingPage() {
           <div className="landing-code-block">
             <div className="landing-code-block-tab">love-letter.ts</div>
             <pre>
-              <Code bare>{`import { signal, z } from "simple-signal"
+              <Code bare>{`import { signal, z } from "station-signal"
 
 export const loveLetter = signal("loveLetter")
   .input(z.object({ to: z.string() }))
@@ -304,7 +304,7 @@ export const loveLetter = signal("loveLetter")
             </h2>
           </div>
           <p className="section-desc">
-            Existing solutions work. They also come with trade-offs Signal doesn&apos;t.
+            Existing solutions work. They also come with trade-offs Station doesn&apos;t.
           </p>
         </div>
 
@@ -333,7 +333,7 @@ export const loveLetter = signal("loveLetter")
 
           <div className="landscape-cell landscape-cell-signal">
             <div className="landscape-label">This library</div>
-            <div className="landscape-title">Signal</div>
+            <div className="landscape-title">Station</div>
             <ul className="landscape-items landscape-items-signal">
               <li>npm install, done</li>
               <li>SQLite persistence (or in-memory)</li>
@@ -357,7 +357,7 @@ export const loveLetter = signal("loveLetter")
           That&apos;s the entire setup.
         </p>
         <div className="landing-cta-install">
-          <code>pnpm add simple-signal</code>
+          <code>pnpm add station-signal</code>
         </div>
         <Link href="/docs/getting-started" className="btn-primary">
           Read the guide
@@ -366,7 +366,7 @@ export const loveLetter = signal("loveLetter")
 
       {/* ── Footer ── */}
       <footer className="landing-footer">
-        <div className="landing-footer-logo">Signal</div>
+        <div className="landing-footer-logo">Station</div>
         <div className="landing-footer-copy">
           Open source background jobs for Node.js
         </div>

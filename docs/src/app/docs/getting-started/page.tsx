@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Code } from "../../components/Code";
 
-export const metadata = { title: "Getting Started — Signal" };
+export const metadata = { title: "Getting Started — Station" };
 
 export default function GettingStartedPage() {
   return (
@@ -9,7 +9,7 @@ export default function GettingStartedPage() {
       <div className="eyebrow">Guide</div>
       <h2 style={{ marginTop: 0 }}>Getting started</h2>
       <p>
-        This guide walks through Signal from first install to a production-ready
+        This guide walks through Station from first install to a production-ready
         setup with persistence, recurring jobs, multi-step pipelines, and lifecycle
         observers.
       </p>
@@ -31,10 +31,10 @@ export default function GettingStartedPage() {
       {/* ── 1. Install ── */}
 
       <h3>1. Install</h3>
-      <Code>{`pnpm add simple-signal`}</Code>
+      <Code>{`pnpm add station-signal`}</Code>
       <div className="info-box">
         <p>
-          simple-signal re-exports <code>z</code> from Zod. There is no need to
+          station-signal re-exports <code>z</code> from Zod. There is no need to
           install Zod separately.
         </p>
       </div>
@@ -51,7 +51,7 @@ export default function GettingStartedPage() {
         auto-discover them.
       </p>
       <Code>{`// signals/send-email.ts
-import { signal, z } from "simple-signal";
+import { signal, z } from "station-signal";
 
 export const sendEmail = signal("sendEmail")
   .input(z.object({
@@ -121,7 +121,7 @@ export const sendEmail = signal("sendEmail")
       </p>
       <Code>{`// runner.ts
 import path from "node:path";
-import { SignalRunner } from "simple-signal";
+import { SignalRunner } from "station-signal";
 
 const runner = new SignalRunner({
   signalsDir: path.join(import.meta.dirname, "signals"),
@@ -226,11 +226,11 @@ console.log(\`Enqueued run: \${runId}\`);`}</Code>
         The default in-memory adapter loses all jobs on process restart. For
         anything beyond local development, use the SQLite adapter.
       </p>
-      <Code>{`pnpm add simple-adapter-sqlite`}</Code>
+      <Code>{`pnpm add station-adapter-sqlite`}</Code>
       <Code>{`// runner.ts
 import path from "node:path";
-import { SignalRunner } from "simple-signal";
-import { SqliteAdapter } from "simple-adapter-sqlite";
+import { SignalRunner } from "station-signal";
+import { SqliteAdapter } from "station-adapter-sqlite";
 
 const runner = new SignalRunner({
   signalsDir: path.join(import.meta.dirname, "signals"),
@@ -280,8 +280,8 @@ runner.start();`}</Code>
         Use the <code>configure()</code> function to set a global default.
       </p>
       <Code>{`// config.ts
-import { configure } from "simple-signal";
-import { SqliteAdapter } from "simple-adapter-sqlite";
+import { configure } from "station-signal";
+import { SqliteAdapter } from "station-adapter-sqlite";
 
 configure({
   adapter: new SqliteAdapter({ dbPath: "./jobs.db" }),
@@ -310,7 +310,7 @@ await sendEmail.trigger({
         re-enqueuing, and retry logic automatically.
       </p>
       <Code>{`// signals/health-check.ts
-import { signal } from "simple-signal";
+import { signal } from "station-signal";
 
 export const healthCheck = signal("healthCheck")
   .every("5m")
@@ -369,7 +369,7 @@ export const healthCheck = signal("healthCheck")
         instead of a single handler.
       </p>
       <Code>{`// signals/process-order.ts
-import { signal, z } from "simple-signal";
+import { signal, z } from "station-signal";
 
 export const processOrder = signal("processOrder")
   .input(z.object({ orderId: z.string(), amount: z.number() }))
@@ -434,7 +434,7 @@ export const processOrder = signal("processOrder")
         Subscribers observe the signal lifecycle. Use them for logging, metrics,
         alerting, or any side effect that should not live inside a handler.
       </p>
-      <Code>{`import { SignalRunner, ConsoleSubscriber } from "simple-signal";
+      <Code>{`import { SignalRunner, ConsoleSubscriber } from "station-signal";
 
 const runner = new SignalRunner({
   signalsDir: "./signals",

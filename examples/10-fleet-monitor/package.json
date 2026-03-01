@@ -7,10 +7,10 @@
     "station": "station"
   },
   "dependencies": {
-    "simple-signal": "workspace:*",
-    "simple-broadcast": "workspace:*",
-    "simple-adapter-sqlite": "workspace:*",
-    "simple-station": "workspace:*"
+    "station-signal": "workspace:*",
+    "station-broadcast": "workspace:*",
+    "station-adapter-sqlite": "workspace:*",
+    "station-kit": "workspace:*"
   },
   "devDependencies": {
     "tsx": "^4.21.0"

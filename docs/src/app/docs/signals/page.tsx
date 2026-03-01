@@ -2,7 +2,7 @@ import { Metadata } from "next";
 import { Code } from "../../components/Code";
 
 export const metadata: Metadata = {
-  title: "Signals API — Signal",
+  title: "Signals API — Station",
 };
 
 export default function SignalsPage() {
@@ -27,7 +27,7 @@ export default function SignalsPage() {
         application, start with a letter, and contain only letters, digits,
         hyphens, and underscores. Returns a builder with chainable methods.
       </p>
-      <Code>{`import { signal, z } from "simple-signal";
+      <Code>{`import { signal, z } from "station-signal";
 
 const sendEmail = signal("sendEmail")
   .input(z.object({
@@ -417,8 +417,8 @@ console.log(\`Enqueued run: \${runId}\`);`}</Code>
         per-signal concurrency enforcement, and graceful shutdown on{" "}
         <code>SIGINT</code>/<code>SIGTERM</code>.
       </p>
-      <Code>{`import { SignalRunner, ConsoleSubscriber } from "simple-signal";
-import { SqliteAdapter } from "@simple-signal/adapter-sqlite";
+      <Code>{`import { SignalRunner, ConsoleSubscriber } from "station-signal";
+import { SqliteAdapter } from "station-adapter-sqlite";
 
 const runner = new SignalRunner({
   signalsDir: "./src/signals",
@@ -651,8 +651,8 @@ await runner.start();`}</Code>
         The adapter interface defines storage operations for runs and steps.
         Implement this to use a custom storage backend. Two adapters ship with
         the framework: <code>MemoryAdapter</code> (built into{" "}
-        <code>simple-signal</code>) and <code>SqliteAdapter</code> (from{" "}
-        <code>@simple-signal/adapter-sqlite</code>).
+        <code>station-signal</code>) and <code>SqliteAdapter</code> (from{" "}
+        <code>station-adapter-sqlite</code>).
       </p>
       <table className="api-table">
         <thead>
@@ -1061,7 +1061,7 @@ await runner.start();`}</Code>
 
       <p>
         The built-in <code>ConsoleSubscriber</code> logs all events to stdout
-        with a <code>[simple-signal]</code> prefix.
+        with a <code>[station-signal]</code> prefix.
       </p>
 
       <hr className="divider" />
@@ -1079,8 +1079,8 @@ await runner.start();`}</Code>
         <code>configure()</code> automatically. You rarely need to call this
         directly; the runner does it for you in its constructor.
       </p>
-      <Code>{`import { configure } from "simple-signal";
-import { SqliteAdapter } from "@simple-signal/adapter-sqlite";
+      <Code>{`import { configure } from "station-signal";
+import { SqliteAdapter } from "station-adapter-sqlite";
 
 configure({
   adapter: new SqliteAdapter({ filename: "./data/signals.db" }),
@@ -1096,9 +1096,9 @@ configure({
       {/* ── Re-exported Zod ── */}
 
       <h3>Re-exported Zod</h3>
-      <Code>{`import { signal, z } from "simple-signal";`}</Code>
+      <Code>{`import { signal, z } from "station-signal";`}</Code>
       <p>
-        <code>simple-signal</code> re-exports <code>z</code> from Zod v4. One
+        <code>station-signal</code> re-exports <code>z</code> from Zod v4. One
         import for schema definitions and signal definitions. No need to install
         Zod as a separate dependency.
       </p>

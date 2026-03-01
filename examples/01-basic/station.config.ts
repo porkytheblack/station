@@ -1,4 +1,4 @@
-import { defineConfig } from "simple-station";
+import { defineConfig } from "station-kit";
 
 
 

@@ -1,4 +1,4 @@
-import { signal, z } from "simple-signal";
+import { signal, z } from "station-signal";
 
 export const sendEmail = signal("sendEmail")
   .input(z.object({ to: z.string(), subject: z.string(), body: z.string() }))

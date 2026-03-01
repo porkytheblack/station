@@ -1,4 +1,4 @@
-import { signal, z } from "simple-signal";
+import { signal, z } from "station-signal";
 
 export const checkQueue = signal("check-queue")
   .output(z.object({ service: z.string(), healthy: z.boolean(), depth: z.number(), consumers: z.number(), checkedAt: z.string() }))

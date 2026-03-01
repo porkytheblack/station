@@ -1,4 +1,4 @@
-import { signal, z } from "simple-signal";
+import { signal, z } from "station-signal";
 
 export const checkDatabase = signal("check-database")
   .output(z.object({ service: z.string(), healthy: z.boolean(), latencyMs: z.number(), connections: z.number(), checkedAt: z.string() }))

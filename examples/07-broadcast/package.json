@@ -6,8 +6,8 @@
     "start": "tsx runner.ts"
   },
   "dependencies": {
-    "simple-signal": "workspace:*",
-    "simple-broadcast": "workspace:*"
+    "station-signal": "workspace:*",
+    "station-broadcast": "workspace:*"
   },
   "devDependencies": {
     "tsx": "^4.21.0"

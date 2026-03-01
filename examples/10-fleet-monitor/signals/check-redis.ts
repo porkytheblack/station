@@ -1,4 +1,4 @@
-import { signal, z } from "simple-signal";
+import { signal, z } from "station-signal";
 
 export const checkRedis = signal("check-redis")
   .output(z.object({ service: z.string(), healthy: z.boolean(), latencyMs: z.number(), memoryMb: z.number(), checkedAt: z.string() }))

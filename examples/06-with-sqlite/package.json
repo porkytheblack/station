@@ -7,8 +7,8 @@
     "trigger": "tsx trigger.ts"
   },
   "dependencies": {
-    "simple-signal": "workspace:*",
-    "simple-adapter-sqlite": "workspace:*"
+    "station-signal": "workspace:*",
+    "station-adapter-sqlite": "workspace:*"
   },
   "devDependencies": {
     "tsx": "^4.21.0"

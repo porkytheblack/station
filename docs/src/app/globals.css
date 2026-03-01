@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════
-   Signal Docs — Brand Design System
+   Station Docs — Brand Design System
    ═══════════════════════════════════════════════ */
 
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;1,300;1,400&family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@300;400;500;600&display=swap');
@@ -1084,7 +1084,7 @@ pre .number { color: var(--patina-pale); }
 }
 
 .landing-cta::before {
-  content: 'SIMPLE-SIGNAL';
+  content: 'STATION';
   position: absolute;
   font-family: var(--font-mono);
   font-size: clamp(4rem, 10vw, 10rem);

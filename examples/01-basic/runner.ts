@@ -1,5 +1,5 @@
 import path from "node:path";
-import { SignalRunner } from "simple-signal";
+import { SignalRunner } from "station-signal";
 import { greet } from "./signals/greet.js";
 
 const runner = SignalRunner.create(path.join(import.meta.dirname, "signals"));

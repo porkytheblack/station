@@ -1,4 +1,4 @@
-import { signal, z } from "simple-signal";
+import { signal, z } from "station-signal";
 
 export const notify = signal("notify")
   .input(z.object({ environment: z.string(), url: z.string(), deployId: z.string() }))
