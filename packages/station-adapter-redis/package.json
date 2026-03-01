@@ -1,17 +1,19 @@
 {
   "name": "station-adapter-redis",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Redis adapter for station-signal and station-broadcast",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     },
     "./broadcast": {
       "types": "./dist/broadcast.d.ts",
-      "import": "./dist/broadcast.js"
+      "import": "./dist/broadcast.js",
+      "default": "./dist/broadcast.js"
     }
   },
   "files": [

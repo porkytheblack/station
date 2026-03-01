@@ -1,13 +1,14 @@
 {
   "name": "station-signal",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "A lightweight, type-safe background job framework for TypeScript",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     }
   },
   "files": [
@@ -33,7 +34,6 @@
     "node": ">=18"
   },
   "dependencies": {
-    "tsx": "^4.21.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {

@@ -349,9 +349,6 @@ importers:
 
   packages/station-signal:
     dependencies:
-      tsx:
-        specifier: ^4.21.0
-        version: 4.21.0
       zod:
         specifier: ^4.3.6
         version: 4.3.6

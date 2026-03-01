@@ -5,14 +5,25 @@
 
 import { execPath } from "node:process";
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const MARKER = "__STATION_TSX_LOADED";
 
 if (!process.env[MARKER]) {
-  // Re-exec with --import tsx
+  // Resolve tsx from station-kit's own dependencies (not the user's project)
+  const require = createRequire(import.meta.url);
+  let tsxSpecifier: string;
+  try {
+    const tsxEntry = require.resolve("tsx");
+    tsxSpecifier = pathToFileURL(tsxEntry).href;
+  } catch {
+    // Fallback: bare specifier (user may have tsx installed)
+    tsxSpecifier = "tsx";
+  }
+
   const main = fileURLToPath(new URL("./cli-main.js", import.meta.url));
-  const child = spawn(execPath, ["--import", "tsx", main], {
+  const child = spawn(execPath, ["--import", tsxSpecifier, main], {
     stdio: "inherit",
     env: { ...process.env, [MARKER]: "1" },
   });

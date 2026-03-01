@@ -10,6 +10,26 @@ pnpm add station-adapter-sqlite
 
 Requires `station-signal` as a peer dependency.
 
+### pnpm 10+
+
+better-sqlite3 is a native Node.js addon that compiles C++ code during installation. pnpm 10 blocks dependency lifecycle scripts by default. You must explicitly allow better-sqlite3 to build by adding this to your project's `package.json`:
+
+```json
+{
+  "pnpm": {
+    "onlyBuiltDependencies": ["better-sqlite3"]
+  }
+}
+```
+
+Then reinstall:
+
+```bash
+pnpm install
+```
+
+Without this, you will see: `The native binary for better-sqlite3 hasn't been compiled.`
+
 ## Usage
 
 Configure globally:

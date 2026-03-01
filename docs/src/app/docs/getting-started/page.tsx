@@ -227,6 +227,12 @@ console.log(\`Enqueued run: \${runId}\`);`}</Code>
         anything beyond local development, use the SQLite adapter.
       </p>
       <Code>{`pnpm add station-adapter-sqlite`}</Code>
+      <div className="info-box">
+        <strong>pnpm 10+:</strong> better-sqlite3 requires native compilation.
+        Add <code>{`{ "pnpm": { "onlyBuiltDependencies": ["better-sqlite3"] } }`}</code> to
+        your <code>package.json</code> and re-run <code>pnpm install</code>.
+        See <a href="/docs/adapters">Adapters</a> for details.
+      </div>
       <Code>{`// runner.ts
 import path from "node:path";
 import { SignalRunner } from "station-signal";

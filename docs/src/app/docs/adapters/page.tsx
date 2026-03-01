@@ -85,6 +85,18 @@ const adapter = new MemoryAdapter();`}</Code>
       <h4>Install</h4>
       <Code>{`pnpm add station-adapter-sqlite`}</Code>
 
+      <div className="info-box">
+        <strong>pnpm 10+:</strong> better-sqlite3 is a native addon that compiles
+        C++ during installation. pnpm 10 blocks dependency build scripts by
+        default. Add this to your project&rsquo;s <code>package.json</code> and
+        re-run <code>pnpm install</code>:
+        <Code>{`{
+  "pnpm": {
+    "onlyBuiltDependencies": ["better-sqlite3"]
+  }
+}`}</Code>
+      </div>
+
       <h4>Usage</h4>
       <Code>{`import { SqliteAdapter } from "station-adapter-sqlite";
 

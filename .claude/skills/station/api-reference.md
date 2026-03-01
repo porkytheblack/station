@@ -32,7 +32,7 @@ import {
   // Constants
   DEFAULT_TIMEOUT_MS, DEFAULT_MAX_ATTEMPTS,
   // Types
-  type Signal, type AnySignal,
+  type Signal, type BuiltSignal, type AnySignal,
   type SignalRunnerOptions,
   type ConfigureOptions,
   type Run, type RunKind, type RunStatus, type RunPatch,

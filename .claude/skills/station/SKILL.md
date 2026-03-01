@@ -18,6 +18,7 @@ You are an expert Station developer specializing in building type-safe backgroun
 6. **Broadcast adapters use subpath imports** - Import from `station-adapter-sqlite/broadcast`, `station-adapter-postgres/broadcast`, `station-adapter-mysql/broadcast`, or `station-adapter-redis/broadcast`.
 7. **Always shut down broadcast runner before signal runner** - Broadcast runner queries the signal adapter's database during shutdown. Stopping signal first closes the DB connection.
 8. **`.retries(n)` sets retry count, not total attempts** - `.retries(2)` means 3 total attempts (1 initial + 2 retries). Internally stored as `maxAttempts = n + 1`.
+11. **pnpm 10+ requires `onlyBuiltDependencies` for SQLite** - `better-sqlite3` needs a native build step that pnpm 10 blocks by default. Add `"pnpm": { "onlyBuiltDependencies": ["better-sqlite3"] }` to the consumer's `package.json`, then reinstall.
 9. **`.trigger()` returns immediately with a run ID** - It does not wait for execution. Use `runner.waitForRun(id)` to block until completion.
 10. **Zod v4 gotcha: never use `.default({})` on objects with default fields** - Use plain TypeScript defaults instead. Zod v4 internals: `schema._zod.def.type` (not `_def.typeName`).
 

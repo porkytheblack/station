@@ -1134,9 +1134,14 @@ my-app/
   "devDependencies": {
     "tsx": "^4.0.0",
     "typescript": "^5.0.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["better-sqlite3"]
   }
 }
 ```
+
+> **pnpm 10+**: The `onlyBuiltDependencies` field is required because pnpm 10 blocks native build scripts by default. Without it, `better-sqlite3` won't compile and you'll get "native binary hasn't been compiled" errors. After adding this field, run `pnpm install` again.
 
 ### tsconfig.json
 
