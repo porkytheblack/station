@@ -307,7 +307,7 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
       httpServer = serve(
         { fetch: app.fetch, port: config.port, hostname: config.host },
         (info) => {
-          console.log(`[station] API server on http://${config.host}:${info.port}`);
+          console.log(`[station] Running on http://${config.host}:${info.port}`);
         },
       ) as unknown as Server;
 

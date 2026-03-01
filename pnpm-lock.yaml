@@ -306,6 +306,15 @@ importers:
       hono:
         specifier: ^4
         version: 4.12.3
+      next:
+        specifier: ^15
+        version: 15.5.12(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      react:
+        specifier: ^19
+        version: 19.2.4
+      react-dom:
+        specifier: ^19
+        version: 19.2.4(react@19.2.4)
       tsx:
         specifier: ^4.21.0
         version: 4.21.0
@@ -328,15 +337,6 @@ importers:
       '@types/ws':
         specifier: ^8
         version: 8.18.1
-      next:
-        specifier: ^15
-        version: 15.5.12(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      react:
-        specifier: ^19
-        version: 19.2.4
-      react-dom:
-        specifier: ^19
-        version: 19.2.4(react@19.2.4)
       station-broadcast:
         specifier: workspace:*
         version: link:../station-broadcast

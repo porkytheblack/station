@@ -60,8 +60,6 @@ if (existsSync(nextServer)) {
 const station = await createStation(config, cwd, nextProcess ? nextPort : undefined);
 await station.start();
 
-console.log(`[station] Dashboard on http://${config.host}:${config.port}`);
-
 // Open browser
 if (config.open) {
   const url = `http://${config.host}:${config.port}`;
