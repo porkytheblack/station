@@ -63,13 +63,11 @@ export function TowerIllustration({ className }: { className?: string }) {
 
   return (
     <svg
-      width="340"
-      height="520"
       viewBox="0 0 340 520"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
       className={className}
-      style={{ opacity: 0.85 }}
+      style={{ opacity: 0.85, width: "100%", maxWidth: 340, height: "auto" }}
     >
       {/* Signal rings from antenna tip */}
       <circle

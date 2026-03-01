@@ -125,7 +125,7 @@ export default function LandingPage() {
         <div className="landing-hero-left">
           <div className="landing-hero-tag">For your AI agents, emails, payments, and more</div>
           <h1 className="landing-hero-title">
-            A simple background<br />
+            A simple background<br className="desktop-break" />{" "}
             jobs framework.
           </h1>
           <p className="landing-hero-sub">
@@ -159,7 +159,7 @@ export default function LandingPage() {
           <div className="letter-heading">
             <span className="section-number">// 00</span>
             <h2 className="section-heading">
-              A love letter to<br />everything you automate.
+              A love letter to<br className="desktop-break" /> everything you automate.
             </h2>
           </div>
 
@@ -246,7 +246,7 @@ export default function LandingPage() {
           <div className="landing-code-copy">
             <span className="section-number">// 02</span>
             <h2 className="section-heading">
-              Define it in TypeScript.<br /><em>Run it anywhere.</em>
+              Define it in TypeScript.<br className="desktop-break" /><em>Run it anywhere.</em>
             </h2>
             <p>
               A signal is a background job definition &mdash; input schema, handler
@@ -300,7 +300,7 @@ export const loveLetter = signal("loveLetter")
           <div>
             <span className="section-number">// 03</span>
             <h2 className="section-heading">
-              Why another<br />background jobs library?
+              Why another<br className="desktop-break" /> background jobs library?
             </h2>
           </div>
           <p className="section-desc">
