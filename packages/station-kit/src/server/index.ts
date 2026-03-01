@@ -1,9 +1,9 @@
 import { Hono } from "hono";
-import { cors } from "hono/cors";
 import { createMiddleware } from "hono/factory";
 import { serve } from "@hono/node-server";
-import { resolve } from "node:path";
+import { resolve, join, extname } from "node:path";
 import { existsSync } from "node:fs";
+import { readFile, stat } from "node:fs/promises";
 import type { Server } from "node:http";
 import { SignalRunner, MemoryAdapter } from "station-signal";
 import { BroadcastRunner, BroadcastMemoryAdapter } from "station-broadcast";
@@ -110,14 +110,6 @@ export async function createStation(config: StationConfig, cwd: string): Promise
 
   // Build Hono app
   const app = new Hono();
-
-  // CORS for Next.js dev server and API clients
-  app.use("/*", cors({
-    origin: [`http://${config.host}:${config.port + 1}`, `http://localhost:${config.port + 1}`],
-    allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
-    allowHeaders: ["Content-Type", "Authorization"],
-    credentials: true,
-  }));
 
   // ── Dashboard auth routes (always accessible) ──────────────────────
   app.get("/api/auth/check", async (c) => {
@@ -245,6 +237,98 @@ export async function createStation(config: StationConfig, cwd: string): Promise
   v1.route("/", adminRoutes);
 
   app.route("/api/v1", v1);
+
+  // ── Static file serving (pre-built dashboard) ─────────────────────
+  const MIME: Record<string, string> = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "application/javascript",
+    ".css": "text/css",
+    ".json": "application/json",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".svg": "image/svg+xml",
+    ".ico": "image/x-icon",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+    ".txt": "text/plain",
+    ".map": "application/json",
+  };
+
+  // Resolve out/ directory relative to the station-kit package root
+  const outDir = resolve(import.meta.dirname, "../../out");
+
+  // Serve static files from the pre-built Next.js export
+  app.use("*", createMiddleware(async (c, next) => {
+    if (c.req.method !== "GET" && c.req.method !== "HEAD") return next();
+    if (c.req.path.startsWith("/api/")) return next();
+
+    const urlPath = decodeURIComponent(c.req.path);
+    const candidates = [
+      join(outDir, urlPath),
+      join(outDir, urlPath, "index.html"),
+      join(outDir, urlPath + ".html"),
+    ];
+
+    for (const filePath of candidates) {
+      try {
+        const s = await stat(filePath);
+        if (s.isFile()) {
+          const content = await readFile(filePath);
+          const ext = extname(filePath);
+          const cacheControl = filePath.includes("/_next/")
+            ? "public, max-age=31536000, immutable"
+            : "no-cache";
+          return c.body(content, 200, {
+            "Content-Type": MIME[ext] || "application/octet-stream",
+            "Cache-Control": cacheControl,
+          });
+        }
+      } catch {
+        // File not found, try next candidate
+      }
+    }
+
+    return next();
+  }));
+
+  // SPA fallback for dynamic routes
+  const dynamicFallbacks: Record<string, string> = {
+    "/signals/": join(outDir, "signals/_.html"),
+    "/runs/": join(outDir, "runs/_.html"),
+    "/broadcasts/": join(outDir, "broadcasts/_.html"),
+  };
+
+  app.get("*", async (c) => {
+    if (c.req.path.startsWith("/api/")) {
+      return c.json({ error: "not_found", message: "API route not found." }, 404);
+    }
+
+    // Try dynamic route fallback
+    for (const [prefix, fallbackPath] of Object.entries(dynamicFallbacks)) {
+      if (c.req.path.startsWith(prefix)) {
+        try {
+          const content = await readFile(fallbackPath);
+          return c.body(content, 200, {
+            "Content-Type": "text/html; charset=utf-8",
+            "Cache-Control": "no-cache",
+          });
+        } catch {
+          // Fallback file not found
+        }
+      }
+    }
+
+    // Default: serve root index.html
+    try {
+      const content = await readFile(join(outDir, "index.html"));
+      return c.body(content, 200, {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-cache",
+      });
+    } catch {
+      return c.text("Dashboard not found. Run 'pnpm build' in station-kit.", 404);
+    }
+  });
 
   let httpServer: Server | null = null;
 

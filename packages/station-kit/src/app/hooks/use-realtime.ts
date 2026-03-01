@@ -2,8 +2,6 @@
 
 import { useEffect, useRef, useCallback, useState } from "react";
 
-const WS_BASE = process.env.NEXT_PUBLIC_STATION_API ?? "http://localhost:4400";
-
 export interface StationEvent {
   type: string;
   timestamp: string;
@@ -24,7 +22,8 @@ export function useRealtime(onEvent: (event: StationEvent) => void): { connected
     function connect() {
       if (closed) return;
 
-      const wsUrl = WS_BASE.replace(/^http/, "ws") + "/api/events";
+      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const wsUrl = `${proto}//${window.location.host}/api/events`;
       ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {

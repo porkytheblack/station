@@ -13,7 +13,23 @@ import { DEFAULT_MAX_ATTEMPTS, DEFAULT_TIMEOUT_MS, type Run, type Step } from ".
 import { isSignal } from "./util.js";
 
 const BOOTSTRAP = fileURLToPath(new URL("./bootstrap.js", import.meta.url));
-const TSX_IMPORT = import.meta.resolve("tsx");
+
+let _tsxImport: string | undefined;
+function getTsxImport(): string | undefined {
+  if (_tsxImport !== undefined) return _tsxImport || undefined;
+  // Allow station-kit (or other launchers) to pass the tsx path
+  if (process.env.__STATION_TSX) {
+    _tsxImport = process.env.__STATION_TSX;
+    return _tsxImport;
+  }
+  try {
+    _tsxImport = import.meta.resolve("tsx");
+    return _tsxImport;
+  } catch {
+    _tsxImport = "";
+    return undefined;
+  }
+}
 
 interface RegisteredSignal {
   name: string;
@@ -514,7 +530,9 @@ export class SignalRunner {
       }
     }
 
-    const child = spawn("node", ["--import", TSX_IMPORT, BOOTSTRAP], {
+    const tsxImport = getTsxImport();
+    const nodeArgs = tsxImport ? ["--import", tsxImport, BOOTSTRAP] : [BOOTSTRAP];
+    const child = spawn("node", nodeArgs, {
       env,
       stdio: ["ignore", "pipe", "pipe", "ipc"],
     });

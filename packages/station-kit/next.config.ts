@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  distDir: ".next",
+  output: "export",
   typescript: {
     tsconfigPath: "./tsconfig.next.json",
   },

@@ -1,6 +1,6 @@
 {
   "name": "station-signal",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "A lightweight, type-safe background job framework for TypeScript",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

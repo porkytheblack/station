@@ -1,6 +1,6 @@
 {
   "name": "station-kit",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Dashboard for station-signal — inspect and control signals and broadcasts",
   "type": "module",
   "engines": {
@@ -18,8 +18,15 @@
       "default": "./dist/index.js"
     }
   },
+  "files": [
+    "dist",
+    "out",
+    "src",
+    "next.config.ts",
+    "tsconfig.next.json"
+  ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && next build",
     "dev": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit"
   },
@@ -32,15 +39,15 @@
     "@hono/node-server": "^1",
     "better-sqlite3": "^11.9.1",
     "ws": "^8",
-    "next": "^15",
-    "react": "^19",
-    "react-dom": "^19",
     "tsx": "^4.21.0"
   },
   "devDependencies": {
     "station-signal": "workspace:*",
     "station-broadcast": "workspace:*",
     "typescript": "^5.9.3",
+    "next": "^15",
+    "react": "^19",
+    "react-dom": "^19",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.3.0",
     "@types/react": "^19",

@@ -25,7 +25,7 @@ if (!process.env[MARKER]) {
   const main = fileURLToPath(new URL("./cli-main.js", import.meta.url));
   const child = spawn(execPath, ["--import", tsxSpecifier, main], {
     stdio: "inherit",
-    env: { ...process.env, [MARKER]: "1" },
+    env: { ...process.env, [MARKER]: "1", __STATION_TSX: tsxSpecifier },
   });
   child.on("exit", (code) => process.exit(code ?? 0));
   child.on("error", (err) => {

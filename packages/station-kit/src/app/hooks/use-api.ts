@@ -1,6 +1,6 @@
 "use client";
 
-const API_BASE = process.env.NEXT_PUBLIC_STATION_API ?? "http://localhost:4400";
+const API_BASE = "";
 
 interface ApiResponse<T> {
   data: T;
