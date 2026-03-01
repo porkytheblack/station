@@ -68,6 +68,15 @@ function IconBroadcasts() {
   );
 }
 
+function IconSettings() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" aria-hidden="true">
+      <circle cx="7" cy="7" r="2" />
+      <path d="M7 1v1.5M7 11.5V13M1 7h1.5M11.5 7H13M2.76 2.76l1.06 1.06M10.18 10.18l1.06 1.06M2.76 11.24l1.06-1.06M10.18 3.82l1.06-1.06" />
+    </svg>
+  );
+}
+
 function NavLink({
   href,
   label,
@@ -126,6 +135,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
           <NavLink href="/" label="Overview" section="overview" icon={<IconOverview />} />
           <NavLink href="/signals" label="Signals" section="signals" icon={<IconSignals />} />
           <NavLink href="/broadcasts" label="Broadcasts" section="broadcasts" icon={<IconBroadcasts />} />
+          <div className="station-sidebar-nav-label" style={{ marginTop: "1rem" }}>Admin</div>
+          <NavLink href="/settings" label="Settings" section="settings" icon={<IconSettings />} />
         </nav>
         <button
           className="sidebar-collapse-btn"

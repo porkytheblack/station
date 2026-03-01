@@ -125,5 +125,14 @@ export function useApi() {
     getBroadcastRunNodes: (id: string) => fetchApi<any[]>(`/broadcast-runs/${id}/nodes`),
     getBroadcastRunLogs: (id: string) => fetchApi<Array<{ runId: string; signalName: string; level: string; message: string; timestamp: string; nodeName: string }>>(`/broadcast-runs/${id}/logs`),
     cancelBroadcastRun: (id: string) => fetchApi<{ cancelled: boolean }>(`/broadcast-runs/${id}/cancel`, { method: "POST" }),
+
+    // API Keys (v1 admin routes — session cookie provides admin scope)
+    getApiKeys: () => fetchApi<Array<{ id: string; name: string; keyPrefix: string; scopes: string[]; createdAt: string; lastUsed: string | null; expiresAt: string | null; revoked: boolean }>>("/v1/keys"),
+    createApiKey: (name: string, scopes: string[]) =>
+      fetchApi<{ id: string; name: string; key: string; keyPrefix: string; scopes: string[]; createdAt: string }>("/v1/keys", {
+        method: "POST",
+        body: JSON.stringify({ name, scopes }),
+      }),
+    revokeApiKey: (id: string) => fetchApi<{ revoked: boolean }>(`/v1/keys/${id}`, { method: "DELETE" }),
   };
 }

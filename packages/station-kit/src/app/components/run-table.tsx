@@ -34,7 +34,6 @@ function truncateError(error: string | undefined, maxLen: number): string {
 
 export function RunTable({ runs }: { runs: Run[] }) {
   const router = useRouter();
-
   if (runs.length === 0) {
     return (
       <div className="empty-state">

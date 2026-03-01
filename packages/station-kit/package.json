@@ -1,6 +1,6 @@
 {
   "name": "station-kit",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Dashboard for station-signal — inspect and control signals and broadcasts",
   "type": "module",
   "engines": {
@@ -20,13 +20,13 @@
   },
   "files": [
     "dist",
-    "out",
+    ".next/standalone",
     "src",
     "next.config.ts",
     "tsconfig.next.json"
   ],
   "scripts": {
-    "build": "tsc && next build",
+    "build": "tsc && next build && cp -r .next/static .next/standalone/packages/station-kit/.next/static",
     "dev": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit"
   },

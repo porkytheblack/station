@@ -1,9 +1,8 @@
 import { Hono } from "hono";
 import { createMiddleware } from "hono/factory";
 import { serve } from "@hono/node-server";
-import { resolve, join, extname } from "node:path";
+import { resolve } from "node:path";
 import { existsSync } from "node:fs";
-import { readFile, stat } from "node:fs/promises";
 import type { Server } from "node:http";
 import { SignalRunner, MemoryAdapter } from "station-signal";
 import { BroadcastRunner, BroadcastMemoryAdapter } from "station-broadcast";
@@ -38,7 +37,7 @@ export interface StationInstance {
   stop(): Promise<void>;
 }
 
-export async function createStation(config: StationConfig, cwd: string): Promise<StationInstance> {
+export async function createStation(config: StationConfig, cwd: string, nextPort?: number): Promise<StationInstance> {
   const signalAdapter: SignalQueueAdapter = config.adapter ?? new MemoryAdapter();
   const broadcastAdapter: BroadcastQueueAdapter | undefined =
     config.broadcastAdapter ?? (config.broadcastsDir ? new BroadcastMemoryAdapter() : undefined);
@@ -238,97 +237,53 @@ export async function createStation(config: StationConfig, cwd: string): Promise
 
   app.route("/api/v1", v1);
 
-  // ── Static file serving (pre-built dashboard) ─────────────────────
-  const MIME: Record<string, string> = {
-    ".html": "text/html; charset=utf-8",
-    ".js": "application/javascript",
-    ".css": "text/css",
-    ".json": "application/json",
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".svg": "image/svg+xml",
-    ".ico": "image/x-icon",
-    ".woff": "font/woff",
-    ".woff2": "font/woff2",
-    ".txt": "text/plain",
-    ".map": "application/json",
-  };
+  // ── Proxy to Next.js standalone server ──────────────────────────
+  if (nextPort) {
+    app.all("*", async (c) => {
+      if (c.req.path.startsWith("/api/")) {
+        return c.json({ error: "not_found", message: "API route not found." }, 404);
+      }
 
-  // Resolve out/ directory relative to the station-kit package root
-  const outDir = resolve(import.meta.dirname, "../../out");
+      const url = new URL(c.req.url);
+      const target = `http://127.0.0.1:${nextPort}${url.pathname}${url.search}`;
 
-  // Serve static files from the pre-built Next.js export
-  app.use("*", createMiddleware(async (c, next) => {
-    if (c.req.method !== "GET" && c.req.method !== "HEAD") return next();
-    if (c.req.path.startsWith("/api/")) return next();
-
-    const urlPath = decodeURIComponent(c.req.path);
-    const candidates = [
-      join(outDir, urlPath),
-      join(outDir, urlPath, "index.html"),
-      join(outDir, urlPath + ".html"),
-    ];
-
-    for (const filePath of candidates) {
       try {
-        const s = await stat(filePath);
-        if (s.isFile()) {
-          const content = await readFile(filePath);
-          const ext = extname(filePath);
-          const cacheControl = filePath.includes("/_next/")
-            ? "public, max-age=31536000, immutable"
-            : "no-cache";
-          return c.body(content, 200, {
-            "Content-Type": MIME[ext] || "application/octet-stream",
-            "Cache-Control": cacheControl,
-          });
-        }
+        // Clone headers and strip accept-encoding so the upstream responds uncompressed.
+        // Node's fetch may decompress but keep the Content-Encoding header, which
+        // causes the browser to double-decompress and garble RSC payloads.
+        const fwdHeaders = new Headers(c.req.raw.headers);
+        fwdHeaders.delete("accept-encoding");
+
+        const proxyRes = await fetch(target, {
+          method: c.req.method,
+          headers: fwdHeaders,
+          body: ["GET", "HEAD"].includes(c.req.method) ? undefined : c.req.raw.body,
+          duplex: "half",
+          redirect: "manual",
+        });
+
+        // Strip hop-by-hop / encoding headers to be safe
+        const resHeaders = new Headers(proxyRes.headers);
+        resHeaders.delete("content-encoding");
+        resHeaders.delete("transfer-encoding");
+        resHeaders.delete("content-length");
+
+        return new Response(proxyRes.body, {
+          status: proxyRes.status,
+          headers: resHeaders,
+        });
       } catch {
-        // File not found, try next candidate
+        return c.text("Dashboard unavailable.", 502);
       }
-    }
-
-    return next();
-  }));
-
-  // SPA fallback for dynamic routes
-  const dynamicFallbacks: Record<string, string> = {
-    "/signals/": join(outDir, "signals/_.html"),
-    "/runs/": join(outDir, "runs/_.html"),
-    "/broadcasts/": join(outDir, "broadcasts/_.html"),
-  };
-
-  app.get("*", async (c) => {
-    if (c.req.path.startsWith("/api/")) {
-      return c.json({ error: "not_found", message: "API route not found." }, 404);
-    }
-
-    // Try dynamic route fallback
-    for (const [prefix, fallbackPath] of Object.entries(dynamicFallbacks)) {
-      if (c.req.path.startsWith(prefix)) {
-        try {
-          const content = await readFile(fallbackPath);
-          return c.body(content, 200, {
-            "Content-Type": "text/html; charset=utf-8",
-            "Cache-Control": "no-cache",
-          });
-        } catch {
-          // Fallback file not found
-        }
+    });
+  } else {
+    app.all("*", (c) => {
+      if (c.req.path.startsWith("/api/")) {
+        return c.json({ error: "not_found", message: "API route not found." }, 404);
       }
-    }
-
-    // Default: serve root index.html
-    try {
-      const content = await readFile(join(outDir, "index.html"));
-      return c.body(content, 200, {
-        "Content-Type": "text/html; charset=utf-8",
-        "Cache-Control": "no-cache",
-      });
-    } catch {
-      return c.text("Dashboard not found. Run 'pnpm build' in station-kit.", 404);
-    }
-  });
+      return c.text("Dashboard not built. Run 'pnpm build' in station-kit.", 404);
+    });
+  }
 
   let httpServer: Server | null = null;
 
