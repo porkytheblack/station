@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import mysql from "mysql2/promise";
 import type { Pool, ResultSetHeader, RowDataPacket } from "mysql2/promise";
+export type { Pool as MysqlPool } from "mysql2/promise";
 import type { SerializableAdapter, AdapterManifest, Run, RunPatch, RunStatus, Step, StepPatch } from "station-signal";
 import { registerAdapter } from "station-signal";
 

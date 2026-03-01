@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
+export type { Pool as PgPool } from "pg";
 import type { SerializableAdapter, AdapterManifest, Run, RunPatch, RunStatus, Step, StepPatch } from "station-signal";
 import { registerAdapter } from "station-signal";
 
@@ -368,3 +369,5 @@ export class PostgresAdapter implements SerializableAdapter {
 
 // Register in the adapter factory for cross-process reconstruction
 registerAdapter("postgres", (options: Record<string, unknown>) => new PostgresAdapter(options as PostgresAdapterOptions));
+
+export { BroadcastPostgresAdapter, type BroadcastPostgresAdapterOptions } from "./broadcast.js";

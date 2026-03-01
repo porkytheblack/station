@@ -1,4 +1,4 @@
-export { signal, SignalBuilder, StepBuilder, type Signal, type AnySignal } from "./signal.js";
+export { signal, SignalBuilder, StepBuilder, type Signal, type BuiltSignal, type AnySignal } from "./signal.js";
 export { SignalRunner, type SignalRunnerOptions } from "./signal-runner.js";
 export { configure, getAdapter, getTriggerAdapter, isConfigured, type ConfigureOptions } from "./config.js";
 export { parseInterval } from "./interval.js";

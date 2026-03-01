@@ -162,7 +162,7 @@ export class StepBuilder<TInput, TLast> {
 /**
  * A signal that has been built with .run() but not yet had .onComplete() called.
  */
-interface BuiltSignal<TInput, TOutput> extends Signal<TInput, TOutput> {
+export interface BuiltSignal<TInput, TOutput> extends Signal<TInput, TOutput> {
   onComplete(fn: (output: TOutput, input: TInput) => Promise<void>): Signal<TInput, TOutput>;
 }
 

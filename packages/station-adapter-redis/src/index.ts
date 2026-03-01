@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import Redis from "ioredis";
+export type { Redis } from "ioredis";
 import type { SerializableAdapter, AdapterManifest, Run, RunPatch, RunStatus, Step, StepPatch } from "station-signal";
 import { registerAdapter } from "station-signal";
 

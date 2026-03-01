@@ -352,3 +352,5 @@ export class SqliteAdapter implements SerializableAdapter {
 
 // Register in the adapter factory for cross-process reconstruction
 registerAdapter("sqlite", (options: Record<string, unknown>) => new SqliteAdapter(options as SqliteAdapterOptions));
+
+export { BroadcastSqliteAdapter, type BroadcastSqliteAdapterOptions } from "./broadcast.js";
