@@ -1,4 +1,4 @@
-import { signal } from "simple-signal";
+import { signal } from "station-signal";
 
 export const heartbeat = signal("heartbeat")
   .every("5s")

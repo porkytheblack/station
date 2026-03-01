@@ -1,4 +1,4 @@
-import { signal, z } from "simple-signal";
+import { signal, z } from "station-signal";
 
 export const sendReceipt = signal("send-receipt")
   .input(z.object({ orderId: z.string(), chargeId: z.string() }))

@@ -1,6 +1,6 @@
 import path from "node:path";
-import { SignalRunner, ConsoleSubscriber } from "simple-signal";
-import { BroadcastRunner, ConsoleBroadcastSubscriber } from "simple-broadcast";
+import { SignalRunner, ConsoleSubscriber } from "station-signal";
+import { BroadcastRunner, ConsoleBroadcastSubscriber } from "station-broadcast";
 import { orderPipeline } from "./broadcasts/order-pipeline.js";
 
 const signalRunner = new SignalRunner({

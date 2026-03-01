@@ -1,4 +1,4 @@
-import { signal, z } from "simple-signal";
+import { signal, z } from "station-signal";
 
 export const flakyTask = signal("flakyTask")
   .input(z.object({ message: z.string() }))

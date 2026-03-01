@@ -1,5 +1,5 @@
 import path from "node:path";
-import { SignalRunner } from "simple-signal";
+import { SignalRunner } from "station-signal";
 import { flakyTask } from "./signals/flaky-task.js";
 
 const runner = SignalRunner.create(path.join(import.meta.dirname, "signals"));

@@ -1,0 +1,18 @@
+{
+  "name": "simple-example-13-with-redis",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx runner.ts",
+    "trigger": "tsx trigger.ts",
+    "station": "station"
+  },
+  "dependencies": {
+    "station-signal": "workspace:*",
+    "station-adapter-redis": "workspace:*",
+    "station-kit": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0"
+  }
+}

@@ -1,0 +1,1086 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Signal — Background jobs that just run</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500&family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --rust: #8B5A2B;
+    --rust-light: #A0622D;
+    --patina: #4A6741;
+    --patina-light: #5C7C52;
+    --concrete: #F4F1EC;
+    --concrete-dark: #E8E4DC;
+    --charcoal: #1C1C1E;
+    --charcoal-mid: #2C2C2E;
+    --wire: #3A3A3C;
+    --muted: #8A8A8E;
+    --signal-green: #6B9962;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--concrete);
+    color: var(--charcoal);
+    font-family: 'Space Grotesk', sans-serif;
+    font-weight: 300;
+    overflow-x: hidden;
+  }
+
+  /* Grain overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 9999;
+    opacity: 0.4;
+  }
+
+  /* NAV */
+  nav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 100;
+    padding: 1.5rem 3rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: rgba(244, 241, 236, 0.85);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid rgba(139, 90, 43, 0.12);
+  }
+
+  .nav-logo {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.85rem;
+    font-weight: 500;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--charcoal);
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .nav-logo::before {
+    content: '';
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--signal-green);
+    box-shadow: 0 0 0 0 rgba(107, 153, 98, 0.4);
+    animation: pulse 2s infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(107, 153, 98, 0.4); }
+    50% { box-shadow: 0 0 0 6px rgba(107, 153, 98, 0); }
+  }
+
+  .nav-links {
+    display: flex;
+    gap: 2.5rem;
+    list-style: none;
+  }
+
+  .nav-links a {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.75rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    text-decoration: none;
+    transition: color 0.2s;
+  }
+
+  .nav-links a:hover { color: var(--charcoal); }
+
+  /* HERO */
+  .hero {
+    min-height: 100vh;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    padding-top: 5rem;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .hero-left {
+    padding: 6rem 3rem 6rem 3rem;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    position: relative;
+    z-index: 2;
+  }
+
+  .hero-tag {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: var(--rust);
+    margin-bottom: 2rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .hero-tag::before {
+    content: '';
+    display: block;
+    width: 2rem;
+    height: 1px;
+    background: var(--rust);
+  }
+
+  h1 {
+    font-family: 'Instrument Serif', serif;
+    font-size: clamp(3.5rem, 6vw, 5.5rem);
+    font-weight: 400;
+    line-height: 1.0;
+    color: var(--charcoal);
+    margin-bottom: 1.5rem;
+  }
+
+  h1 em {
+    font-style: italic;
+    color: var(--rust);
+  }
+
+  .hero-sub {
+    font-size: 1.1rem;
+    line-height: 1.7;
+    color: var(--wire);
+    max-width: 42ch;
+    margin-bottom: 3rem;
+    font-weight: 300;
+  }
+
+  .hero-sub strong {
+    color: var(--charcoal);
+    font-weight: 500;
+  }
+
+  .cta-group {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+  }
+
+  .btn-primary {
+    background: var(--charcoal);
+    color: var(--concrete);
+    padding: 0.875rem 2rem;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.8rem;
+    letter-spacing: 0.1em;
+    text-decoration: none;
+    border: none;
+    cursor: pointer;
+    transition: background 0.2s, transform 0.15s;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .btn-primary:hover {
+    background: var(--rust);
+    transform: translateY(-1px);
+  }
+
+  .btn-secondary {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.8rem;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    text-decoration: none;
+    padding-bottom: 2px;
+    border-bottom: 1px solid transparent;
+    transition: color 0.2s, border-color 0.2s;
+  }
+
+  .btn-secondary:hover {
+    color: var(--charcoal);
+    border-bottom-color: var(--charcoal);
+  }
+
+  /* HERO VISUAL */
+  .hero-right {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .tower-illustration {
+    width: 100%;
+    height: 100%;
+    position: relative;
+  }
+
+  /* SVG tower */
+  .tower-svg-container {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* Animated signal rings */
+  @keyframes signal-ring {
+    0% { r: 0; opacity: 0.6; }
+    100% { r: 120; opacity: 0; }
+  }
+
+  .signal-ring {
+    animation: signal-ring 3s ease-out infinite;
+  }
+  .signal-ring:nth-child(2) { animation-delay: 1s; }
+  .signal-ring:nth-child(3) { animation-delay: 2s; }
+
+  /* Diagonal accent lines */
+  .hero-right::before {
+    content: '';
+    position: absolute;
+    top: -20%;
+    right: -10%;
+    width: 100%;
+    height: 140%;
+    background: repeating-linear-gradient(
+      -55deg,
+      transparent,
+      transparent 60px,
+      rgba(139, 90, 43, 0.04) 60px,
+      rgba(139, 90, 43, 0.04) 61px
+    );
+  }
+
+  /* UPTIME STRIP */
+  .uptime-strip {
+    background: var(--charcoal);
+    color: var(--concrete);
+    padding: 1rem 3rem;
+    display: flex;
+    align-items: center;
+    gap: 3rem;
+    overflow: hidden;
+    border-top: 2px solid var(--rust);
+  }
+
+  .uptime-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--muted);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .uptime-ticker {
+    display: flex;
+    gap: 3rem;
+    animation: ticker 20s linear infinite;
+    white-space: nowrap;
+  }
+
+  @keyframes ticker {
+    0% { transform: translateX(0); }
+    100% { transform: translateX(-50%); }
+  }
+
+  .uptime-item {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.75rem;
+    color: rgba(244, 241, 236, 0.7);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .uptime-item .dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--signal-green);
+  }
+
+  /* FEATURES */
+  .features {
+    padding: 8rem 3rem;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+
+  .section-header {
+    margin-bottom: 5rem;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    border-bottom: 1px solid rgba(139, 90, 43, 0.2);
+    padding-bottom: 2rem;
+  }
+
+  .section-number {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.2em;
+    color: var(--rust);
+    margin-bottom: 0.75rem;
+    display: block;
+  }
+
+  h2 {
+    font-family: 'Instrument Serif', serif;
+    font-size: clamp(2rem, 4vw, 3rem);
+    font-weight: 400;
+    color: var(--charcoal);
+    line-height: 1.1;
+  }
+
+  .section-desc {
+    max-width: 36ch;
+    font-size: 0.9rem;
+    color: var(--muted);
+    line-height: 1.6;
+    text-align: right;
+  }
+
+  .features-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0;
+  }
+
+  .feature-card {
+    padding: 2.5rem;
+    border-right: 1px solid rgba(139, 90, 43, 0.15);
+    border-bottom: 1px solid rgba(139, 90, 43, 0.15);
+    position: relative;
+    transition: background 0.3s;
+  }
+
+  .feature-card:nth-child(3),
+  .feature-card:nth-child(6) {
+    border-right: none;
+  }
+
+  .feature-card:nth-child(4),
+  .feature-card:nth-child(5),
+  .feature-card:nth-child(6) {
+    border-bottom: none;
+  }
+
+  .feature-card:hover {
+    background: rgba(139, 90, 43, 0.03);
+  }
+
+  .feature-icon {
+    width: 2rem;
+    height: 2rem;
+    margin-bottom: 1.5rem;
+    color: var(--rust);
+  }
+
+  .feature-name {
+    font-family: 'Instrument Serif', serif;
+    font-size: 1.3rem;
+    font-weight: 400;
+    color: var(--charcoal);
+    margin-bottom: 0.75rem;
+  }
+
+  .feature-desc {
+    font-size: 0.875rem;
+    line-height: 1.7;
+    color: var(--wire);
+  }
+
+  .feature-tag {
+    position: absolute;
+    top: 2.5rem;
+    right: 2.5rem;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.6rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--patina);
+    background: rgba(74, 103, 65, 0.1);
+    padding: 0.25rem 0.5rem;
+  }
+
+  /* CODE BLOCK */
+  .code-section {
+    background: var(--charcoal);
+    padding: 6rem 3rem;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .code-section::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--rust) 0%, var(--patina) 50%, transparent 100%);
+  }
+
+  .code-inner {
+    max-width: 1200px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6rem;
+    align-items: center;
+  }
+
+  .code-copy h2 {
+    color: var(--concrete);
+    margin-bottom: 1.5rem;
+  }
+
+  .code-copy p {
+    color: rgba(244, 241, 236, 0.6);
+    font-size: 0.95rem;
+    line-height: 1.7;
+    margin-bottom: 2rem;
+  }
+
+  .code-block {
+    background: rgba(28, 28, 30, 0.8);
+    border: 1px solid rgba(139, 90, 43, 0.3);
+    padding: 2rem;
+    position: relative;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.8rem;
+    line-height: 1.8;
+  }
+
+  .code-block::before {
+    content: 'signal.config.ts';
+    position: absolute;
+    top: -1px;
+    left: 0;
+    font-size: 0.65rem;
+    letter-spacing: 0.15em;
+    background: var(--rust);
+    color: var(--concrete);
+    padding: 0.2rem 0.75rem;
+  }
+
+  .code-line { display: block; }
+  .code-comment { color: #5A5A5E; }
+  .code-keyword { color: #C77830; }
+  .code-string { color: #6B9962; }
+  .code-prop { color: #B8A080; }
+  .code-value { color: var(--concrete-dark); }
+
+  /* PROOF SECTION */
+  .proof {
+    padding: 8rem 3rem;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+
+  .proof-grid {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr;
+    gap: 2px;
+    background: rgba(139, 90, 43, 0.15);
+    border: 1px solid rgba(139, 90, 43, 0.15);
+    margin-top: 4rem;
+  }
+
+  .proof-cell {
+    background: var(--concrete);
+    padding: 3rem;
+  }
+
+  .proof-cell:first-child {
+    padding: 3rem;
+    background: var(--concrete-dark);
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+  }
+
+  .proof-number {
+    font-family: 'Instrument Serif', serif;
+    font-size: clamp(3rem, 5vw, 4.5rem);
+    font-weight: 400;
+    color: var(--charcoal);
+    line-height: 1;
+    margin-bottom: 0.5rem;
+  }
+
+  .proof-number span {
+    font-size: 0.4em;
+    color: var(--rust);
+    font-family: 'IBM Plex Mono', monospace;
+    letter-spacing: 0.1em;
+    vertical-align: middle;
+  }
+
+  .proof-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 0.75rem;
+  }
+
+  .proof-note {
+    font-size: 0.875rem;
+    color: var(--wire);
+    line-height: 1.6;
+  }
+
+  /* QUOTE */
+  .quote-block {
+    border-left: 3px solid var(--rust);
+    padding: 1.5rem 2rem;
+    margin-top: 1.5rem;
+    background: rgba(139, 90, 43, 0.04);
+  }
+
+  .quote-text {
+    font-family: 'Instrument Serif', serif;
+    font-size: 1.1rem;
+    font-style: italic;
+    color: var(--charcoal);
+    line-height: 1.6;
+    margin-bottom: 0.75rem;
+  }
+
+  .quote-attr {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  /* CTA SECTION */
+  .cta-section {
+    background: var(--charcoal);
+    padding: 8rem 3rem;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .cta-section::before {
+    content: 'TRANSMITTING';
+    position: absolute;
+    font-family: 'Instrument Serif', serif;
+    font-size: clamp(6rem, 14vw, 14rem);
+    font-style: italic;
+    color: rgba(244, 241, 236, 0.025);
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    white-space: nowrap;
+    pointer-events: none;
+    letter-spacing: -0.02em;
+  }
+
+  .cta-section h2 {
+    color: var(--concrete);
+    margin-bottom: 1.5rem;
+    position: relative;
+  }
+
+  .cta-section p {
+    color: rgba(244, 241, 236, 0.5);
+    max-width: 50ch;
+    margin: 0 auto 3rem;
+    font-size: 1rem;
+    line-height: 1.7;
+    position: relative;
+  }
+
+  .cta-section .btn-primary {
+    position: relative;
+    font-size: 0.85rem;
+    padding: 1rem 2.5rem;
+  }
+
+  /* FOOTER */
+  footer {
+    border-top: 1px solid rgba(139, 90, 43, 0.2);
+    padding: 2.5rem 3rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .footer-logo {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.75rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .footer-copy {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.65rem;
+    color: rgba(138, 138, 142, 0.6);
+    letter-spacing: 0.1em;
+  }
+
+  /* DIVIDER */
+  .field-divider {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(139, 90, 43, 0.3) 20%, rgba(139, 90, 43, 0.3) 80%, transparent);
+    margin: 0;
+  }
+
+  /* TOWER BG watermark */
+  .tower-watermark {
+    position: absolute;
+    right: -5%;
+    top: 50%;
+    transform: translateY(-50%);
+    opacity: 0.05;
+    pointer-events: none;
+  }
+
+  /* Crosshatch pattern card */
+  .hatch-bg {
+    background-image: repeating-linear-gradient(
+      45deg,
+      rgba(139, 90, 43, 0.08) 0px,
+      rgba(139, 90, 43, 0.08) 1px,
+      transparent 1px,
+      transparent 8px
+    );
+  }
+
+  @media (max-width: 900px) {
+    .hero { grid-template-columns: 1fr; }
+    .hero-right { display: none; }
+    .features-grid { grid-template-columns: 1fr; }
+    .code-inner { grid-template-columns: 1fr; gap: 3rem; }
+    .proof-grid { grid-template-columns: 1fr; }
+    nav { padding: 1.25rem 1.5rem; }
+    .nav-links { display: none; }
+    .hero-left { padding: 6rem 1.5rem 4rem; }
+    .features, .proof { padding: 5rem 1.5rem; }
+    .section-header { flex-direction: column; align-items: flex-start; gap: 1rem; }
+    .section-desc { text-align: left; }
+  }
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <div class="nav-logo">Signal</div>
+  <ul class="nav-links">
+    <li><a href="#">Docs</a></li>
+    <li><a href="#">Pricing</a></li>
+    <li><a href="#">Status</a></li>
+    <li><a href="#">GitHub</a></li>
+  </ul>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="hero-left">
+    <div class="hero-tag">Background jobs infrastructure</div>
+    <h1>Set it.<br>It <em>runs.</em><br>That's it.</h1>
+    <p class="hero-sub">
+      Background jobs shouldn't require <strong>babysitting</strong>. Signal runs your scheduled tasks with the reliability of infrastructure that's been running longer than anyone's been watching — and asks nothing from you in return.
+    </p>
+    <div class="cta-group">
+      <a href="#" class="btn-primary">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+          <rect x="0" y="0" width="5" height="5" fill="currentColor" opacity="0.6"/>
+          <rect x="7" y="0" width="5" height="5" fill="currentColor"/>
+          <rect x="0" y="7" width="5" height="5" fill="currentColor"/>
+          <rect x="7" y="7" width="5" height="5" fill="currentColor" opacity="0.6"/>
+        </svg>
+        Start transmitting
+      </a>
+      <a href="#" class="btn-secondary">Read the docs →</a>
+    </div>
+  </div>
+
+  <div class="hero-right">
+    <!-- Diagonal hatch background -->
+    <div class="hatch-bg" style="position:absolute;inset:0;"></div>
+
+    <!-- Tower SVG illustration -->
+    <div class="tower-svg-container">
+      <svg width="340" height="520" viewBox="0 0 340 520" fill="none" xmlns="http://www.w3.org/2000/svg" style="opacity: 0.85;">
+        <!-- Signal rings from top -->
+        <circle cx="170" cy="30" r="0" stroke="#6B9962" stroke-width="1" fill="none" class="signal-ring" style="animation: signal-ring 3s ease-out infinite;"/>
+        <circle cx="170" cy="30" r="0" stroke="#6B9962" stroke-width="1" fill="none" class="signal-ring" style="animation: signal-ring 3s ease-out 1s infinite;"/>
+        <circle cx="170" cy="30" r="0" stroke="#6B9962" stroke-width="1" fill="none" class="signal-ring" style="animation: signal-ring 3s ease-out 2s infinite;"/>
+
+        <!-- Tower spine -->
+        <line x1="170" y1="20" x2="170" y2="490" stroke="#8B5A2B" stroke-width="3"/>
+
+        <!-- Tower top antenna -->
+        <line x1="170" y1="20" x2="170" y2="0" stroke="#8B5A2B" stroke-width="2"/>
+        <circle cx="170" cy="20" r="4" fill="#8B5A2B"/>
+
+        <!-- Flight path trace: subtle dashed arc from top-right toward tower tip -->
+        <path d="M 330 10 Q 310 15 285 25 Q 270 31 260 38" stroke="#3A3A3C" stroke-width="0.7" fill="none" stroke-dasharray="3 5" opacity="0.25"/>
+
+        <!-- Seagull approaching from top right, banking left to land on tip -->
+        <!-- Animated: gliding in from far right, wings angled in descent -->
+        <g class="seagull" style="transform-origin: 260px 38px;">
+          <!-- Body -->
+          <ellipse cx="260" cy="38" rx="9" ry="3.5" fill="#3A3A3C" transform="rotate(-8, 260, 38)"/>
+          <!-- Head -->
+          <ellipse cx="252" cy="36" rx="4.5" ry="3.5" fill="#3A3A3C" transform="rotate(-8, 252, 36)"/>
+          <!-- Beak pointing left/down toward tower tip -->
+          <path d="M248 37 L243 39.5 L247 40" fill="#8B5A2B" stroke="none"/>
+          <!-- Left wing (near wing, angled down in banking descent) -->
+          <path d="M258 36 Q248 26 236 30 Q244 34 252 35" fill="#3A3A3C" stroke="none"/>
+          <!-- Right wing (far wing, angled up) -->
+          <path d="M262 37 Q276 28 294 22 Q282 30 270 36" fill="#4A4A4C" stroke="none"/>
+          <!-- Wing highlight edges -->
+          <path d="M258 36 Q248 26 236 30" stroke="#5A5A5E" stroke-width="0.5" fill="none"/>
+          <path d="M262 37 Q276 28 294 22" stroke="#5A5A5E" stroke-width="0.5" fill="none"/>
+          <!-- Tail feathers (trailing right) -->
+          <path d="M268 39 Q276 42 272 46 Q270 42 268 39" fill="#3A3A3C"/>
+          <path d="M269 38 Q278 40 275 43" fill="#4A4A4C"/>
+          <!-- Eye -->
+          <circle cx="250" cy="35.5" r="1" fill="#F4F1EC"/>
+          <circle cx="250" cy="35.5" r="0.4" fill="#1C1C1E"/>
+        </g>
+
+        <!-- Cross-members (lattice) drawn at varying widths for taper -->
+        <!-- Section 1 - top narrow (y=20-100) -->
+        <line x1="130" y1="100" x2="170" y2="20" stroke="#8B5A2B" stroke-width="2"/>
+        <line x1="210" y1="100" x2="170" y2="20" stroke="#8B5A2B" stroke-width="2"/>
+        <!-- horizontal -->
+        <line x1="130" y1="100" x2="210" y2="100" stroke="#8B5A2B" stroke-width="1.5"/>
+        <!-- diagonals -->
+        <line x1="130" y1="100" x2="170" y2="60" stroke="#8B5A2B" stroke-width="1" opacity="0.5"/>
+        <line x1="210" y1="100" x2="170" y2="60" stroke="#8B5A2B" stroke-width="1" opacity="0.5"/>
+        <line x1="170" y1="60" x2="130" y2="100" stroke="#8B5A2B" stroke-width="1" opacity="0.5"/>
+        <line x1="170" y1="60" x2="210" y2="100" stroke="#8B5A2B" stroke-width="1" opacity="0.5"/>
+
+        <!-- Section 2 (y=100-200) -->
+        <line x1="90" y1="200" x2="130" y2="100" stroke="#8B5A2B" stroke-width="2"/>
+        <line x1="250" y1="200" x2="210" y2="100" stroke="#8B5A2B" stroke-width="2"/>
+        <line x1="90" y1="200" x2="250" y2="200" stroke="#8B5A2B" stroke-width="1.5"/>
+        <!-- X diagonals inside -->
+        <line x1="90" y1="200" x2="210" y2="100" stroke="#8B5A2B" stroke-width="1" opacity="0.4"/>
+        <line x1="250" y1="200" x2="130" y2="100" stroke="#8B5A2B" stroke-width="1" opacity="0.4"/>
+        <!-- mid horizontal -->
+        <line x1="108" y1="150" x2="232" y2="150" stroke="#8B5A2B" stroke-width="1" opacity="0.5"/>
+
+        <!-- Section 3 (y=200-320) platform section -->
+        <line x1="60" y1="320" x2="90" y2="200" stroke="#8B5A2B" stroke-width="2.5"/>
+        <line x1="280" y1="320" x2="250" y2="200" stroke="#8B5A2B" stroke-width="2.5"/>
+        <line x1="55" y1="320" x2="285" y2="320" stroke="#8B5A2B" stroke-width="2.5"/>
+        <!-- platform detail -->
+        <rect x="55" y="315" width="230" height="8" fill="#8B5A2B" opacity="0.3"/>
+        <!-- X diagonals -->
+        <line x1="60" y1="320" x2="250" y2="200" stroke="#8B5A2B" stroke-width="1" opacity="0.4"/>
+        <line x1="280" y1="320" x2="90" y2="200" stroke="#8B5A2B" stroke-width="1" opacity="0.4"/>
+        <line x1="75" y1="260" x2="265" y2="260" stroke="#8B5A2B" stroke-width="1" opacity="0.4"/>
+
+        <!-- Section 4 - lower wide (y=320-440) -->
+        <line x1="40" y1="440" x2="60" y2="320" stroke="#8B5A2B" stroke-width="3"/>
+        <line x1="300" y1="440" x2="280" y2="320" stroke="#8B5A2B" stroke-width="3"/>
+        <line x1="35" y1="440" x2="305" y2="440" stroke="#8B5A2B" stroke-width="2"/>
+        <!-- X diagonals -->
+        <line x1="40" y1="440" x2="280" y2="320" stroke="#8B5A2B" stroke-width="1.5" opacity="0.4"/>
+        <line x1="300" y1="440" x2="60" y2="320" stroke="#8B5A2B" stroke-width="1.5" opacity="0.4"/>
+        <!-- mid horizontal -->
+        <line x1="48" y1="380" x2="292" y2="380" stroke="#8B5A2B" stroke-width="1" opacity="0.5"/>
+        <!-- diamond decoration at center -->
+        <path d="M170 340 L190 380 L170 420 L150 380 Z" stroke="#8B5A2B" stroke-width="1" fill="none" opacity="0.3"/>
+
+        <!-- Section 5 - base (y=440-490) -->
+        <line x1="25" y1="490" x2="40" y2="440" stroke="#8B5A2B" stroke-width="3.5"/>
+        <line x1="315" y1="490" x2="300" y2="440" stroke="#8B5A2B" stroke-width="3.5"/>
+        <line x1="20" y1="490" x2="320" y2="490" stroke="#8B5A2B" stroke-width="2"/>
+        <!-- diagonals -->
+        <line x1="25" y1="490" x2="300" y2="440" stroke="#8B5A2B" stroke-width="1" opacity="0.4"/>
+        <line x1="315" y1="490" x2="40" y2="440" stroke="#8B5A2B" stroke-width="1" opacity="0.4"/>
+
+        <!-- Base concrete block -->
+        <rect x="145" y="490" width="50" height="18" fill="#8B5A2B" opacity="0.5"/>
+        <rect x="148" y="508" width="44" height="8" fill="#8B5A2B" opacity="0.3"/>
+
+        <!-- Vine/overgrowth suggestions - organic linework -->
+        <path d="M60 320 Q50 340 45 370 Q52 380 48 400" stroke="#4A6741" stroke-width="1.5" fill="none" opacity="0.6"/>
+        <path d="M55 350 Q40 355 35 370" stroke="#4A6741" stroke-width="1" fill="none" opacity="0.5"/>
+        <path d="M280 320 Q290 345 295 375 Q288 388 292 410" stroke="#4A6741" stroke-width="1.5" fill="none" opacity="0.6"/>
+        <path d="M285 355 Q300 360 305 375" stroke="#4A6741" stroke-width="1" fill="none" opacity="0.5"/>
+
+        <!-- Overgrowth at base -->
+        <path d="M0 500 Q20 480 40 490 Q60 475 80 490 Q100 478 120 488 Q140 480 160 490 Q180 476 200 488 Q220 479 240 490 Q260 476 280 490 Q300 478 320 490 Q335 484 340 500" stroke="#4A6741" stroke-width="1.5" fill="rgba(74,103,65,0.08)"/>
+        <path d="M0 510 Q30 495 60 505 Q90 494 120 504 Q150 493 180 503 Q210 492 240 503 Q270 492 300 502 Q325 495 340 510" stroke="#4A6741" stroke-width="1" fill="none" opacity="0.5"/>
+
+        <!-- Measurement tick marks - engineering feel -->
+        <line x1="16" y1="490" x2="12" y2="490" stroke="#8B5A2B" stroke-width="1" opacity="0.3"/>
+        <line x1="16" y1="440" x2="12" y2="440" stroke="#8B5A2B" stroke-width="1" opacity="0.3"/>
+        <line x1="16" y1="380" x2="12" y2="380" stroke="#8B5A2B" stroke-width="1" opacity="0.3"/>
+        <line x1="16" y1="320" x2="12" y2="320" stroke="#8B5A2B" stroke-width="1" opacity="0.3"/>
+        <line x1="14" y1="490" x2="14" y2="320" stroke="#8B5A2B" stroke-width="0.5" opacity="0.2"/>
+      </svg>
+    </div>
+  </div>
+</section>
+
+<!-- UPTIME STRIP -->
+<div class="uptime-strip">
+  <span class="uptime-label">Live status</span>
+  <div style="overflow:hidden;flex:1;">
+    <div class="uptime-ticker">
+      <span class="uptime-item"><span class="dot"></span> Job queue: nominal</span>
+      <span class="uptime-item"><span class="dot"></span> Scheduler: transmitting</span>
+      <span class="uptime-item"><span class="dot"></span> 99.97% uptime — last 90 days</span>
+      <span class="uptime-item"><span class="dot"></span> 847ms avg execution latency</span>
+      <span class="uptime-item"><span class="dot"></span> 0 missed executions this month</span>
+      <span class="uptime-item"><span class="dot"></span> Retry engine: active</span>
+      <!-- Duplicate for seamless loop -->
+      <span class="uptime-item"><span class="dot"></span> Job queue: nominal</span>
+      <span class="uptime-item"><span class="dot"></span> Scheduler: transmitting</span>
+      <span class="uptime-item"><span class="dot"></span> 99.97% uptime — last 90 days</span>
+      <span class="uptime-item"><span class="dot"></span> 847ms avg execution latency</span>
+      <span class="uptime-item"><span class="dot"></span> 0 missed executions this month</span>
+      <span class="uptime-item"><span class="dot"></span> Retry engine: active</span>
+    </div>
+  </div>
+</div>
+
+<div class="field-divider"></div>
+
+<!-- FEATURES -->
+<section class="features">
+  <div class="section-header">
+    <div>
+      <span class="section-number">// 01</span>
+      <h2>Built like<br>infrastructure.</h2>
+    </div>
+    <p class="section-desc">The features that matter when something's running at 3am and nobody's watching.</p>
+  </div>
+
+  <div class="features-grid">
+    <div class="feature-card">
+      <svg class="feature-icon" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect x="4" y="14" width="24" height="4" stroke="currentColor" stroke-width="1.5"/>
+        <path d="M4 16L16 6L28 16" stroke="currentColor" stroke-width="1.5"/>
+        <line x1="16" y1="18" x2="16" y2="28" stroke="currentColor" stroke-width="1.5"/>
+        <line x1="4" y1="28" x2="28" y2="28" stroke="currentColor" stroke-width="1.5"/>
+      </svg>
+      <div class="feature-tag">Core</div>
+      <h3 class="feature-name">Cron & triggers</h3>
+      <p class="feature-desc">Standard cron expressions, interval-based scheduling, and event-driven triggers. Write it once in your codebase. Signal handles the rest.</p>
+    </div>
+
+    <div class="feature-card">
+      <svg class="feature-icon" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="16" cy="16" r="11" stroke="currentColor" stroke-width="1.5"/>
+        <path d="M16 8V16L21 21" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        <circle cx="16" cy="16" r="2" fill="currentColor"/>
+      </svg>
+      <h3 class="feature-name">Execution history</h3>
+      <p class="feature-desc">Every run logged. Every failure captured. Full replay capability. You weren't watching — but the logbook was.</p>
+    </div>
+
+    <div class="feature-card">
+      <svg class="feature-icon" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M8 24L8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        <path d="M16 24L16 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        <path d="M24 24L24 18" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        <path d="M5 24H27" stroke="currentColor" stroke-width="1.5"/>
+        <path d="M8 8C8 8 10 4 13 8C16 12 18 6 20 6C22 6 22 10 24 10" stroke="currentColor" stroke-width="1.2" opacity="0.5"/>
+      </svg>
+      <div class="feature-tag">Reliability</div>
+      <h3 class="feature-name">Automatic retries</h3>
+      <p class="feature-desc">Configurable retry policies with exponential backoff. Failed jobs don't disappear — they get back in line and try again.</p>
+    </div>
+
+    <div class="feature-card hatch-bg">
+      <svg class="feature-icon" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M6 10C6 8 8 6 10 6H22C24 6 26 8 26 10V22C26 24 24 26 22 26H10C8 26 6 24 6 22V10Z" stroke="currentColor" stroke-width="1.5"/>
+        <path d="M12 16L15 19L20 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <h3 class="feature-name">Idempotency keys</h3>
+      <p class="feature-desc">Safe by default. Every job gets an idempotency key. Duplicate dispatches don't create duplicate runs.</p>
+    </div>
+
+    <div class="feature-card">
+      <svg class="feature-icon" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M16 4L28 10V22L16 28L4 22V10L16 4Z" stroke="currentColor" stroke-width="1.5"/>
+        <path d="M16 4L16 28" stroke="currentColor" stroke-width="1" opacity="0.4"/>
+        <path d="M4 10L28 10" stroke="currentColor" stroke-width="1" opacity="0.4"/>
+        <path d="M4 22L28 22" stroke="currentColor" stroke-width="1" opacity="0.4"/>
+      </svg>
+      <div class="feature-tag">Scale</div>
+      <h3 class="feature-name">Concurrency control</h3>
+      <p class="feature-desc">Set max concurrent executions per job type. Prevent thundering herds. Define exactly how much load your services absorb.</p>
+    </div>
+
+    <div class="feature-card">
+      <svg class="feature-icon" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="10" cy="10" r="4" stroke="currentColor" stroke-width="1.5"/>
+        <circle cx="22" cy="22" r="4" stroke="currentColor" stroke-width="1.5"/>
+        <path d="M14 10H18C20 10 22 12 22 14V18" stroke="currentColor" stroke-width="1.5"/>
+      </svg>
+      <h3 class="feature-name">Job chaining</h3>
+      <p class="feature-desc">Define dependent workflows where one job's output triggers the next. Complex pipelines without complex infrastructure.</p>
+    </div>
+  </div>
+</section>
+
+<div class="field-divider"></div>
+
+<!-- CODE -->
+<section class="code-section">
+  <div class="code-inner">
+    <div class="code-copy">
+      <span class="section-number" style="color:rgba(244,241,236,0.4);">// 02</span>
+      <h2>Deploy in minutes.<br><em>Forget forever.</em></h2>
+      <p>Define your jobs in code. No dashboards to maintain, no YAML to wrestle, no infrastructure to provision. Signal reads your config, and from that point forward, it just runs.</p>
+      <a href="#" class="btn-primary" style="display:inline-flex;">View documentation →</a>
+    </div>
+
+    <div class="code-block">
+      <code>
+        <span class="code-line"><span class="code-comment">// signal.config.ts</span></span>
+        <span class="code-line">&nbsp;</span>
+        <span class="code-line"><span class="code-keyword">import</span> { <span class="code-prop">defineJobs</span> } <span class="code-keyword">from</span> <span class="code-string">"@signal/sdk"</span></span>
+        <span class="code-line">&nbsp;</span>
+        <span class="code-line"><span class="code-keyword">export default</span> <span class="code-prop">defineJobs</span>({</span>
+        <span class="code-line">&nbsp;&nbsp;<span class="code-prop">syncUsageMetrics</span>: {</span>
+        <span class="code-line">&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-prop">schedule</span>: <span class="code-string">"*/15 * * * *"</span>,</span>
+        <span class="code-line">&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-prop">retries</span>: <span class="code-value">3</span>,</span>
+        <span class="code-line">&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-prop">handler</span>: <span class="code-keyword">async</span> () => {</span>
+        <span class="code-line">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">await</span> <span class="code-prop">syncToDataWarehouse</span>()</span>
+        <span class="code-line">&nbsp;&nbsp;&nbsp;&nbsp;}</span>
+        <span class="code-line">&nbsp;&nbsp;},</span>
+        <span class="code-line">&nbsp;</span>
+        <span class="code-line">&nbsp;&nbsp;<span class="code-prop">dailyDigest</span>: {</span>
+        <span class="code-line">&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-prop">schedule</span>: <span class="code-string">"0 8 * * *"</span>,</span>
+        <span class="code-line">&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-prop">timezone</span>: <span class="code-string">"Africa/Nairobi"</span>,</span>
+        <span class="code-line">&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-prop">handler</span>: <span class="code-keyword">async</span> () => {</span>
+        <span class="code-line">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">await</span> <span class="code-prop">sendDailyEmail</span>()</span>
+        <span class="code-line">&nbsp;&nbsp;&nbsp;&nbsp;}</span>
+        <span class="code-line">&nbsp;&nbsp;}</span>
+        <span class="code-line">})</span>
+      </code>
+    </div>
+  </div>
+</section>
+
+<!-- PROOF -->
+<section class="proof">
+  <div class="section-header">
+    <div>
+      <span class="section-number">// 03</span>
+      <h2>Proof of time<br>passing without failure.</h2>
+    </div>
+    <p class="section-desc">Rust isn't decay. It's evidence. These numbers are the patina on the infrastructure.</p>
+  </div>
+
+  <div class="proof-grid">
+    <div class="proof-cell">
+      <div>
+        <div class="proof-label">Developer sentiment</div>
+        <div class="quote-block">
+          <p class="quote-text">"I set it up on a Tuesday and then genuinely forgot about it. That's the best thing I can say about infrastructure."</p>
+          <p class="quote-attr">— Backend engineer, Series B fintech</p>
+        </div>
+        <div class="quote-block" style="margin-top: 1rem;">
+          <p class="quote-text">"Migrated from a homegrown cron setup in an afternoon. Haven't touched it in four months. It's still running."</p>
+          <p class="quote-attr">— Solo founder, developer tools</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="proof-cell" style="border-right: 2px solid rgba(139,90,43,0.15);">
+      <div class="proof-label">Uptime</div>
+      <div class="proof-number">99.97<span>%</span></div>
+      <p class="proof-note">Measured over 90 consecutive days. Three nines and change — without you doing a thing.</p>
+    </div>
+
+    <div class="proof-cell">
+      <div class="proof-label">Jobs run this month</div>
+      <div class="proof-number">2.4<span>M+</span></div>
+      <p class="proof-note">Across all tenants. Zero manual interventions required from the infrastructure team.</p>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="cta-section">
+  <span class="section-number" style="color: rgba(244,241,236,0.2); position:relative;">// Begin transmission</span>
+  <h2>Start transmitting.</h2>
+  <p>Your background jobs shouldn't require you. Set them up with Signal and let them run — through the weather, through the seasons, through whatever else is happening in your stack.</p>
+  <a href="#" class="btn-primary">Get started free</a>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div class="footer-logo">Signal · by dterminal</div>
+  <div class="footer-copy">Signal keeps running. So does everything else. — 2026</div>
+</footer>
+
+<style>
+  @keyframes signal-ring {
+    0% { r: 0; opacity: 0.7; }
+    100% { r: 100px; opacity: 0; }
+  }
+</style>
+
+<script>
+  // Animate signal rings properly
+  const rings = document.querySelectorAll('.signal-ring');
+  rings.forEach((ring, i) => {
+    const animate = () => {
+      let r = 0;
+      const start = performance.now();
+      const duration = 3000;
+      const delay = i * 1000;
+
+      setTimeout(() => {
+        const tick = (now) => {
+          const elapsed = now - start - delay;
+          if (elapsed < 0) { requestAnimationFrame(tick); return; }
+          const progress = Math.min(elapsed / duration, 1);
+          const currentR = progress * 100;
+          const opacity = (1 - progress) * 0.7;
+          ring.setAttribute('r', currentR);
+          ring.setAttribute('opacity', opacity);
+          if (progress < 1) {
+            requestAnimationFrame(tick);
+          } else {
+            ring.setAttribute('r', 0);
+            ring.setAttribute('opacity', 0);
+            animate();
+          }
+        };
+        requestAnimationFrame(tick);
+      }, delay);
+    };
+    animate();
+  });
+</script>
+
+</body>
+</html>

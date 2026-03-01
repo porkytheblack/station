@@ -1,5 +1,5 @@
 import path from "node:path";
-import { SignalRunner, ConsoleSubscriber } from "simple-signal";
+import { SignalRunner, ConsoleSubscriber } from "station-signal";
 import { processOrder } from "./signals/process-order.js";
 
 const runner = new SignalRunner({

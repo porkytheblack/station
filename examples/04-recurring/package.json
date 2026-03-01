@@ -1,12 +1,12 @@
 {
-  "name": "@simple-signal/example-04-recurring",
+  "name": "simple-example-04-recurring",
   "private": true,
   "type": "module",
   "scripts": {
     "start": "tsx runner.ts"
   },
   "dependencies": {
-    "simple-signal": "workspace:*"
+    "station-signal": "workspace:*"
   },
   "devDependencies": {
     "tsx": "^4.21.0"
