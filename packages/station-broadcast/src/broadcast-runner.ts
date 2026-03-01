@@ -41,6 +41,8 @@ export class BroadcastRunner {
   private registry = new Map<string, BroadcastDefinition>();
   private recurringSchedules = new Map<string, RecurringBroadcastSchedule>();
   private running = false;
+  private stopping = false;
+  private ticking = false;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: BroadcastRunnerOptions) {
@@ -174,6 +176,10 @@ export class BroadcastRunner {
   }
 
   async start(): Promise<void> {
+    if (this.running) {
+      throw new Error("[station-broadcast] Runner is already started");
+    }
+
     if (this.broadcastsDir) {
       await this.discover(resolve(this.broadcastsDir));
     }
@@ -202,6 +208,8 @@ export class BroadcastRunner {
   }
 
   async stop(options?: { graceful?: boolean; timeoutMs?: number }): Promise<void> {
+    if (this.stopping) return;
+    this.stopping = true;
     this.running = false;
     if (this.pollTimer) {
       clearTimeout(this.pollTimer);
@@ -218,7 +226,11 @@ export class BroadcastRunner {
       }
     }
 
-    await this.adapter.close?.();
+    try {
+      await this.adapter.close?.();
+    } catch (err) {
+      console.error("[station-broadcast] Error closing adapter:", err);
+    }
   }
 
   private emit<K extends keyof BroadcastSubscriber>(
@@ -286,18 +298,24 @@ export class BroadcastRunner {
   // ─── Tick ──────────────────────────────────────────────────────────
 
   private async tick(): Promise<void> {
-    await this.tickRecurring();
+    if (this.ticking) return;
+    this.ticking = true;
+    try {
+      await this.tickRecurring();
 
-    // Advance running broadcasts first
-    const running = await this.adapter.getBroadcastRunsRunning();
-    for (const bRun of running) {
-      await this.advanceBroadcast(bRun);
-    }
+      // Advance running broadcasts first
+      const running = await this.adapter.getBroadcastRunsRunning();
+      for (const bRun of running) {
+        await this.advanceBroadcast(bRun);
+      }
 
-    // Pick up pending broadcasts
-    const due = await this.adapter.getBroadcastRunsDue();
-    for (const bRun of due) {
-      await this.initBroadcast(bRun);
+      // Pick up pending broadcasts
+      const due = await this.adapter.getBroadcastRunsDue();
+      for (const bRun of due) {
+        await this.initBroadcast(bRun);
+      }
+    } finally {
+      this.ticking = false;
     }
   }
 

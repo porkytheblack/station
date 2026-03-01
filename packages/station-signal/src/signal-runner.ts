@@ -63,6 +63,8 @@ export class SignalRunner {
   /** Map runId → child process for cancel/timeout kill. */
   private childByRunId = new Map<string, ChildProcess>();
   private running = false;
+  private stopping = false;
+  private ticking = false;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: SignalRunnerOptions = {}) {
@@ -176,6 +178,10 @@ export class SignalRunner {
   }
 
   async start(): Promise<void> {
+    if (this.running) {
+      throw new Error("[station-signal] Runner is already started");
+    }
+
     if (this.signalsDir) {
       await this.discover(resolve(this.signalsDir));
     }
@@ -206,6 +212,8 @@ export class SignalRunner {
 
   /** Stop the runner and optionally wait for active children to exit. */
   async stop(options?: { graceful?: boolean; timeoutMs?: number }): Promise<void> {
+    if (this.stopping) return;
+    this.stopping = true;
     this.running = false;
     if (this.pollTimer) {
       clearTimeout(this.pollTimer);
@@ -225,8 +233,12 @@ export class SignalRunner {
       }
     }
 
-    // M9: Close the adapter to release resources (e.g. database connections)
-    await this.adapter.close?.();
+    // Close the adapter to release resources (e.g. database connections)
+    try {
+      await this.adapter.close?.();
+    } catch (err) {
+      console.error("[station-signal] Error closing adapter:", err);
+    }
   }
 
   /** Cancel a specific run. Marks it as cancelled and kills the child process. */
@@ -329,6 +341,9 @@ export class SignalRunner {
   }
 
   private async tick(): Promise<void> {
+    if (this.ticking) return;
+    this.ticking = true;
+    try {
     await this.checkTimeouts();
     await this.tickRecurring();
 
@@ -381,6 +396,9 @@ export class SignalRunner {
       const dispatchRun = freshRun ?? run;
       this.emit("onRunDispatched", { run: dispatchRun });
       this.dispatch(sig, dispatchRun);
+    }
+    } finally {
+      this.ticking = false;
     }
   }
 
@@ -479,20 +497,20 @@ export class SignalRunner {
   private dispatch(sig: RegisteredSignal, run: Run): void {
     const env: Record<string, string> = {
       ...process.env as Record<string, string>,
-      SIMPLE_SIGNAL_FILE: sig.filePath,
-      SIMPLE_SIGNAL_INPUT: run.input,
-      SIMPLE_SIGNAL_NAME: run.signalName,
-      SIMPLE_SIGNAL_RUN_ID: run.id,
-      SIMPLE_SIGNAL_TIMEOUT: String(run.timeout ?? DEFAULT_TIMEOUT_MS),
+      STATION_SIGNAL_FILE: sig.filePath,
+      STATION_SIGNAL_INPUT: run.input,
+      STATION_SIGNAL_NAME: run.signalName,
+      STATION_SIGNAL_RUN_ID: run.id,
+      STATION_SIGNAL_TIMEOUT: String(run.timeout ?? DEFAULT_TIMEOUT_MS),
     };
 
     if (this.adapterName) {
-      env.SIMPLE_SIGNAL_ADAPTER = this.adapterName;
+      env.STATION_SIGNAL_ADAPTER = this.adapterName;
       if (this.adapterOptions) {
-        env.SIMPLE_SIGNAL_ADAPTER_OPTIONS = JSON.stringify(this.adapterOptions);
+        env.STATION_SIGNAL_ADAPTER_OPTIONS = JSON.stringify(this.adapterOptions);
       }
       if (this.adapterImport) {
-        env.SIMPLE_SIGNAL_ADAPTER_IMPORT = this.adapterImport;
+        env.STATION_SIGNAL_ADAPTER_IMPORT = this.adapterImport;
       }
     }
 
@@ -609,7 +627,7 @@ export class SignalRunner {
       // H2: Grace period — let pending IPC message handlers resolve before we act.
       // Node can fire exit synchronously after the last IPC message, before the
       // async message handler has run.
-      await new Promise((r) => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, 200));
 
       // Always decrement counters first (prevents activeCount drift)
       if (!resolved) {

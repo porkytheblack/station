@@ -11,9 +11,41 @@ import { registerAdapter } from "./registry.js";
 export class MemoryAdapter implements SignalQueueAdapter {
   private runs = new Map<string, Run>();
   private steps = new Map<string, Step>();
+  private maxRuns: number;
+
+  constructor(options?: { maxRuns?: number }) {
+    this.maxRuns = options?.maxRuns ?? 10_000;
+  }
 
   async addRun(run: Run): Promise<void> {
     this.runs.set(run.id, run);
+    if (this.runs.size > this.maxRuns) {
+      this.evictCompleted();
+    }
+  }
+
+  private evictCompleted(): void {
+    const terminal: string[] = [];
+    for (const [id, run] of this.runs) {
+      if (run.status === "completed" || run.status === "failed" || run.status === "cancelled") {
+        terminal.push(id);
+      }
+    }
+    // Sort oldest first by completedAt
+    terminal.sort((a, b) => {
+      const ra = this.runs.get(a)!;
+      const rb = this.runs.get(b)!;
+      return (ra.completedAt?.getTime() ?? 0) - (rb.completedAt?.getTime() ?? 0);
+    });
+    // Evict oldest 10%
+    const evictCount = Math.max(1, Math.floor(terminal.length * 0.1));
+    for (let i = 0; i < evictCount && i < terminal.length; i++) {
+      const id = terminal[i];
+      this.runs.delete(id);
+      for (const [stepId, step] of this.steps) {
+        if (step.runId === id) this.steps.delete(stepId);
+      }
+    }
   }
 
   async removeRun(id: string): Promise<void> {

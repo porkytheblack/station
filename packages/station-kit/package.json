@@ -7,7 +7,7 @@
     "node": ">=18"
   },
   "bin": {
-    "station-kit": "./dist/cli.js"
+    "station": "./dist/cli.js"
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

@@ -16,13 +16,13 @@ import type { AnySignal } from "./signal.js";
 import type { Step } from "./types.js";
 import { isSignal } from "./util.js";
 
-const signalName = process.env.SIMPLE_SIGNAL_NAME;
-const signalFile = process.env.SIMPLE_SIGNAL_FILE;
-const runId = process.env.SIMPLE_SIGNAL_RUN_ID;
-const rawInput = process.env.SIMPLE_SIGNAL_INPUT;
-const adapterName = process.env.SIMPLE_SIGNAL_ADAPTER;
-const adapterOptionsRaw = process.env.SIMPLE_SIGNAL_ADAPTER_OPTIONS;
-const adapterImport = process.env.SIMPLE_SIGNAL_ADAPTER_IMPORT;
+const signalName = process.env.STATION_SIGNAL_NAME;
+const signalFile = process.env.STATION_SIGNAL_FILE;
+const runId = process.env.STATION_SIGNAL_RUN_ID;
+const rawInput = process.env.STATION_SIGNAL_INPUT;
+const adapterName = process.env.STATION_SIGNAL_ADAPTER;
+const adapterOptionsRaw = process.env.STATION_SIGNAL_ADAPTER_OPTIONS;
+const adapterImport = process.env.STATION_SIGNAL_ADAPTER_IMPORT;
 
 if (!signalName || !signalFile || !runId || rawInput === undefined) {
   console.error("[station-signal] Missing required env vars in spawned process");
