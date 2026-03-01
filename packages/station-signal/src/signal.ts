@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { getAdapter } from "./config.js";
+import { getAdapter, getTriggerAdapter } from "./config.js";
 import { SignalValidationError } from "./errors.js";
 import { parseInterval } from "./interval.js";
 import { DEFAULT_MAX_ATTEMPTS, DEFAULT_TIMEOUT_MS, type Run, type StepDefinition } from "./types.js";
@@ -65,6 +65,14 @@ function buildSignal<TInput, TOutput>(config: SignalConfig<TInput, TOutput>): Si
       if (!result.success) {
         throw new SignalValidationError(name, result.error.message);
       }
+
+      // Remote trigger path
+      const triggerAdapter = getTriggerAdapter();
+      if (triggerAdapter) {
+        return triggerAdapter.trigger(name, result.data);
+      }
+
+      // Local trigger path
       const id = getAdapter().generateId();
       const run: Run = {
         id,

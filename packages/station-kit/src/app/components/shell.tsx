@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { useStation } from "../hooks/use-station";
 import { useBreadcrumbContext } from "../hooks/use-breadcrumb";
 import { useTheme } from "./theme-provider";
+import { useAuth } from "./auth-provider";
 
 function getInitialCollapsed(): boolean {
   if (typeof window === "undefined") return false;
@@ -99,6 +100,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const { connected } = useStation();
   const { segments } = useBreadcrumbContext();
   const { theme, toggle } = useTheme();
+  const { logout } = useAuth();
   const [collapsed, setCollapsed] = useState(getInitialCollapsed);
 
   const toggleSidebar = useCallback(() => {
@@ -175,6 +177,18 @@ export function Shell({ children }: { children: React.ReactNode }) {
                   <path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41" />
                 </svg>
               )}
+            </button>
+            <button
+              onClick={logout}
+              className="logout-btn"
+              title="Sign out"
+              aria-label="Sign out"
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                <path d="M6 2H3a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3" />
+                <path d="M10 12l4-4-4-4" />
+                <line x1="14" y1="8" x2="6" y2="8" />
+              </svg>
             </button>
             <div
               className={`pulse-dot ${connected ? "" : "pulse-dot--disconnected"}`}

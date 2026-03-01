@@ -1,6 +1,6 @@
 export { signal, SignalBuilder, StepBuilder, type Signal, type AnySignal } from "./signal.js";
 export { SignalRunner, type SignalRunnerOptions } from "./signal-runner.js";
-export { configure, getAdapter, isConfigured } from "./config.js";
+export { configure, getAdapter, getTriggerAdapter, isConfigured, type ConfigureOptions } from "./config.js";
 export { parseInterval } from "./interval.js";
 
 export { DEFAULT_TIMEOUT_MS, DEFAULT_MAX_ATTEMPTS } from "./types.js";
@@ -26,7 +26,11 @@ export {
   SignalValidationError,
   SignalTimeoutError,
   SignalNotFoundError,
+  StationRemoteError,
 } from "./errors.js";
+
+export type { TriggerAdapter } from "./adapters/trigger.js";
+export { HttpTriggerAdapter, type HttpTriggerOptions } from "./adapters/http-trigger.js";
 
 export { isSignal, SIGNAL_BRAND } from "./util.js";
 

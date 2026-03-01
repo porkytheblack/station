@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "start": "tsx runner.ts",
+    "trigger": "tsx trigger.ts",
     "station": "station"
   },
   "dependencies": {

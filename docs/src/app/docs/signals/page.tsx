@@ -134,7 +134,7 @@ const sendEmail = signal("sendEmail")
       </h4>
       <p>
         Maximum retry attempts after the initial failure. Total execution
-        attempts = <code>1 + n</code>. Default: <code>1</code> (no retry).
+        attempts = <code>1 + n</code>. Default: <code>0</code> (no retry).
         When a run fails and has remaining attempts, it is re-enqueued
         with <code>&quot;pending&quot;</code> status and an incremented attempt
         counter. The runner applies exponential backoff between retries
@@ -422,7 +422,7 @@ import { SqliteAdapter } from "station-adapter-sqlite";
 
 const runner = new SignalRunner({
   signalsDir: "./src/signals",
-  adapter: new SqliteAdapter({ filename: "./data/signals.db" }),
+  adapter: new SqliteAdapter({ dbPath: "./data/signals.db" }),
   subscribers: [new ConsoleSubscriber()],
   pollIntervalMs: 1000,
   maxConcurrent: 10,
@@ -545,7 +545,7 @@ await runner.start();`}</Code>
             <td><code>Promise&lt;void&gt;</code></td>
             <td>
               Gracefully stop the runner. Accepts optional{" "}
-              <code>{`{ graceful: boolean, timeoutMs: number }`}</code>. When
+              <code>{`{ graceful?: boolean, timeoutMs?: number }`}</code>. When
               graceful, waits for active child processes to finish (up to the
               timeout), then kills any remaining. Closes the adapter to release
               resources.
@@ -638,7 +638,7 @@ await runner.start();`}</Code>
         provided.
       </p>
       <Code>{`const runner = SignalRunner.create("./src/signals", {
-  adapter: new SqliteAdapter({ filename: "./data/signals.db" }),
+  adapter: new SqliteAdapter({ dbPath: "./data/signals.db" }),
   maxConcurrent: 10,
 });`}</Code>
 
@@ -1083,7 +1083,7 @@ await runner.start();`}</Code>
 import { SqliteAdapter } from "station-adapter-sqlite";
 
 configure({
-  adapter: new SqliteAdapter({ filename: "./data/signals.db" }),
+  adapter: new SqliteAdapter({ dbPath: "./data/signals.db" }),
 });`}</Code>
       <div className="info-box">
         If <code>configure()</code> is called more than once, a warning is

@@ -5,6 +5,7 @@
   "scripts": {
     "start": "tsx runner.ts",
     "start:feature": "tsx runner.ts feature/auth",
+    "trigger": "tsx trigger.ts",
     "station": "station"
   },
   "dependencies": {

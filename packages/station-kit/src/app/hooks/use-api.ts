@@ -15,6 +15,7 @@ interface ApiError {
 async function fetchApi<T>(path: string, options?: RequestInit): Promise<ApiResponse<T>> {
   const res = await fetch(`${API_BASE}/api${path}`, {
     ...options,
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
       ...options?.headers,
@@ -25,6 +26,29 @@ async function fetchApi<T>(path: string, options?: RequestInit): Promise<ApiResp
     throw new Error(err.message);
   }
   return res.json();
+}
+
+export async function checkAuth(): Promise<{ authenticated: boolean; authRequired: boolean }> {
+  const res = await fetch(`${API_BASE}/api/auth/check`, { credentials: "include" });
+  const json = await res.json();
+  return json.data;
+}
+
+export async function login(username: string, password: string): Promise<boolean> {
+  const res = await fetch(`${API_BASE}/api/auth/login`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  return res.ok;
+}
+
+export async function logout(): Promise<void> {
+  await fetch(`${API_BASE}/api/auth/logout`, {
+    method: "POST",
+    credentials: "include",
+  });
 }
 
 export interface SchemaField {

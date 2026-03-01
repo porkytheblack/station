@@ -407,9 +407,13 @@ export default defineConfig({
           </tr>
           <tr>
             <td><code>auth</code></td>
-            <td><code>{`{ username, password }`}</code></td>
+            <td><code>{`{ username, password, sessionTtlMs? }`}</code></td>
             <td>&mdash;</td>
-            <td>Dashboard login credentials. Omit to disable auth.</td>
+            <td>
+              Dashboard login credentials. <code>sessionTtlMs</code> sets
+              session expiry in milliseconds (default: 86,400,000 / 24 hours).
+              Omit <code>auth</code> entirely to disable auth.
+            </td>
           </tr>
           <tr>
             <td><code>runRunners</code></td>

@@ -1,5 +1,5 @@
 import type { AnySignal, Signal } from "station-signal";
-import { isSignal, parseInterval } from "station-signal";
+import { isSignal, parseInterval, getTriggerAdapter } from "station-signal";
 import { getBroadcastAdapter } from "./config.js";
 import { BroadcastValidationError } from "./errors.js";
 import type { BroadcastRun, FailurePolicy } from "./types.js";
@@ -199,6 +199,13 @@ export class BroadcastChain<TInput> {
       interval,
       recurringInput,
       async trigger(input: unknown): Promise<string> {
+        // Remote trigger path
+        const triggerAdapter = getTriggerAdapter();
+        if (triggerAdapter?.triggerBroadcast) {
+          return triggerAdapter.triggerBroadcast(name, input);
+        }
+
+        // Local trigger path
         const adapter = getBroadcastAdapter();
         const id = adapter.generateId();
         const run: BroadcastRun = {

@@ -3,6 +3,7 @@ import { isBroadcast } from "station-broadcast";
 import type { SignalSubscriber, Run, Step } from "station-signal";
 import type { BroadcastSubscriber, BroadcastRun, BroadcastNodeRun } from "station-broadcast";
 import type { WebSocketHub } from "./ws.js";
+import type { SSEHub } from "./sse.js";
 import type { LogBuffer } from "./log-buffer.js";
 import type { LogStore } from "./log-store.js";
 import { serializeZodSchema, type SignalMeta, type BroadcastMeta } from "./metadata.js";
@@ -39,6 +40,7 @@ function serializeNodeRun(nr: BroadcastNodeRun): Record<string, unknown> {
 export class StationSignalSubscriber implements SignalSubscriber {
   private logBuffer?: LogBuffer;
   private logStore?: LogStore;
+  private sseHub?: SSEHub;
   private signalMetaMap = new Map<string, SignalMeta>();
 
   constructor(private hub: WebSocketHub, logBuffer?: LogBuffer, logStore?: LogStore) {
@@ -46,8 +48,15 @@ export class StationSignalSubscriber implements SignalSubscriber {
     this.logStore = logStore;
   }
 
+  /** Attach an SSE hub so events are also pushed to SSE clients. */
+  setSSEHub(sseHub: SSEHub): void {
+    this.sseHub = sseHub;
+  }
+
   private emit(type: string, data: Record<string, unknown>): void {
-    this.hub.broadcast({ type, timestamp: new Date().toISOString(), data });
+    const event = { type, timestamp: new Date().toISOString(), data };
+    this.hub.broadcast(event);
+    this.sseHub?.broadcast(event);
   }
 
   getSignalMeta(name: string): SignalMeta | undefined {
@@ -175,11 +184,19 @@ export class StationSignalSubscriber implements SignalSubscriber {
 
 export class StationBroadcastSubscriber implements BroadcastSubscriber {
   private broadcastMetaMap = new Map<string, BroadcastMeta>();
+  private sseHub?: SSEHub;
 
   constructor(private hub: WebSocketHub) {}
 
+  /** Attach an SSE hub so events are also pushed to SSE clients. */
+  setSSEHub(sseHub: SSEHub): void {
+    this.sseHub = sseHub;
+  }
+
   private emit(type: string, data: Record<string, unknown>): void {
-    this.hub.broadcast({ type, timestamp: new Date().toISOString(), data });
+    const event = { type, timestamp: new Date().toISOString(), data };
+    this.hub.broadcast(event);
+    this.sseHub?.broadcast(event);
   }
 
   getBroadcastMeta(name: string): BroadcastMeta | undefined {

@@ -1424,3 +1424,100 @@ a:hover {
   color: var(--charcoal);
   background: var(--concrete-dark);
 }
+
+/* ─── Login Page ─────────────────────────────────────────── */
+
+.login-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: var(--concrete);
+}
+
+.login-card {
+  width: 320px;
+  background: var(--surface);
+  border: var(--border-width) solid var(--concrete-dark);
+  border-radius: 4px;
+  padding: 2rem 1.5rem;
+}
+
+.login-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+  color: var(--charcoal);
+}
+
+.login-header h1 {
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  font-weight: 400;
+}
+
+.login-field {
+  margin-bottom: 0.75rem;
+}
+
+.login-field label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--muted);
+  margin-bottom: 0.25rem;
+}
+
+.login-field input {
+  width: 100%;
+  padding: 0.5rem 0.625rem;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--charcoal);
+  background: var(--concrete);
+  border: var(--border-width) solid var(--concrete-dark);
+  border-radius: 3px;
+  outline: none;
+  transition: border-color 150ms var(--ease-standard);
+}
+
+.login-field input:focus {
+  border-color: var(--patina);
+}
+
+.login-error {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--rust);
+  margin-bottom: 0.75rem;
+}
+
+.login-btn {
+  width: 100%;
+  justify-content: center;
+  margin-top: 0.25rem;
+}
+
+/* ─── Logout Button ──────────────────────────────────────── */
+
+.logout-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 200ms var(--ease-standard), background 200ms var(--ease-standard);
+}
+
+.logout-btn:hover {
+  color: var(--rust);
+  background: var(--concrete-dark);
+}

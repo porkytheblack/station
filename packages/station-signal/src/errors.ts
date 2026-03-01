@@ -42,3 +42,19 @@ export class SignalNotFoundError extends Error {
   }
 }
 
+export class StationRemoteError extends Error {
+  readonly code = "STATION_REMOTE_ERROR" as const;
+  readonly statusCode: number;
+  readonly remoteError?: string;
+
+  constructor(statusCode: number, remoteError?: string, remoteMessage?: string) {
+    const msg = remoteMessage
+      ? `Station server returned ${statusCode}: ${remoteMessage}`
+      : `Station server returned ${statusCode}`;
+    super(msg);
+    this.name = "StationRemoteError";
+    this.statusCode = statusCode;
+    this.remoteError = remoteError;
+  }
+}
+

@@ -1,0 +1,936 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Station — Icon Explorer</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --rust: #8B5A2B;
+    --patina: #4A6741;
+    --patina-light: #5C7C52;
+    --concrete: #F4F1EC;
+    --concrete-dark: #E8E4DC;
+    --charcoal: #1C1C1E;
+    --wire: #3A3A3C;
+    --muted: #8A8A8E;
+    --sky: #7FB2CC;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #161614;
+    color: var(--concrete);
+    font-family: 'IBM Plex Mono', monospace;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* TOP BAR */
+  header {
+    padding: 1.25rem 2rem;
+    border-bottom: 1px solid rgba(244,241,236,0.08);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+  }
+
+  .logo {
+    font-size: 0.75rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--rust);
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+
+  .logo::before {
+    content: '';
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: #6B9962;
+    animation: blink 2s ease-in-out infinite;
+  }
+
+  @keyframes blink {
+    0%,100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  .header-right {
+    font-size: 0.65rem;
+    color: rgba(244,241,236,0.25);
+    letter-spacing: 0.1em;
+  }
+
+  /* LAYOUT */
+  .workspace {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    flex: 1;
+    min-height: 0;
+  }
+
+  /* SIDEBAR */
+  aside {
+    border-right: 1px solid rgba(244,241,236,0.08);
+    padding: 1.5rem 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .aside-label {
+    font-size: 0.6rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: rgba(244,241,236,0.2);
+    padding: 0 1.25rem;
+    margin-bottom: 0.5rem;
+    margin-top: 0.75rem;
+  }
+
+  .aside-label:first-child { margin-top: 0; }
+
+  .variant-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.6rem 1.25rem;
+    cursor: pointer;
+    border: none;
+    background: none;
+    color: rgba(244,241,236,0.5);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.05em;
+    text-align: left;
+    width: 100%;
+    border-left: 2px solid transparent;
+    transition: all 0.15s;
+  }
+
+  .variant-btn:hover {
+    color: var(--concrete);
+    background: rgba(244,241,236,0.04);
+  }
+
+  .variant-btn.active {
+    color: var(--concrete);
+    border-left-color: var(--rust);
+    background: rgba(139,90,43,0.08);
+  }
+
+  .variant-btn .dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+    opacity: 0.4;
+    flex-shrink: 0;
+  }
+
+  .variant-btn.active .dot {
+    background: var(--rust);
+    opacity: 1;
+  }
+
+  /* MAIN STAGE */
+  main {
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* CONTROLS BAR */
+  .controls {
+    padding: 0.875rem 2rem;
+    border-bottom: 1px solid rgba(244,241,236,0.06);
+    display: flex;
+    align-items: center;
+    gap: 2rem;
+    flex-shrink: 0;
+  }
+
+  .control-group {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .control-label {
+    font-size: 0.6rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(244,241,236,0.25);
+  }
+
+  .size-btn {
+    width: 28px; height: 28px;
+    border: 1px solid rgba(244,241,236,0.12);
+    background: none;
+    color: rgba(244,241,236,0.4);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.6rem;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .size-btn:hover, .size-btn.active {
+    border-color: var(--rust);
+    color: var(--rust);
+    background: rgba(139,90,43,0.1);
+  }
+
+  .bg-swatch {
+    width: 22px; height: 22px;
+    border: 1.5px solid transparent;
+    cursor: pointer;
+    transition: border-color 0.15s;
+  }
+
+  .bg-swatch.active { border-color: rgba(244,241,236,0.6); }
+  .bg-swatch:hover { border-color: rgba(244,241,236,0.3); }
+
+  /* STAGE AREA */
+  .stage {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .stage-bg {
+    position: absolute;
+    inset: 0;
+    transition: background 0.3s;
+  }
+
+  .icon-wrapper {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s;
+  }
+
+  .icon-wrapper svg {
+    display: block;
+  }
+
+  /* INFO BAR */
+  .info-bar {
+    padding: 0.75rem 2rem;
+    border-top: 1px solid rgba(244,241,236,0.06);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+  }
+
+  .variant-name {
+    font-size: 0.7rem;
+    color: rgba(244,241,236,0.5);
+    letter-spacing: 0.1em;
+  }
+
+  .variant-name strong {
+    color: var(--concrete);
+    font-weight: 500;
+  }
+
+  .variant-desc {
+    font-size: 0.65rem;
+    color: rgba(244,241,236,0.25);
+    max-width: 50ch;
+    text-align: right;
+    line-height: 1.5;
+  }
+
+  /* GRAIN */
+  .stage::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 10;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Station · Icon Explorer</div>
+  <div class="header-right">dterminal / brand / 2026</div>
+</header>
+
+<div class="workspace">
+
+  <!-- SIDEBAR -->
+  <aside>
+    <div class="aside-label">Nature</div>
+    <button class="variant-btn active" data-variant="bare" onclick="setVariant(this)">
+      <span class="dot"></span>Bare tower
+    </button>
+    <button class="variant-btn" data-variant="vegetation" onclick="setVariant(this)">
+      <span class="dot"></span>Vegetation
+    </button>
+    <button class="variant-btn" data-variant="heavy-vines" onclick="setVariant(this)">
+      <span class="dot"></span>Heavy vines
+    </button>
+    <button class="variant-btn" data-variant="seagull" onclick="setVariant(this)">
+      <span class="dot"></span>Seagull landing
+    </button>
+    <button class="variant-btn" data-variant="seagull-nest" onclick="setVariant(this)">
+      <span class="dot"></span>Nest + birds
+    </button>
+
+    <div class="aside-label">Environment</div>
+    <button class="variant-btn" data-variant="chainlink" onclick="setVariant(this)">
+      <span class="dot"></span>Chainlink fence
+    </button>
+    <button class="variant-btn" data-variant="barbed" onclick="setVariant(this)">
+      <span class="dot"></span>Barbed wire top
+    </button>
+    <button class="variant-btn" data-variant="overgrown-fence" onclick="setVariant(this)">
+      <span class="dot"></span>Fence + overgrown
+    </button>
+
+    <div class="aside-label">Atmosphere</div>
+    <button class="variant-btn" data-variant="station-rings" onclick="setVariant(this)">
+      <span class="dot"></span>Station rings
+    </button>
+    <button class="variant-btn" data-variant="static-rings" onclick="setVariant(this)">
+      <span class="dot"></span>Static rings
+    </button>
+    <button class="variant-btn" data-variant="storm" onclick="setVariant(this)">
+      <span class="dot"></span>Storm / rain
+    </button>
+    <button class="variant-btn" data-variant="minimal" onclick="setVariant(this)">
+      <span class="dot"></span>Minimal / flat
+    </button>
+    <button class="variant-btn" data-variant="logotype" onclick="setVariant(this)">
+      <span class="dot"></span>With logotype
+    </button>
+  </aside>
+
+  <!-- STAGE -->
+  <main>
+    <div class="controls">
+      <div class="control-group">
+        <span class="control-label">Size</span>
+        <button class="size-btn" onclick="setSize(32, this)">32</button>
+        <button class="size-btn active" onclick="setSize(80, this)">80</button>
+        <button class="size-btn" onclick="setSize(160, this)">160</button>
+        <button class="size-btn" onclick="setSize(320, this)">320</button>
+      </div>
+      <div class="control-group">
+        <span class="control-label">Background</span>
+        <div class="bg-swatch active" style="background:#161614;" onclick="setBg('#161614', this)" title="Dark"></div>
+        <div class="bg-swatch" style="background:#F4F1EC;" onclick="setBg('#F4F1EC', this)" title="Concrete"></div>
+        <div class="bg-swatch" style="background:#7FB2CC;" onclick="setBg('#7FB2CC', this)" title="Sky"></div>
+        <div class="bg-swatch" style="background:#2C2C2E;" onclick="setBg('#2C2C2E', this)" title="Mid dark"></div>
+        <div class="bg-swatch" style="background:transparent;border:1px dashed rgba(244,241,236,0.2);" onclick="setBg('transparent', this)" title="Transparent (checker)"></div>
+      </div>
+    </div>
+
+    <div class="stage" id="stage">
+      <div class="stage-bg" id="stageBg" style="background:#161614;"></div>
+      <div class="icon-wrapper" id="iconWrapper">
+        <!-- injected by JS -->
+      </div>
+    </div>
+
+    <div class="info-bar">
+      <div class="variant-name">Variant: <strong id="variantLabel">Bare tower</strong></div>
+      <div class="variant-desc" id="variantDesc">The raw infrastructure. No decoration, no context. Just the lattice.</div>
+    </div>
+  </main>
+</div>
+
+<script>
+let currentSize = 80;
+let currentBg = '#161614';
+
+// ─── TOWER BASE (reusable function, scales to given size) ─────────────────────
+// All coords are in a 100×100 internal viewBox, scaled via SVG viewBox
+
+const RUST = '#8B5A2B';
+const RUST_LIGHT = '#A0622D';
+const PATINA = '#4A6741';
+const PATINA_LIGHT = '#5C7C52';
+const CHARCOAL = '#1C1C1E';
+const CONCRETE = '#F4F1EC';
+const MUTED = '#8A8A8E';
+
+// Tower drawn in 100x100 viewbox
+const towerBase = () => `
+  <!-- Spine -->
+  <line x1="50" y1="5" x2="50" y2="95" stroke="${RUST}" stroke-width="2.5"/>
+
+  <!-- Antenna tip -->
+  <line x1="50" y1="5" x2="50" y2="1" stroke="${RUST}" stroke-width="1.5"/>
+  <circle cx="50" cy="5" r="1.8" fill="${RUST}"/>
+
+  <!-- Section 1: top narrow (y=5-25) -->
+  <line x1="39" y1="25" x2="50" y2="5" stroke="${RUST}" stroke-width="1.5"/>
+  <line x1="61" y1="25" x2="50" y2="5" stroke="${RUST}" stroke-width="1.5"/>
+  <line x1="39" y1="25" x2="61" y2="25" stroke="${RUST}" stroke-width="1"/>
+  <line x1="39" y1="25" x2="50" y2="15" stroke="${RUST}" stroke-width="0.7" opacity="0.5"/>
+  <line x1="61" y1="25" x2="50" y2="15" stroke="${RUST}" stroke-width="0.7" opacity="0.5"/>
+
+  <!-- Section 2 (y=25-50) -->
+  <line x1="27" y1="50" x2="39" y2="25" stroke="${RUST}" stroke-width="1.8"/>
+  <line x1="73" y1="50" x2="61" y2="25" stroke="${RUST}" stroke-width="1.8"/>
+  <line x1="27" y1="50" x2="73" y2="50" stroke="${RUST}" stroke-width="1.2"/>
+  <line x1="27" y1="50" x2="61" y2="25" stroke="${RUST}" stroke-width="0.7" opacity="0.4"/>
+  <line x1="73" y1="50" x2="39" y2="25" stroke="${RUST}" stroke-width="0.7" opacity="0.4"/>
+  <line x1="32" y1="37" x2="68" y2="37" stroke="${RUST}" stroke-width="0.6" opacity="0.4"/>
+
+  <!-- Section 3: platform (y=50-70) -->
+  <line x1="18" y1="70" x2="27" y2="50" stroke="${RUST}" stroke-width="2"/>
+  <line x1="82" y1="70" x2="73" y2="50" stroke="${RUST}" stroke-width="2"/>
+  <line x1="16" y1="70" x2="84" y2="70" stroke="${RUST}" stroke-width="1.8"/>
+  <rect x="16" y="69" width="68" height="2.5" fill="${RUST}" opacity="0.25"/>
+  <line x1="18" y1="70" x2="73" y2="50" stroke="${RUST}" stroke-width="0.7" opacity="0.4"/>
+  <line x1="82" y1="70" x2="27" y2="50" stroke="${RUST}" stroke-width="0.7" opacity="0.4"/>
+  <line x1="22" y1="60" x2="78" y2="60" stroke="${RUST}" stroke-width="0.6" opacity="0.35"/>
+
+  <!-- Section 4: base wide (y=70-88) -->
+  <line x1="10" y1="88" x2="18" y2="70" stroke="${RUST}" stroke-width="2.2"/>
+  <line x1="90" y1="88" x2="82" y2="70" stroke="${RUST}" stroke-width="2.2"/>
+  <line x1="8" y1="88" x2="92" y2="88" stroke="${RUST}" stroke-width="1.5"/>
+  <line x1="10" y1="88" x2="82" y2="70" stroke="${RUST}" stroke-width="0.9" opacity="0.35"/>
+  <line x1="90" y1="88" x2="18" y2="70" stroke="${RUST}" stroke-width="0.9" opacity="0.35"/>
+  <line x1="13" y1="79" x2="87" y2="79" stroke="${RUST}" stroke-width="0.6" opacity="0.4"/>
+  <!-- diamond -->
+  <path d="M50 72 L55 79 L50 86 L45 79 Z" stroke="${RUST}" stroke-width="0.7" fill="none" opacity="0.3"/>
+
+  <!-- Concrete base -->
+  <rect x="43" y="88" width="14" height="5" fill="${RUST}" opacity="0.4"/>
+  <rect x="44" y="93" width="12" height="3" fill="${RUST}" opacity="0.25"/>
+`;
+
+// ─── VARIANTS ────────────────────────────────────────────────────────────────
+
+const variants = {
+
+  bare: {
+    label: 'Bare tower',
+    desc: 'The raw infrastructure. No decoration, no context. Just the lattice.',
+    render: () => `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">${towerBase()}</svg>`
+  },
+
+  vegetation: {
+    label: 'Vegetation',
+    desc: 'Light overgrowth — nature reclaiming without winning. Patina of time.',
+    render: () => `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+      ${towerBase()}
+      <!-- ground grass -->
+      <path d="M0 96 Q8 90 16 94 Q24 89 34 93 Q42 88 50 92 Q58 88 66 93 Q74 89 84 93 Q92 90 100 96" stroke="${PATINA}" stroke-width="1" fill="rgba(74,103,65,0.12)"/>
+      <path d="M0 98 Q12 93 24 97 Q36 92 50 96 Q64 92 76 96 Q88 93 100 98" stroke="${PATINA}" stroke-width="0.7" fill="none" opacity="0.5"/>
+      <!-- vines on base left -->
+      <path d="M18 88 Q14 82 16 76 Q18 80 18 86" stroke="${PATINA}" stroke-width="1" fill="none" opacity="0.7"/>
+      <path d="M16 80 Q12 77 10 79" stroke="${PATINA}" stroke-width="0.8" fill="none" opacity="0.6"/>
+      <!-- vines on base right -->
+      <path d="M82 88 Q86 82 84 76 Q82 80 82 86" stroke="${PATINA}" stroke-width="1" fill="none" opacity="0.7"/>
+      <path d="M84 80 Q88 77 90 79" stroke="${PATINA}" stroke-width="0.8" fill="none" opacity="0.6"/>
+      <!-- small leaf clusters -->
+      <ellipse cx="13" cy="78" rx="3" ry="2" fill="${PATINA}" opacity="0.35" transform="rotate(-20,13,78)"/>
+      <ellipse cx="87" cy="78" rx="3" ry="2" fill="${PATINA}" opacity="0.35" transform="rotate(20,87,78)"/>
+    </svg>`
+  },
+
+  'heavy-vines': {
+    label: 'Heavy vines',
+    desc: 'Aggressive overgrowth mid-tower. The station keeps going regardless.',
+    render: () => `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+      ${towerBase()}
+      <!-- Dense ground mass -->
+      <path d="M0 96 Q10 88 22 92 Q32 85 44 91 Q50 87 56 91 Q68 85 78 92 Q90 88 100 96" fill="rgba(74,103,65,0.25)" stroke="${PATINA}" stroke-width="0.8"/>
+      <!-- Left heavy vine climbing to platform level -->
+      <path d="M10 96 Q6 86 10 78 Q12 70 18 70" stroke="${PATINA_LIGHT}" stroke-width="1.5" fill="none"/>
+      <path d="M10 88 Q4 84 2 80 Q6 82 10 82" stroke="${PATINA}" stroke-width="1" fill="none" opacity="0.7"/>
+      <path d="M10 80 Q4 76 5 72" stroke="${PATINA}" stroke-width="0.9" fill="none" opacity="0.6"/>
+      <!-- Right heavy vine -->
+      <path d="M90 96 Q94 86 90 78 Q88 70 82 70" stroke="${PATINA_LIGHT}" stroke-width="1.5" fill="none"/>
+      <path d="M90 88 Q96 84 98 80 Q94 82 90 82" stroke="${PATINA}" stroke-width="1" fill="none" opacity="0.7"/>
+      <path d="M90 80 Q96 76 95 72" stroke="${PATINA}" stroke-width="0.9" fill="none" opacity="0.6"/>
+      <!-- Foliage blobs left -->
+      <ellipse cx="8" cy="77" rx="5" ry="4" fill="${PATINA}" opacity="0.4"/>
+      <ellipse cx="4" cy="82" rx="4" ry="3" fill="${PATINA_LIGHT}" opacity="0.3"/>
+      <ellipse cx="13" cy="72" rx="4" ry="3" fill="${PATINA}" opacity="0.35"/>
+      <!-- Foliage blobs right -->
+      <ellipse cx="92" cy="77" rx="5" ry="4" fill="${PATINA}" opacity="0.4"/>
+      <ellipse cx="96" cy="82" rx="4" ry="3" fill="${PATINA_LIGHT}" opacity="0.3"/>
+      <ellipse cx="87" cy="72" rx="4" ry="3" fill="${PATINA}" opacity="0.35"/>
+      <!-- Vines wrapping mid platform -->
+      <path d="M19 70 Q15 65 18 60" stroke="${PATINA}" stroke-width="0.9" fill="none" opacity="0.5"/>
+      <path d="M81 70 Q85 65 82 60" stroke="${PATINA}" stroke-width="0.9" fill="none" opacity="0.5"/>
+      <ellipse cx="17" cy="63" rx="3" ry="2.5" fill="${PATINA}" opacity="0.3"/>
+      <ellipse cx="83" cy="63" rx="3" ry="2.5" fill="${PATINA}" opacity="0.3"/>
+    </svg>`
+  },
+
+  seagull: {
+    label: 'Seagull landing',
+    desc: 'A seagull banking in from the top right. Indifferent to the station. Choosing this tower as home.',
+    render: () => `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+      ${towerBase()}
+      <!-- Flight path dashes -->
+      <path d="M95 4 Q88 5 80 8 Q72 10 66 12" stroke="${CHARCOAL}" stroke-width="0.6" fill="none" stroke-dasharray="2 3" opacity="0.3"/>
+      <!-- Seagull body -->
+      <ellipse cx="66" cy="13" rx="6" ry="2.5" fill="${CHARCOAL}" transform="rotate(-12,66,13)"/>
+      <!-- Head -->
+      <ellipse cx="61" cy="11.5" rx="3.2" ry="2.8" fill="${CHARCOAL}"/>
+      <!-- Beak -->
+      <path d="M58.5 12 L54.5 13.5 L58 14.5" fill="${RUST}" stroke="none"/>
+      <!-- Near wing (dipping down — banking) -->
+      <path d="M64 12 Q57 5 46 8 Q52 11 60 12" fill="${CHARCOAL}" stroke="none"/>
+      <!-- Far wing (raised) -->
+      <path d="M67 12.5 Q76 6 90 2 Q80 7 72 12" fill="#3A3A3C"/>
+      <!-- Wing highlight -->
+      <path d="M64 12 Q57 5 46 8" stroke="#5A5A5E" stroke-width="0.4" fill="none"/>
+      <path d="M67 12.5 Q76 6 90 2" stroke="#5A5A5E" stroke-width="0.4" fill="none"/>
+      <!-- Tail -->
+      <path d="M71 14 Q77 17 74 20 Q72 17 71 14" fill="${CHARCOAL}"/>
+      <!-- Eye -->
+      <circle cx="60" cy="11" r="0.8" fill="${CONCRETE}"/>
+      <circle cx="60" cy="11" r="0.35" fill="#0A0A0A"/>
+    </svg>`
+  },
+
+  'seagull-nest': {
+    label: 'Nest + birds',
+    desc: 'A nest has formed at the platform. Two birds. The tower has become habitat.',
+    render: () => `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+      ${towerBase()}
+      <!-- Nest on platform bar (y=70) centered on tower tip area (~x=42-58) -->
+      <path d="M42 70 Q44 66 50 65 Q56 66 58 70" stroke="#8B6914" stroke-width="1.2" fill="none" opacity="0.7"/>
+      <path d="M43 70 Q46 67 50 66 Q54 67 57 70" stroke="#A07820" stroke-width="0.8" fill="rgba(139,105,20,0.15)"/>
+      <!-- nest sticks -->
+      <line x1="43" y1="70" x2="41" y2="68" stroke="#8B6914" stroke-width="0.7" opacity="0.6"/>
+      <line x1="46" y1="68" x2="44" y2="66" stroke="#8B6914" stroke-width="0.6" opacity="0.5"/>
+      <line x1="54" y1="68" x2="56" y2="66" stroke="#8B6914" stroke-width="0.6" opacity="0.5"/>
+      <line x1="57" y1="70" x2="59" y2="68" stroke="#8B6914" stroke-width="0.7" opacity="0.6"/>
+      <!-- Bird 1 - sitting left on nest -->
+      <ellipse cx="46" cy="65.5" rx="3" ry="2" fill="${CHARCOAL}"/>
+      <circle cx="44" cy="64.5" r="1.8" fill="${CHARCOAL}"/>
+      <path d="M42.8 64.8 L40.5 65.8 L42.8 66.2" fill="${RUST}" stroke="none"/>
+      <circle cx="43.5" cy="64.2" r="0.5" fill="${CONCRETE}"/>
+      <circle cx="43.5" cy="64.2" r="0.2" fill="#0A0A0A"/>
+      <!-- Bird 2 - sitting right -->
+      <ellipse cx="54" cy="65.5" rx="3" ry="2" fill="${CHARCOAL}"/>
+      <circle cx="56" cy="64.5" r="1.8" fill="${CHARCOAL}"/>
+      <path d="M57.2 64.8 L59.5 65.8 L57.2 66.2" fill="${RUST}" stroke="none"/>
+      <circle cx="56.5" cy="64.2" r="0.5" fill="${CONCRETE}"/>
+      <circle cx="56.5" cy="64.2" r="0.2" fill="#0A0A0A"/>
+      <!-- Ground vegetation -->
+      <path d="M0 96 Q12 90 25 94 Q38 88 50 93 Q62 88 75 93 Q88 90 100 96" stroke="${PATINA}" stroke-width="0.8" fill="rgba(74,103,65,0.1)"/>
+    </svg>`
+  },
+
+  chainlink: {
+    label: 'Chainlink fence',
+    desc: 'The tower behind a chain-link fence. Access restricted — but the station isn\'t.',
+    render: () => `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+      ${towerBase()}
+      <!-- Fence posts -->
+      <line x1="5" y1="58" x2="5" y2="96" stroke="${CHARCOAL}" stroke-width="1.2"/>
+      <line x1="95" y1="58" x2="95" y2="96" stroke="${CHARCOAL}" stroke-width="1.2"/>
+      <line x1="30" y1="60" x2="30" y2="96" stroke="${CHARCOAL}" stroke-width="0.8"/>
+      <line x1="55" y1="60" x2="55" y2="96" stroke="${CHARCOAL}" stroke-width="0.8"/>
+      <line x1="80" y1="60" x2="80" y2="96" stroke="${CHARCOAL}" stroke-width="0.8"/>
+      <!-- Top horizontal rail -->
+      <line x1="3" y1="60" x2="97" y2="60" stroke="${CHARCOAL}" stroke-width="1"/>
+      <!-- Bottom rail -->
+      <line x1="3" y1="92" x2="97" y2="92" stroke="${CHARCOAL}" stroke-width="0.8"/>
+      <!-- Chain-link diamond pattern - drawn as X-crossings in a grid -->
+      <!-- Row 1 of diamonds (y=60-68) -->
+      <line x1="3" y1="60" x2="11" y2="68" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="11" y1="60" x2="3" y2="68" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="11" y1="60" x2="19" y2="68" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="19" y1="60" x2="11" y2="68" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="19" y1="60" x2="27" y2="68" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="27" y1="60" x2="19" y2="68" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="27" y1="60" x2="35" y2="68" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="35" y1="60" x2="27" y2="68" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="35" y1="60" x2="43" y2="68" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="43" y1="60" x2="35" y2="68" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="43" y1="60" x2="51" y2="68" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="51" y1="60" x2="43" y2="68" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="51" y1="60" x2="59" y2="68" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="59" y1="60" x2="51" y2="68" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="59" y1="60" x2="67" y2="68" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="67" y1="60" x2="59" y2="68" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="67" y1="60" x2="75" y2="68" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="75" y1="60" x2="67" y2="68" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="75" y1="60" x2="83" y2="68" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="83" y1="60" x2="75" y2="68" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="83" y1="60" x2="91" y2="68" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="91" y1="60" x2="83" y2="68" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="91" y1="60" x2="97" y2="66" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <!-- Row 2 (y=68-76) -->
+      <line x1="3" y1="68" x2="11" y2="76" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="11" y1="68" x2="3" y2="76" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="11" y1="68" x2="19" y2="76" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="19" y1="68" x2="11" y2="76" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="19" y1="68" x2="27" y2="76" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="27" y1="68" x2="19" y2="76" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="27" y1="68" x2="35" y2="76" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="35" y1="68" x2="27" y2="76" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="35" y1="68" x2="43" y2="76" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="43" y1="68" x2="35" y2="76" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="43" y1="68" x2="51" y2="76" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="51" y1="68" x2="43" y2="76" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="51" y1="68" x2="59" y2="76" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="59" y1="68" x2="51" y2="76" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="59" y1="68" x2="67" y2="76" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="67" y1="68" x2="59" y2="76" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="67" y1="68" x2="75" y2="76" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="75" y1="68" x2="67" y2="76" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="75" y1="68" x2="83" y2="76" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="83" y1="68" x2="75" y2="76" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="83" y1="68" x2="91" y2="76" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="91" y1="68" x2="83" y2="76" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <!-- Row 3 (y=76-84) -->
+      <line x1="3" y1="76" x2="11" y2="84" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="11" y1="76" x2="3" y2="84" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="11" y1="76" x2="19" y2="84" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="19" y1="76" x2="11" y2="84" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="19" y1="76" x2="27" y2="84" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="27" y1="76" x2="19" y2="84" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="27" y1="76" x2="35" y2="84" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="35" y1="76" x2="27" y2="84" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="35" y1="76" x2="43" y2="84" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="43" y1="76" x2="35" y2="84" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="43" y1="76" x2="51" y2="84" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="51" y1="76" x2="43" y2="84" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="51" y1="76" x2="59" y2="84" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="59" y1="76" x2="51" y2="84" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="59" y1="76" x2="67" y2="84" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="67" y1="76" x2="59" y2="84" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="67" y1="76" x2="75" y2="84" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="75" y1="76" x2="67" y2="84" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="75" y1="76" x2="83" y2="84" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="83" y1="76" x2="75" y2="84" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="83" y1="76" x2="91" y2="84" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="91" y1="76" x2="83" y2="84" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <!-- Row 4 (y=84-92) -->
+      <line x1="3" y1="84" x2="11" y2="92" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="11" y1="84" x2="3" y2="92" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="19" y1="84" x2="11" y2="92" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="11" y1="84" x2="19" y2="92" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="27" y1="84" x2="19" y2="92" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="19" y1="84" x2="27" y2="92" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="35" y1="84" x2="27" y2="92" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="27" y1="84" x2="35" y2="92" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="43" y1="84" x2="35" y2="92" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="35" y1="84" x2="43" y2="92" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="51" y1="84" x2="43" y2="92" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="43" y1="84" x2="51" y2="92" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="59" y1="84" x2="51" y2="92" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="51" y1="84" x2="59" y2="92" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="67" y1="84" x2="59" y2="92" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="59" y1="84" x2="67" y2="92" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="75" y1="84" x2="67" y2="92" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="67" y1="84" x2="75" y2="92" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="83" y1="84" x2="75" y2="92" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="75" y1="84" x2="83" y2="92" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="91" y1="84" x2="83" y2="92" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <line x1="83" y1="84" x2="91" y2="92" stroke="${MUTED}" stroke-width="0.5" opacity="0.5"/>
+      <!-- Barbed wire hint on top of fence -->
+      <line x1="2" y1="58" x2="98" y2="58" stroke="${CHARCOAL}" stroke-width="0.8"/>
+    </svg>`
+  },
+
+  barbed: {
+    label: 'Barbed wire top',
+    desc: 'Coiled barbed wire crowning the fence. No-nonsense. Don\'t touch the station.',
+    render: () => `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+      ${towerBase()}
+      <!-- Fence posts and rails (simplified) -->
+      <line x1="5" y1="62" x2="5" y2="96" stroke="${CHARCOAL}" stroke-width="1.2"/>
+      <line x1="95" y1="62" x2="95" y2="96" stroke="${CHARCOAL}" stroke-width="1.2"/>
+      <line x1="3" y1="64" x2="97" y2="64" stroke="${CHARCOAL}" stroke-width="0.8"/>
+      <line x1="3" y1="92" x2="97" y2="92" stroke="${CHARCOAL}" stroke-width="0.8"/>
+      <!-- Simple diagonal chain pattern (lighter) -->
+      <line x1="3" y1="64" x2="97" y2="92" stroke="${MUTED}" stroke-width="0.4" opacity="0.25"/>
+      <line x1="3" y1="92" x2="97" y2="64" stroke="${MUTED}" stroke-width="0.4" opacity="0.25"/>
+      <line x1="3" y1="64" x2="50" y2="92" stroke="${MUTED}" stroke-width="0.4" opacity="0.2"/>
+      <line x1="3" y1="92" x2="50" y2="64" stroke="${MUTED}" stroke-width="0.4" opacity="0.2"/>
+      <line x1="50" y1="64" x2="97" y2="92" stroke="${MUTED}" stroke-width="0.4" opacity="0.2"/>
+      <line x1="50" y1="92" x2="97" y2="64" stroke="${MUTED}" stroke-width="0.4" opacity="0.2"/>
+      <!-- Barbed wire coil on top rail -->
+      <path d="M3 61 Q8 58 13 61 Q18 58 23 61 Q28 58 33 61 Q38 58 43 61 Q48 58 53 61 Q58 58 63 61 Q68 58 73 61 Q78 58 83 61 Q88 58 93 61 Q97 59 97 61" stroke="${CHARCOAL}" stroke-width="0.9" fill="none"/>
+      <!-- Barb spikes -->
+      <line x1="8" y1="58" x2="6" y2="55" stroke="${CHARCOAL}" stroke-width="0.7"/>
+      <line x1="8" y1="58" x2="10" y2="55" stroke="${CHARCOAL}" stroke-width="0.7"/>
+      <line x1="23" y1="58" x2="21" y2="55" stroke="${CHARCOAL}" stroke-width="0.7"/>
+      <line x1="23" y1="58" x2="25" y2="55" stroke="${CHARCOAL}" stroke-width="0.7"/>
+      <line x1="38" y1="58" x2="36" y2="55" stroke="${CHARCOAL}" stroke-width="0.7"/>
+      <line x1="38" y1="58" x2="40" y2="55" stroke="${CHARCOAL}" stroke-width="0.7"/>
+      <line x1="53" y1="58" x2="51" y2="55" stroke="${CHARCOAL}" stroke-width="0.7"/>
+      <line x1="53" y1="58" x2="55" y2="55" stroke="${CHARCOAL}" stroke-width="0.7"/>
+      <line x1="68" y1="58" x2="66" y2="55" stroke="${CHARCOAL}" stroke-width="0.7"/>
+      <line x1="68" y1="58" x2="70" y2="55" stroke="${CHARCOAL}" stroke-width="0.7"/>
+      <line x1="83" y1="58" x2="81" y2="55" stroke="${CHARCOAL}" stroke-width="0.7"/>
+      <line x1="83" y1="58" x2="85" y2="55" stroke="${CHARCOAL}" stroke-width="0.7"/>
+    </svg>`
+  },
+
+  'overgrown-fence': {
+    label: 'Fence + overgrown',
+    desc: 'Chain-link fence with vines taking over. The barrier and the tower, both claimed.',
+    render: () => `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+      ${towerBase()}
+      <!-- Fence base -->
+      <line x1="5" y1="60" x2="5" y2="96" stroke="${CHARCOAL}" stroke-width="1.2"/>
+      <line x1="95" y1="60" x2="95" y2="96" stroke="${CHARCOAL}" stroke-width="1.2"/>
+      <line x1="3" y1="62" x2="97" y2="62" stroke="${CHARCOAL}" stroke-width="0.9"/>
+      <line x1="3" y1="92" x2="97" y2="92" stroke="${CHARCOAL}" stroke-width="0.8"/>
+      <!-- Chain diagonals (peeking through) -->
+      <line x1="3" y1="62" x2="25" y2="92" stroke="${MUTED}" stroke-width="0.4" opacity="0.3"/>
+      <line x1="25" y1="62" x2="3" y2="92" stroke="${MUTED}" stroke-width="0.4" opacity="0.3"/>
+      <line x1="75" y1="62" x2="97" y2="92" stroke="${MUTED}" stroke-width="0.4" opacity="0.3"/>
+      <line x1="97" y1="62" x2="75" y2="92" stroke="${MUTED}" stroke-width="0.4" opacity="0.3"/>
+      <!-- Dense overgrowth covering central fence section -->
+      <path d="M20 92 Q25 82 32 78 Q28 84 25 92" fill="${PATINA}" opacity="0.45"/>
+      <path d="M30 92 Q38 76 46 72 Q40 80 36 92" fill="${PATINA_LIGHT}" opacity="0.35"/>
+      <path d="M44 92 Q50 74 56 70 Q52 78 50 92" fill="${PATINA}" opacity="0.4"/>
+      <path d="M54 92 Q62 76 70 72 Q64 80 60 92" fill="${PATINA_LIGHT}" opacity="0.35"/>
+      <path d="M64 92 Q70 82 78 78 Q74 84 72 92" fill="${PATINA}" opacity="0.4"/>
+      <!-- Vine tendrils climbing up fence -->
+      <path d="M32 92 Q30 82 34 74 Q32 80 33 70" stroke="${PATINA_LIGHT}" stroke-width="1" fill="none"/>
+      <path d="M68 92 Q70 82 66 74 Q68 80 67 70" stroke="${PATINA_LIGHT}" stroke-width="1" fill="none"/>
+      <!-- Leaves along tendrils -->
+      <ellipse cx="33" cy="78" rx="3" ry="2" fill="${PATINA}" opacity="0.5" transform="rotate(15,33,78)"/>
+      <ellipse cx="67" cy="78" rx="3" ry="2" fill="${PATINA}" opacity="0.5" transform="rotate(-15,67,78)"/>
+      <ellipse cx="34" cy="71" rx="2.5" ry="1.8" fill="${PATINA_LIGHT}" opacity="0.4" transform="rotate(-10,34,71)"/>
+      <ellipse cx="66" cy="71" rx="2.5" ry="1.8" fill="${PATINA_LIGHT}" opacity="0.4" transform="rotate(10,66,71)"/>
+    </svg>`
+  },
+
+  'station-rings': {
+    label: 'Station rings',
+    desc: 'Animated transmission rings from the antenna tip. It\'s transmitting. It always is.',
+    render: () => {
+      const style = `
+        <style>
+          @keyframes ring-out {
+            0% { r: 0; opacity: 0.7; }
+            100% { r: 45; opacity: 0; }
+          }
+          .ring1 { animation: ring-out 3s ease-out infinite; }
+          .ring2 { animation: ring-out 3s ease-out 1s infinite; }
+          .ring3 { animation: ring-out 3s ease-out 2s infinite; }
+        </style>
+      `;
+      return `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+        ${style}
+        ${towerBase()}
+        <circle cx="50" cy="5" r="0" stroke="#6B9962" stroke-width="0.8" fill="none" class="ring1"/>
+        <circle cx="50" cy="5" r="0" stroke="#6B9962" stroke-width="0.8" fill="none" class="ring2"/>
+        <circle cx="50" cy="5" r="0" stroke="#6B9962" stroke-width="0.8" fill="none" class="ring3"/>
+      </svg>`;
+    }
+  },
+
+  'static-rings': {
+    label: 'Static rings',
+    desc: 'Frozen transmission rings — three concentric arcs at different expansion stages. No animation. Use as a static mark.',
+    render: () => `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+      ${towerBase()}
+      <!-- Ring 1 — small, nearly fresh, high opacity -->
+      <circle cx="50" cy="5" r="12" stroke="#6B9962" stroke-width="0.9" fill="none" opacity="0.7"/>
+      <!-- Ring 2 — mid expansion -->
+      <circle cx="50" cy="5" r="26" stroke="#6B9962" stroke-width="0.75" fill="none" opacity="0.45"/>
+      <!-- Ring 3 — large, near-faded -->
+      <circle cx="50" cy="5" r="42" stroke="#6B9962" stroke-width="0.6" fill="none" opacity="0.2"/>
+    </svg>`
+  },
+
+  storm: {
+    label: 'Storm / rain',
+    desc: 'Rain streaks, heavy sky. The station doesn\'t care. That\'s the whole point.',
+    render: () => `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+      <!-- Storm sky -->
+      <rect x="0" y="0" width="100" height="100" fill="none"/>
+      <!-- Rain streaks -->
+      <g opacity="0.35" stroke="#8A8A8E" stroke-width="0.5">
+        <line x1="5" y1="0" x2="2" y2="12"/>
+        <line x1="14" y1="0" x2="11" y2="12"/>
+        <line x1="22" y1="0" x2="19" y2="14"/>
+        <line x1="31" y1="0" x2="28" y2="13"/>
+        <line x1="40" y1="0" x2="37" y2="11"/>
+        <line x1="48" y1="0" x2="45" y2="13"/>
+        <line x1="57" y1="0" x2="54" y2="12"/>
+        <line x1="65" y1="0" x2="62" y2="14"/>
+        <line x1="73" y1="0" x2="70" y2="13"/>
+        <line x1="82" y1="0" x2="79" y2="12"/>
+        <line x1="90" y1="0" x2="87" y2="11"/>
+        <line x1="98" y1="0" x2="95" y2="14"/>
+        <line x1="8" y1="15" x2="5" y2="27"/>
+        <line x1="17" y1="18" x2="14" y2="30"/>
+        <line x1="26" y1="14" x2="23" y2="26"/>
+        <line x1="34" y1="16" x2="31" y2="28"/>
+        <line x1="43" y1="15" x2="40" y2="27"/>
+        <line x1="52" y1="18" x2="49" y2="30"/>
+        <line x1="60" y1="15" x2="57" y2="28"/>
+        <line x1="69" y1="17" x2="66" y2="29"/>
+        <line x1="77" y1="14" x2="74" y2="26"/>
+        <line x1="86" y1="16" x2="83" y2="28"/>
+        <line x1="95" y1="15" x2="92" y2="27"/>
+        <line x1="3" y1="30" x2="0" y2="42"/>
+        <line x1="12" y1="32" x2="9" y2="44"/>
+        <line x1="20" y1="28" x2="17" y2="40"/>
+        <line x1="29" y1="30" x2="26" y2="42"/>
+        <line x1="38" y1="29" x2="35" y2="41"/>
+        <line x1="46" y1="32" x2="43" y2="44"/>
+        <line x1="55" y1="28" x2="52" y2="40"/>
+        <line x1="63" y1="31" x2="60" y2="43"/>
+        <line x1="72" y1="29" x2="69" y2="42"/>
+        <line x1="80" y1="30" x2="77" y2="43"/>
+        <line x1="89" y1="28" x2="86" y2="41"/>
+        <line x1="97" y1="31" x2="94" y2="43"/>
+      </g>
+      ${towerBase()}
+      <!-- Puddle at base -->
+      <ellipse cx="50" cy="96" rx="18" ry="2.5" fill="none" stroke="#5A6A72" stroke-width="0.6" opacity="0.4"/>
+      <ellipse cx="50" cy="96" rx="10" ry="1.2" fill="#4A5A62" opacity="0.15"/>
+    </svg>`
+  },
+
+  minimal: {
+    label: 'Minimal / flat',
+    desc: 'Stripped to geometry. App icon mode — single color, clean reduction.',
+    render: () => `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+      <!-- Flat minimal tower — just outlines, single weight -->
+      <!-- Outer silhouette shape -->
+      <path d="M50 2 L39 25 L27 50 L18 70 L10 88 L90 88 L82 70 L73 50 L61 25 Z"
+        stroke="${RUST}" stroke-width="1.5" fill="none"/>
+      <!-- Spine -->
+      <line x1="50" y1="2" x2="50" y2="88" stroke="${RUST}" stroke-width="1"/>
+      <!-- Platform line -->
+      <line x1="16" y1="70" x2="84" y2="70" stroke="${RUST}" stroke-width="1.2"/>
+      <!-- 2 horizontals -->
+      <line x1="39" y1="25" x2="61" y2="25" stroke="${RUST}" stroke-width="0.8"/>
+      <line x1="27" y1="50" x2="73" y2="50" stroke="${RUST}" stroke-width="0.8"/>
+      <!-- Base -->
+      <rect x="43" y="88" width="14" height="5" fill="${RUST}" opacity="0.5"/>
+      <!-- Tip circle -->
+      <circle cx="50" cy="2" r="1.5" fill="${RUST}"/>
+    </svg>`
+  },
+
+  logotype: {
+    label: 'With logotype',
+    desc: 'Icon + wordmark. Full brand lockup — how it appears in product headers.',
+    render: () => `<svg viewBox="0 0 200 80" xmlns="http://www.w3.org/2000/svg">
+      <!-- Tower (scaled and shifted left) -->
+      <g transform="translate(5, 0) scale(0.75)">
+        <line x1="50" y1="5" x2="50" y2="95" stroke="${RUST}" stroke-width="2.5"/>
+        <line x1="50" y1="5" x2="50" y2="1" stroke="${RUST}" stroke-width="1.5"/>
+        <circle cx="50" cy="5" r="1.8" fill="${RUST}"/>
+        <line x1="39" y1="25" x2="50" y2="5" stroke="${RUST}" stroke-width="1.5"/>
+        <line x1="61" y1="25" x2="50" y2="5" stroke="${RUST}" stroke-width="1.5"/>
+        <line x1="39" y1="25" x2="61" y2="25" stroke="${RUST}" stroke-width="1"/>
+        <line x1="27" y1="50" x2="39" y2="25" stroke="${RUST}" stroke-width="1.8"/>
+        <line x1="73" y1="50" x2="61" y2="25" stroke="${RUST}" stroke-width="1.8"/>
+        <line x1="27" y1="50" x2="73" y2="50" stroke="${RUST}" stroke-width="1.2"/>
+        <line x1="27" y1="50" x2="61" y2="25" stroke="${RUST}" stroke-width="0.7" opacity="0.4"/>
+        <line x1="73" y1="50" x2="39" y2="25" stroke="${RUST}" stroke-width="0.7" opacity="0.4"/>
+        <line x1="18" y1="70" x2="27" y2="50" stroke="${RUST}" stroke-width="2"/>
+        <line x1="82" y1="70" x2="73" y2="50" stroke="${RUST}" stroke-width="2"/>
+        <line x1="16" y1="70" x2="84" y2="70" stroke="${RUST}" stroke-width="1.8"/>
+        <line x1="10" y1="88" x2="18" y2="70" stroke="${RUST}" stroke-width="2.2"/>
+        <line x1="90" y1="88" x2="82" y2="70" stroke="${RUST}" stroke-width="2.2"/>
+        <line x1="8" y1="88" x2="92" y2="88" stroke="${RUST}" stroke-width="1.5"/>
+        <rect x="43" y="88" width="14" height="5" fill="${RUST}" opacity="0.4"/>
+      </g>
+      <!-- Wordmark -->
+      <text x="80" y="36" 
+        font-family="'IBM Plex Mono', monospace" 
+        font-size="22" 
+        font-weight="500"
+        letter-spacing="2"
+        fill="${RUST}">STATION</text>
+      <!-- Tagline -->
+      <text x="81" y="52"
+        font-family="'IBM Plex Mono', monospace"
+        font-size="7"
+        font-weight="300"
+        letter-spacing="2.5"
+        fill="${MUTED}">BY DTERMINAL</text>
+      <!-- Divider line between icon and wordmark -->
+      <line x1="72" y1="18" x2="72" y2="65" stroke="${RUST}" stroke-width="0.7" opacity="0.3"/>
+    </svg>`
+  }
+};
+
+// ─── STATE & RENDER ───────────────────────────────────────────────────────────
+
+let currentVariant = 'bare';
+
+function render() {
+  const v = variants[currentVariant];
+  const wrapper = document.getElementById('iconWrapper');
+  wrapper.innerHTML = v.render();
+  const svg = wrapper.querySelector('svg');
+  if (svg) {
+    // For logotype, keep wide aspect
+    if (currentVariant === 'logotype') {
+      svg.style.width = Math.round(currentSize * 2.5) + 'px';
+      svg.style.height = currentSize + 'px';
+    } else {
+      svg.style.width = currentSize + 'px';
+      svg.style.height = currentSize + 'px';
+    }
+  }
+  document.getElementById('variantLabel').textContent = v.label;
+  document.getElementById('variantDesc').textContent = v.desc;
+}
+
+function setVariant(btn) {
+  document.querySelectorAll('.variant-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  currentVariant = btn.dataset.variant;
+  render();
+}
+
+function setSize(size, btn) {
+  currentSize = size;
+  document.querySelectorAll('.size-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  render();
+}
+
+function setBg(color, swatch) {
+  currentBg = color;
+  document.querySelectorAll('.bg-swatch').forEach(s => s.classList.remove('active'));
+  swatch.classList.add('active');
+  const bg = document.getElementById('stageBg');
+  if (color === 'transparent') {
+    bg.style.background = 'repeating-conic-gradient(#2a2a2a 0% 25%, #1a1a1a 0% 50%) 0 0 / 16px 16px';
+  } else {
+    bg.style.background = color;
+  }
+}
+
+// Initial render
+render();
+</script>
+
+</body>
+</html>

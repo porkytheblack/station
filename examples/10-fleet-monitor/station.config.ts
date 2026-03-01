@@ -8,4 +8,8 @@ export default defineConfig({
   broadcastsDir: "./broadcasts",
   adapter: new SqliteAdapter({ dbPath: "./jobs.db" }),
   broadcastAdapter: new BroadcastSqliteAdapter({ dbPath: "./jobs.db" }),
+  auth: {
+    username: "admin",
+    password: "station",
+  },
 });

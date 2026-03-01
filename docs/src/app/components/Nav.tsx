@@ -42,7 +42,7 @@ export function Nav() {
         })}
         <li>
           <a
-            href="https://github.com/dterminal/station"
+            href="https://github.com/porkytheblack/station"
             target="_blank"
             rel="noopener noreferrer"
           >

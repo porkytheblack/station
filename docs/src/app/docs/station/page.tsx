@@ -170,6 +170,16 @@ export default defineConfig({
             <td>Controls Station&rsquo;s own console output verbosity.</td>
           </tr>
           <tr>
+            <td><code>auth</code></td>
+            <td><code>{`{ username, password, sessionTtlMs? }`}</code></td>
+            <td>&mdash;</td>
+            <td>
+              Dashboard login credentials. When set, the dashboard presents a
+              login screen. <code>sessionTtlMs</code> controls session expiry
+              (default: 86,400,000 ms / 24 hours). Omit to disable auth.
+            </td>
+          </tr>
+          <tr>
             <td><code>runner</code></td>
             <td><code>{`Partial<RunnerConfig>`}</code></td>
             <td>&mdash;</td>

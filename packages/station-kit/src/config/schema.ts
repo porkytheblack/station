@@ -1,6 +1,12 @@
 import type { SignalQueueAdapter } from "station-signal";
 import type { BroadcastQueueAdapter } from "station-broadcast";
 
+export interface AuthConfig {
+  username: string;
+  password: string;
+  sessionTtlMs?: number;
+}
+
 export interface RunnerConfig {
   pollIntervalMs: number;
   maxConcurrent: number;
@@ -24,6 +30,7 @@ export interface StationConfig {
   runRunners: boolean;
   open: boolean;
   logLevel: "debug" | "info" | "warn" | "error";
+  auth?: AuthConfig;
 }
 
 export type StationUserConfig = Partial<Omit<StationConfig, "runner" | "broadcastRunner">> & {
@@ -68,5 +75,6 @@ export function resolveConfig(input: StationUserConfig): StationConfig {
     runRunners: input.runRunners ?? DEFAULTS.runRunners,
     open: input.open ?? DEFAULTS.open,
     logLevel: input.logLevel ?? DEFAULTS.logLevel,
+    auth: input.auth,
   };
 }

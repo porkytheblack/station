@@ -4,6 +4,8 @@ import { Shell } from "./components/shell";
 import { ThemeProvider } from "./components/theme-provider";
 import { StationProvider } from "./hooks/use-station";
 import { BreadcrumbProvider } from "./components/breadcrumb-provider";
+import { AuthProvider } from "./components/auth-provider";
+import { LoginPage } from "./components/login-page";
 
 export const metadata: Metadata = {
   title: "Station",
@@ -26,11 +28,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body>
         <ThemeProvider>
-          <StationProvider>
-            <BreadcrumbProvider>
-              <Shell>{children}</Shell>
-            </BreadcrumbProvider>
-          </StationProvider>
+          <AuthProvider loginPage={<LoginPage />}>
+            <StationProvider>
+              <BreadcrumbProvider>
+                <Shell>{children}</Shell>
+              </BreadcrumbProvider>
+            </StationProvider>
+          </AuthProvider>
         </ThemeProvider>
       </body>
     </html>
