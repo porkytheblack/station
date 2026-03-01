@@ -16,13 +16,23 @@ const sections = [
       { href: "/docs/signals", label: "Signals" },
       { href: "/docs/broadcasts", label: "Broadcasts" },
       { href: "/docs/adapters", label: "Adapters" },
-      { href: "/docs/station", label: "Station" },
+      { href: "/docs/station", label: "Station Kit" },
     ],
   },
   {
-    label: "Showcase",
+    label: "Examples",
     links: [
-      { href: "/docs/examples", label: "Examples" },
+      { href: "/docs/examples", label: "Overview" },
+      { href: "/docs/examples/basic", label: "Basic" },
+      { href: "/docs/examples/with-output", label: "With Output" },
+      { href: "/docs/examples/with-steps", label: "With Steps" },
+      { href: "/docs/examples/recurring", label: "Recurring" },
+      { href: "/docs/examples/with-retries", label: "With Retries" },
+      { href: "/docs/examples/with-sqlite", label: "With SQLite" },
+      { href: "/docs/examples/broadcast", label: "Broadcast" },
+      { href: "/docs/examples/etl-pipeline", label: "ETL Pipeline" },
+      { href: "/docs/examples/ci-pipeline", label: "CI Pipeline" },
+      { href: "/docs/examples/fleet-monitor", label: "Fleet Monitor" },
     ],
   },
 ];
@@ -39,7 +49,7 @@ export function Sidebar() {
             <Link
               key={link.href}
               href={link.href}
-              className={`docs-sidebar-link${pathname === link.href ? " active" : ""}`}
+              className={`docs-sidebar-link${pathname === link.href || (link.href !== "/docs/examples" && pathname.startsWith(link.href)) ? " active" : ""}`}
             >
               {link.label}
             </Link>

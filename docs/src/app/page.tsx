@@ -108,7 +108,7 @@ const features = [
   {
     icon: ConcurrencyIcon,
     name: "Concurrency limits",
-    desc: "Per-signal and global concurrency caps. .concurrency(3) limits parallel executions of a specific signal. The runner enforces limits and queues the overflow.",
+    desc: "Global concurrency cap via maxConcurrent. The runner limits how many signals execute in parallel and queues the overflow.",
   },
   {
     icon: DagIcon,

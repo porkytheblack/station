@@ -25,7 +25,9 @@ export function Nav() {
           const isActive =
             link.label === "Docs" && isDocs
               ? true
-              : pathname === link.href;
+              : link.label === "Examples"
+                ? pathname.startsWith("/docs/examples")
+                : pathname === link.href;
 
           return (
             <li key={link.href}>

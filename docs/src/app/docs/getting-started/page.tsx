@@ -149,7 +149,7 @@ runner.start();`}</Code>
             <td><code>runner.start()</code></td>
             <td>
               Begins the poll loop. The runner checks for due entries every
-              second by default. Configurable via the <code>pollInterval</code> option
+              second by default. Configurable via the <code>pollIntervalMs</code> option
               (in milliseconds).
             </td>
           </tr>
@@ -441,13 +441,13 @@ const runner = new SignalRunner({
   subscribers: [
     new ConsoleSubscriber(), // Built-in: logs all events to stdout
     {
-      onStart(run) {
+      onRunStarted({ run }) {
         metrics.increment("signal.started", { name: run.signalName });
       },
-      onComplete(run) {
+      onRunCompleted({ run }) {
         metrics.increment("signal.completed", { name: run.signalName });
       },
-      onFail(run, error) {
+      onRunFailed({ run, error }) {
         alerting.send(\`Signal \${run.signalName} failed: \${error}\`);
       },
     },
@@ -463,27 +463,27 @@ const runner = new SignalRunner({
         </thead>
         <tbody>
           <tr>
-            <td><code>onEnqueue</code></td>
-            <td>A run was added to the queue.</td>
+            <td><code>onRunDispatched</code></td>
+            <td>A run was picked up from the queue and dispatched for execution.</td>
           </tr>
           <tr>
-            <td><code>onStart</code></td>
+            <td><code>onRunStarted</code></td>
             <td>A child process began executing the handler.</td>
           </tr>
           <tr>
-            <td><code>onComplete</code></td>
+            <td><code>onRunCompleted</code></td>
             <td>The handler finished successfully.</td>
           </tr>
           <tr>
-            <td><code>onFail</code></td>
+            <td><code>onRunFailed</code></td>
             <td>The handler threw an error (after all retries exhausted).</td>
           </tr>
           <tr>
-            <td><code>onRetry</code></td>
+            <td><code>onRunRetry</code></td>
             <td>A failed run is being retried.</td>
           </tr>
           <tr>
-            <td><code>onTimeout</code></td>
+            <td><code>onRunTimeout</code></td>
             <td>The handler exceeded its timeout and was killed.</td>
           </tr>
         </tbody>

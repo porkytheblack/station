@@ -422,11 +422,11 @@ if (result?.status === "completed") {
         monitor their completion.
       </p>
       <Code>{`import { BroadcastRunner, ConsoleBroadcastSubscriber } from "station-broadcast";
-import { BroadcastSqliteAdapter } from "station-adapter-sqlite";
+import { BroadcastSqliteAdapter } from "station-adapter-sqlite/broadcast";
 
 const broadcastRunner = new BroadcastRunner({
   signalRunner: runner,
-  adapter: new BroadcastSqliteAdapter({ filename: "./data/broadcasts.db" }),
+  adapter: new BroadcastSqliteAdapter({ dbPath: "./data/broadcasts.db" }),
   subscribers: [new ConsoleBroadcastSubscriber()],
   pollIntervalMs: 1000,
 });

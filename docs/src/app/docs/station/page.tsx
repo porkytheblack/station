@@ -247,7 +247,7 @@ export default defineConfig({
       {/* ── Running Station ── */}
 
       <h3>Running Station</h3>
-      <Code>{`npx station-kit`}</Code>
+      <Code>{`npx station`}</Code>
       <p>
         Station looks for <code>station.config.ts</code> (or <code>.js</code> / <code>.mjs</code>)
         in the current working directory. If no config file is found, it starts
