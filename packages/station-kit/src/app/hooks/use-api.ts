@@ -111,6 +111,8 @@ export function useApi() {
     getRunSteps: (id: string) => fetchApi<any[]>(`/runs/${id}/steps`),
     getRunLogs: (id: string) => fetchApi<Array<{ runId: string; signalName: string; level: string; message: string; timestamp: string }>>(`/runs/${id}/logs`),
     cancelRun: (id: string) => fetchApi<{ cancelled: boolean }>(`/runs/${id}/cancel`, { method: "POST" }),
+    rerunRun: (id: string) => fetchApi<{ id: string; signalName: string; status: string }>(`/runs/${id}/rerun`, { method: "POST" }),
+    retryRun: (id: string) => fetchApi<{ retried: boolean }>(`/runs/${id}/retry`, { method: "POST" }),
 
     // Broadcasts
     getBroadcasts: () => fetchApi<BroadcastMeta[]>("/broadcasts"),
@@ -125,6 +127,7 @@ export function useApi() {
     getBroadcastRunNodes: (id: string) => fetchApi<any[]>(`/broadcast-runs/${id}/nodes`),
     getBroadcastRunLogs: (id: string) => fetchApi<Array<{ runId: string; signalName: string; level: string; message: string; timestamp: string; nodeName: string }>>(`/broadcast-runs/${id}/logs`),
     cancelBroadcastRun: (id: string) => fetchApi<{ cancelled: boolean }>(`/broadcast-runs/${id}/cancel`, { method: "POST" }),
+    rerunBroadcastRun: (id: string) => fetchApi<{ id: string; broadcastName: string; status: string }>(`/broadcast-runs/${id}/rerun`, { method: "POST" }),
 
     // API Keys (v1 admin routes — session cookie provides admin scope)
     getApiKeys: () => fetchApi<Array<{ id: string; name: string; keyPrefix: string; scopes: string[]; createdAt: string; lastUsed: string | null; expiresAt: string | null; revoked: boolean }>>("/v1/keys"),

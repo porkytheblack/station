@@ -2,12 +2,14 @@ import { Hono } from "hono";
 import type { SignalRunner, SignalQueueAdapter } from "station-signal";
 import type { LogBuffer } from "../log-buffer.js";
 import type { LogStore } from "../log-store.js";
+import type { StationSignalSubscriber } from "../subscriber.js";
 
 export interface RunDeps {
   signalRunner?: SignalRunner;
   signalAdapter: SignalQueueAdapter;
   logBuffer: LogBuffer;
   logStore?: LogStore;
+  signalSubscriber?: StationSignalSubscriber;
 }
 
 export function runRoutes(deps: RunDeps) {
@@ -132,6 +134,80 @@ export function runRoutes(deps: RunDeps) {
       return c.json({ error: "cannot_cancel", message: "Run cannot be cancelled." }, 400);
     }
     return c.json({ data: { cancelled: true } });
+  });
+
+  app.post("/runs/:id/rerun", async (c) => {
+    const id = c.req.param("id");
+    if (!deps.signalRunner) {
+      return c.json({ error: "read_only", message: "Station is in read-only mode." }, 403);
+    }
+    const run = await deps.signalAdapter.getRun(id);
+    if (!run) {
+      return c.json({ error: "not_found", message: "Run not found." }, 404);
+    }
+    if (run.status !== "failed" && run.status !== "completed" && run.status !== "cancelled") {
+      return c.json({ error: "invalid_status", message: "Only failed, completed, or cancelled runs can be rerun." }, 400);
+    }
+
+    let maxAttempts = run.maxAttempts;
+    let timeout = run.timeout;
+    if (deps.signalSubscriber) {
+      const meta = deps.signalSubscriber.getSignalMeta(run.signalName);
+      if (meta) {
+        maxAttempts = meta.maxAttempts;
+        timeout = meta.timeout;
+      }
+    }
+
+    const newId = deps.signalAdapter.generateId();
+    await deps.signalAdapter.addRun({
+      id: newId,
+      signalName: run.signalName,
+      kind: "trigger",
+      input: run.input,
+      status: "pending",
+      attempts: 0,
+      maxAttempts,
+      timeout,
+      createdAt: new Date(),
+    });
+
+    return c.json({ data: { id: newId, signalName: run.signalName, status: "pending" } });
+  });
+
+  app.post("/runs/:id/retry", async (c) => {
+    const id = c.req.param("id");
+    if (!deps.signalRunner) {
+      return c.json({ error: "read_only", message: "Station is in read-only mode." }, 403);
+    }
+    const run = await deps.signalAdapter.getRun(id);
+    if (!run) {
+      return c.json({ error: "not_found", message: "Run not found." }, 404);
+    }
+    if (run.status !== "failed") {
+      return c.json({ error: "invalid_status", message: "Only failed runs can be retried." }, 400);
+    }
+
+    let maxAttempts = run.maxAttempts;
+    if (deps.signalSubscriber) {
+      const meta = deps.signalSubscriber.getSignalMeta(run.signalName);
+      if (meta) {
+        maxAttempts = meta.maxAttempts;
+      }
+    }
+
+    await deps.signalAdapter.updateRun(id, {
+      status: "pending",
+      attempts: 0,
+      maxAttempts,
+      error: undefined,
+      output: undefined,
+      startedAt: undefined,
+      completedAt: undefined,
+      lastRunAt: undefined,
+    });
+
+    return c.json({ data: { retried: true } });
   });
 
   return app;

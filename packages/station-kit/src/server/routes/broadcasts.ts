@@ -146,6 +146,30 @@ export function broadcastRoutes(deps: BroadcastDeps) {
     return c.json({ data: { cancelled: true } });
   });
 
+  // POST /broadcast-runs/:id/rerun
+  app.post("/broadcast-runs/:id/rerun", async (c) => {
+    const id = c.req.param("id");
+    if (!deps.broadcastRunner || !deps.broadcastAdapter) {
+      return c.json({ error: "read_only", message: "Station is in read-only mode." }, 403);
+    }
+    const run = await deps.broadcastAdapter.getBroadcastRun(id);
+    if (!run) {
+      return c.json({ error: "not_found", message: "Broadcast run not found." }, 404);
+    }
+    if (run.status !== "failed" && run.status !== "completed" && run.status !== "cancelled") {
+      return c.json({ error: "invalid_status", message: "Only failed, completed, or cancelled broadcast runs can be rerun." }, 400);
+    }
+
+    try {
+      const input = typeof run.input === "string" ? JSON.parse(run.input) : run.input;
+      const newId = await deps.broadcastRunner.trigger(run.broadcastName, input);
+      return c.json({ data: { id: newId, broadcastName: run.broadcastName, status: "pending" } });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: "rerun_failed", message }, 400);
+    }
+  });
+
   return app;
 }
 

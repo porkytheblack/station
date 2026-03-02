@@ -169,7 +169,7 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
 
   app.route("/api", healthRoutes({ signalAdapter, broadcastAdapter }));
   app.route("/api", signalRoutes({ signalRunner, signalAdapter, signalSubscriber: stationSignalSub }));
-  app.route("/api", runRoutes({ signalRunner, signalAdapter, logBuffer, logStore }));
+  app.route("/api", runRoutes({ signalRunner, signalAdapter, logBuffer, logStore, signalSubscriber: stationSignalSub }));
   app.route("/api", broadcastRoutes({ broadcastRunner, broadcastAdapter, broadcastSubscriber: stationBroadcastSub, logBuffer, logStore }));
 
   // ── v1 API routes (authenticated) ──────────────────────────────────
@@ -199,7 +199,7 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
   // Trigger-scope routes
   const triggerRoutes = new Hono();
   triggerRoutes.use("/*", requireScope("trigger"));
-  triggerRoutes.route("/", v1TriggerRoutes({ signalRunner, signalAdapter, broadcastRunner, signalSubscriber: stationSignalSub }));
+  triggerRoutes.route("/", v1TriggerRoutes({ signalRunner, signalAdapter, broadcastRunner, broadcastAdapter, signalSubscriber: stationSignalSub }));
   v1.route("/", triggerRoutes);
 
   // Cancel-scope routes — only the cancel endpoints

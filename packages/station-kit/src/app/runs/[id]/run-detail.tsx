@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useApi } from "../../hooks/use-api";
 import { useStation } from "../../hooks/use-station";
@@ -36,6 +36,7 @@ function computeDuration(startedAt?: string, completedAt?: string): string {
 export function RunDetail() {
   const params = useParams();
   const id = params.id as string;
+  const router = useRouter();
   const api = useApi();
   const { events } = useStation();
   const [run, setRun] = useState<any>(null);
@@ -43,6 +44,8 @@ export function RunDetail() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [cancelling, setCancelling] = useState(false);
+  const [rerunning, setRerunning] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const [copied, setCopied] = useState(false);
   const logEndRef = useRef<HTMLDivElement>(null);
 
@@ -116,6 +119,35 @@ export function RunDetail() {
     setCancelling(false);
   }
 
+  async function handleRerun() {
+    setRerunning(true);
+    try {
+      const res = await api.rerunRun(id);
+      router.push(`/runs/${res.data.id}`);
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        console.error("Rerun failed:", err.message);
+      }
+    }
+    setRerunning(false);
+  }
+
+  async function handleRetry() {
+    setRetrying(true);
+    try {
+      await api.retryRun(id);
+      const res = await api.getRun(id);
+      setRun(res.data);
+      const stepsRes = await api.getRunSteps(id);
+      setSteps(stepsRes.data);
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        console.error("Retry failed:", err.message);
+      }
+    }
+    setRetrying(false);
+  }
+
   function handleCopyId() {
     navigator.clipboard.writeText(run.id).then(() => {
       setCopied(true);
@@ -144,6 +176,8 @@ export function RunDetail() {
   }
 
   const canCancel = run.status === "pending" || run.status === "running";
+  const canRerun = run.status === "failed" || run.status === "completed" || run.status === "cancelled";
+  const canRetry = run.status === "failed";
 
   return (
     <div>
@@ -155,6 +189,16 @@ export function RunDetail() {
           </Link>
         </div>
         <div className="page-header-actions">
+          {canRetry && (
+            <button className="btn" onClick={handleRetry} disabled={retrying}>
+              {retrying ? "Retrying..." : "Retry"}
+            </button>
+          )}
+          {canRerun && (
+            <button className="btn btn--primary" onClick={handleRerun} disabled={rerunning}>
+              {rerunning ? "Rerunning..." : "Rerun"}
+            </button>
+          )}
           {canCancel && (
             <button className="btn btn--danger" onClick={handleCancel} disabled={cancelling}>
               {cancelling ? "Cancelling..." : "Cancel"}

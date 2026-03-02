@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useApi, type BroadcastMeta, type SchemaField } from "../../hooks/use-api";
 import { useStation } from "../../hooks/use-station";
@@ -248,6 +248,7 @@ function BroadcastNameView({ name }: { name: string }) {
 
 function BroadcastRunView({ id }: { id: string }) {
   const api = useApi();
+  const router = useRouter();
   const { events } = useStation();
   const [broadcastRun, setBroadcastRun] = useState<any>(null);
   const [nodeRuns, setNodeRuns] = useState<any[]>([]);
@@ -255,6 +256,7 @@ function BroadcastRunView({ id }: { id: string }) {
   const [logs, setLogs] = useState<BroadcastLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [cancelling, setCancelling] = useState(false);
+  const [rerunning, setRerunning] = useState(false);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const signalRunIdsRef = useRef<Set<string>>(new Set());
   const autoSelectedRef = useRef(false);
@@ -357,6 +359,19 @@ function BroadcastRunView({ id }: { id: string }) {
     setCancelling(false);
   }
 
+  async function handleRerun() {
+    setRerunning(true);
+    try {
+      const res = await api.rerunBroadcastRun(id);
+      router.push(`/broadcasts/${res.data.id}`);
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        console.error("Rerun failed:", err.message);
+      }
+    }
+    setRerunning(false);
+  }
+
   // Build deps map from broadcast metadata
   const depsMap = useMemo(() => {
     const map = new Map<string, string[]>();
@@ -439,6 +454,7 @@ function BroadcastRunView({ id }: { id: string }) {
   }
 
   const canCancel = broadcastRun.status === "pending" || broadcastRun.status === "running";
+  const canRerun = broadcastRun.status === "failed" || broadcastRun.status === "completed" || broadcastRun.status === "cancelled";
 
   return (
     <div>
@@ -458,6 +474,11 @@ function BroadcastRunView({ id }: { id: string }) {
           </span>
         </div>
         <div className="page-header-actions">
+          {canRerun && (
+            <button className="btn btn--primary" onClick={handleRerun} disabled={rerunning}>
+              {rerunning ? "Rerunning..." : "Rerun"}
+            </button>
+          )}
           {canCancel && (
             <button className="btn btn--danger" onClick={handleCancel} disabled={cancelling}>
               {cancelling ? "Cancelling..." : "Cancel"}
