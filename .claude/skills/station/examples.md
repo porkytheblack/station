@@ -859,6 +859,14 @@ Run with:
 npx station
 ```
 
+Deploy to production:
+
+```sh
+npx station deploy
+# Bundle generated at .station/out/
+# Ready for Docker, Railway, Fly.io, etc.
+```
+
 ---
 
 ## 14. PostgreSQL Setup
@@ -1100,6 +1108,9 @@ my-app/
   package.json
   tsconfig.json
   station.config.ts         # optional -- only needed for dashboard
+  lib/                       # shared code (auto-bundled on deploy)
+    db.ts
+    schema.ts
   signals/
     send-email.ts
     resize-image.ts
@@ -1123,7 +1134,8 @@ my-app/
   "scripts": {
     "start": "npx tsx runner.ts",
     "trigger": "npx tsx trigger.ts",
-    "dashboard": "npx station"
+    "dashboard": "npx station",
+    "deploy": "station deploy"
   },
   "dependencies": {
     "station-signal": "^1.0.0",
@@ -1136,7 +1148,7 @@ my-app/
     "typescript": "^5.0.0"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["better-sqlite3"]
+    "onlyBuiltDependencies": ["better-sqlite3", "esbuild"]
   }
 }
 ```
@@ -1161,6 +1173,93 @@ my-app/
   "exclude": ["node_modules", "dist"]
 }
 ```
+
+---
+
+## 18. Deployment
+
+### Generate a deploy bundle
+
+```sh
+npx station deploy
+```
+
+Output in `.station/out/` — ready to deploy anywhere.
+
+### Deploy with Docker
+
+```sh
+npx station deploy
+docker build -t my-app .station/out
+docker run -p 4400:4400 \
+  -e STATION_AUTH_USERNAME=admin \
+  -e STATION_AUTH_PASSWORD=secret \
+  my-app
+```
+
+### Shared code is bundled automatically
+
+Signals and broadcasts can import shared local code. esbuild resolves all imports and extracts shared modules into chunks.
+
+```ts
+// lib/db.ts — shared database client
+import { drizzle } from "drizzle-orm/better-sqlite3";
+import Database from "better-sqlite3";
+export const db = drizzle(new Database("app.db"));
+
+// signals/process-order.ts — imports shared code
+import { signal, z } from "station-signal";
+import { db } from "../lib/db.js";
+import { orders } from "../lib/schema.js";
+import { eq } from "drizzle-orm";
+
+export const processOrder = signal("process-order")
+  .input(z.object({ orderId: z.string() }))
+  .run(async (input) => {
+    const order = db.select().from(orders).where(eq(orders.id, input.orderId)).get();
+    // ... process order
+  });
+```
+
+After `station deploy`:
+```
+.station/out/
+  signals/process-order.js    # bundled JS
+  chunk-XXXXX.js              # shared db.ts + schema.ts
+  package.json                # drizzle-orm in dependencies
+```
+
+### Non-JS assets with deploy.include
+
+For files that aren't imported (SQL migrations, email templates, static assets):
+
+```ts
+// station.config.ts
+import { defineConfig } from "station-kit";
+
+export default defineConfig({
+  signalsDir: "./signals",
+  deploy: {
+    include: [
+      "migrations/",
+      "templates/",
+    ],
+  },
+});
+```
+
+### Environment variables for deployment
+
+Set these in your deployment platform (Docker, Railway, Fly.io, etc.):
+
+```sh
+STATION_AUTH_USERNAME=admin     # dashboard login
+STATION_AUTH_PASSWORD=secret    # dashboard password
+PORT=4400                      # server port
+HOST=0.0.0.0                  # bind address
+```
+
+These override config file values at runtime. If `auth` is not in the config but both env vars are set, auth is enabled automatically.
 
 ---
 

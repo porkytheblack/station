@@ -9,10 +9,14 @@ const CONFIG_NAMES = [
   "station.config.mjs",
 ];
 
-export async function loadConfig(cwd: string): Promise<StationConfig> {
-  const configPath = findConfigFile(cwd);
+export async function loadConfig(cwd: string, configFile?: string): Promise<StationConfig> {
+  const configPath = configFile ? resolve(cwd, configFile) : findConfigFile(cwd);
 
-  if (!configPath) {
+  if (!configPath || !existsSync(configPath)) {
+    if (configFile) {
+      console.error(`[station] Config file not found: ${configFile}`);
+      process.exit(1);
+    }
     console.log("[station] No config file found. Using defaults.");
     return resolveConfig({});
   }

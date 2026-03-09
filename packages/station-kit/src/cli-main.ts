@@ -1,11 +1,38 @@
 import { loadConfig } from "./config/loader.js";
 import { createStation } from "./server/index.js";
+import { parseArgs, printUsage } from "./cli/parse-args.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { resolve } from "node:path";
 import { existsSync } from "node:fs";
 
+// Parse CLI arguments
+const cliArgs = parseArgs(process.argv.slice(2));
+
+if (cliArgs.help) {
+  printUsage();
+  process.exit(0);
+}
+
+if (cliArgs.subcommand === "deploy") {
+  await import("./cli/deploy.js");
+  process.exit(0);
+}
+
+if (cliArgs.subcommand) {
+  console.error(`[station] Unknown command: ${cliArgs.subcommand}`);
+  printUsage();
+  process.exit(1);
+}
+
 const cwd = process.cwd();
-const config = await loadConfig(cwd);
+const config = await loadConfig(cwd, cliArgs.config);
+
+// Apply CLI overrides
+if (cliArgs.port !== undefined) config.port = cliArgs.port;
+if (cliArgs.host !== undefined) config.host = cliArgs.host;
+if (cliArgs.dir !== undefined) config.stationDir = cliArgs.dir;
+if (cliArgs.noOpen) config.open = false;
+if (cliArgs.noRunners) config.runRunners = false;
 
 // Spawn Next.js standalone server for the dashboard
 const pkgRoot = resolve(import.meta.dirname, "..");

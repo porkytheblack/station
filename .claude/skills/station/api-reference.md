@@ -1191,7 +1191,7 @@ Dashboard with Hono API server + Next.js frontend.
 ### Exports
 
 ```ts
-import { defineConfig, type StationUserConfig, type StationConfig, type AuthConfig } from "station-kit";
+import { defineConfig, type StationUserConfig, type StationConfig, type AuthConfig, type DeployConfig } from "station-kit";
 ```
 
 ### defineConfig()
@@ -1222,6 +1222,10 @@ interface BroadcastRunnerConfig {
   pollIntervalMs: number;   // default: 1000
 }
 
+interface DeployConfig {
+  include?: string[];        // extra files/dirs to copy into deploy bundle
+}
+
 interface StationConfig {
   port: number;                          // default: 4400
   host: string;                          // default: "localhost"
@@ -1235,6 +1239,8 @@ interface StationConfig {
   open: boolean;                         // default: true (opens browser)
   logLevel: "debug" | "info" | "warn" | "error"; // default: "info"
   auth?: AuthConfig;
+  deploy?: DeployConfig;               // deployment bundle configuration
+  stationDir: string;                  // default: ".station"
 }
 
 type StationUserConfig = Partial<Omit<StationConfig, "runner" | "broadcastRunner">> & {
@@ -1280,6 +1286,59 @@ Launches:
 - Signal and broadcast runners (unless `runRunners: false`)
 
 The CLI uses a launcher pattern: re-execs with `node --import tsx` to enable TypeScript resolution for user signal/broadcast files.
+
+### CLI Commands
+
+```
+npx station                    # Start dashboard + runners
+npx station deploy             # Build production bundle to .station/out/
+npx station --no-open          # Start without opening browser
+npx station --no-runners       # Dashboard only, no job processing
+npx station --port 5000        # Custom port
+npx station --host 0.0.0.0    # Bind to all interfaces
+npx station --config path.ts   # Custom config file
+```
+
+### station deploy
+
+Bundles signals, broadcasts, and config into a self-contained deploy directory using esbuild.
+
+**What it does:**
+1. Discovers all `.ts`/`.js` files in `signalsDir` and `broadcastsDir`
+2. Bundles each as an esbuild entry point with code splitting (shared imports → chunk files)
+3. Externalizes npm packages (installed via `npm install` at deploy time)
+4. Resolves `workspace:*` → `^{version}` for monorepo dependencies
+5. Generates production `package.json`, `Dockerfile`, `nixpacks.toml`, `.dockerignore`, `.gitignore`
+6. Copies `deploy.include` entries (non-JS assets)
+
+**Output structure:**
+```
+.station/out/
+  package.json          # production deps, resolved versions
+  station.config.js     # compiled config
+  signals/
+    *.js                # bundled signal files
+  broadcasts/
+    *.js                # bundled broadcast files
+  chunk-*.js            # shared code extracted by esbuild
+  Dockerfile
+  nixpacks.toml
+  .dockerignore
+  .gitignore
+```
+
+### Environment Variable Overrides
+
+These env vars override config values at runtime:
+
+| Variable | Overrides | Description |
+|----------|-----------|-------------|
+| `PORT` | `port` | Server port |
+| `HOST` | `host` | Server bind address |
+| `STATION_AUTH_USERNAME` | `auth.username` | Dashboard login username |
+| `STATION_AUTH_PASSWORD` | `auth.password` | Dashboard login password |
+
+If `auth` is not set in config but both `STATION_AUTH_USERNAME` and `STATION_AUTH_PASSWORD` are set, auth is enabled automatically.
 
 ---
 

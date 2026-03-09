@@ -21,6 +21,7 @@ You are an expert Station developer specializing in building type-safe backgroun
 11. **pnpm 10+ requires `onlyBuiltDependencies` for SQLite** - `better-sqlite3` needs a native build step that pnpm 10 blocks by default. Add `"pnpm": { "onlyBuiltDependencies": ["better-sqlite3"] }` to the consumer's `package.json`, then reinstall.
 9. **`.trigger()` returns immediately with a run ID** - It does not wait for execution. Use `runner.waitForRun(id)` to block until completion.
 10. **Zod v4 gotcha: never use `.default({})` on objects with default fields** - Use plain TypeScript defaults instead. Zod v4 internals: `schema._zod.def.type` (not `_def.typeName`).
+12. **`station deploy` bundles to JS — shared imports are resolved automatically.** Signals/broadcasts can import from `../lib/`, `../shared/`, etc. These are bundled into shared chunks by esbuild. No need to configure includes for imported code — only use `deploy.include` for non-JS assets.
 
 ## Signal Pattern
 
@@ -245,6 +246,64 @@ export default defineConfig({
 ```
 
 Then run: `npx station`
+
+Deploy: `npx station deploy` — generates a production bundle in `.station/out/`
+
+## Deployment
+
+### `station deploy`
+
+Bundles signals, broadcasts, and config into a self-contained deploy directory using esbuild.
+
+```sh
+npx station deploy
+```
+
+**What it does:**
+1. Discovers all `.ts`/`.js` files in `signalsDir` and `broadcastsDir`
+2. Bundles each as an esbuild entry point with code splitting (shared imports become chunk files)
+3. Externalizes npm packages (installed via `npm install` at deploy time)
+4. Resolves `workspace:*` to `^{version}` for monorepo dependencies
+5. Generates production `package.json`, `Dockerfile`, `nixpacks.toml`, `.dockerignore`, `.gitignore`
+6. Copies `deploy.include` entries (non-JS assets)
+
+**Output:** `.station/out/` — ready to deploy to any Docker-based platform.
+
+### Environment variables
+
+Set these in your deployment platform. They override config values at runtime.
+
+| Variable | Overrides | Description |
+|----------|-----------|-------------|
+| `STATION_AUTH_USERNAME` | `auth.username` | Dashboard login username |
+| `STATION_AUTH_PASSWORD` | `auth.password` | Dashboard login password |
+| `PORT` | `port` | Server port |
+| `HOST` | `host` | Server bind address |
+
+If `auth` is not set in config but both `STATION_AUTH_USERNAME` and `STATION_AUTH_PASSWORD` are set, auth is enabled automatically.
+
+### deploy.include
+
+For non-JS assets that can't be discovered via imports:
+
+```ts
+export default defineConfig({
+  deploy: {
+    include: ["migrations/", "templates/email.html"],
+  },
+});
+```
+
+### Docker deployment
+
+```sh
+npx station deploy
+docker build -t my-app .station/out
+docker run -p 4400:4400 \
+  -e STATION_AUTH_USERNAME=admin \
+  -e STATION_AUTH_PASSWORD=secret \
+  my-app
+```
 
 ## Signal Builder Methods
 

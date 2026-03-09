@@ -6,8 +6,8 @@ export default defineConfig({
   port: 4400,
   signalsDir: "./signals",
   broadcastsDir: "./broadcasts",
-  adapter: new SqliteAdapter({ dbPath: "./jobs.db" }),
-  broadcastAdapter: new BroadcastSqliteAdapter({ dbPath: "./jobs.db" }),
+  adapter: new SqliteAdapter({ dbPath: "./.station/data/jobs.db" }),
+  broadcastAdapter: new BroadcastSqliteAdapter({ dbPath: "./.station/data/jobs.db" }),
   auth: {
     username: "admin",
     password: "station",
