@@ -9,6 +9,7 @@ import { BroadcastRunner, BroadcastMemoryAdapter } from "station-broadcast";
 import type { SignalQueueAdapter } from "station-signal";
 import type { BroadcastQueueAdapter } from "station-broadcast";
 import type { StationConfig } from "../config/schema.js";
+import { ensureStationDir } from "../station-dir.js";
 import { WebSocketHub } from "./ws.js";
 import { SSEHub } from "./sse.js";
 import { LogBuffer } from "./log-buffer.js";
@@ -42,17 +43,19 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
   const broadcastAdapter: BroadcastQueueAdapter | undefined =
     config.broadcastAdapter ?? (config.broadcastsDir ? new BroadcastMemoryAdapter() : undefined);
 
+  const { dataDir } = ensureStationDir(cwd, config.stationDir);
+
   const wsHub = new WebSocketHub();
   const sseHub = new SSEHub();
   const logBuffer = new LogBuffer();
-  const logStore = new LogStore(resolve(cwd, "station-logs.db"));
+  const logStore = new LogStore(resolve(dataDir, "station-logs.db"));
 
   // Auth: create KeyStore and SessionConfig if auth is configured
   let keyStore: KeyStore | undefined;
   let sessionConfig: SessionConfig | undefined;
 
   if (config.auth) {
-    keyStore = new KeyStore(resolve(cwd, "station-keys.db"));
+    keyStore = new KeyStore(resolve(dataDir, "station-keys.db"));
     sessionConfig = {
       username: config.auth.username,
       password: config.auth.password,

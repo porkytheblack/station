@@ -1,0 +1,23 @@
+{
+  "name": "example-14-build-monitor",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "station",
+    "deploy": "station deploy"
+  },
+  "dependencies": {
+    "station-signal": "workspace:*",
+    "station-broadcast": "workspace:*",
+    "station-adapter-sqlite": "workspace:*",
+    "drizzle-orm": "^0.44",
+    "better-sqlite3": "^11.9.1",
+    "zod": "^3.25"
+  },
+  "devDependencies": {
+    "station-kit": "workspace:*",
+    "tsx": "^4.21.0",
+    "drizzle-kit": "^0.31",
+    "@types/better-sqlite3": "^7.6.13"
+  }
+}

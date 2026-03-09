@@ -23,7 +23,7 @@ if (!process.env[MARKER]) {
   }
 
   const main = fileURLToPath(new URL("./cli-main.js", import.meta.url));
-  const child = spawn(execPath, ["--import", tsxSpecifier, main], {
+  const child = spawn(execPath, ["--import", tsxSpecifier, main, ...process.argv.slice(2)], {
     stdio: "inherit",
     env: { ...process.env, [MARKER]: "1", __STATION_TSX: tsxSpecifier },
   });
