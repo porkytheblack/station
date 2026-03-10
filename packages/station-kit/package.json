@@ -1,6 +1,6 @@
 {
   "name": "station-kit",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Dashboard for station-signal — inspect and control signals and broadcasts",
   "type": "module",
   "engines": {
@@ -16,6 +16,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "import": "./dist/server/index.js"
     }
   },
   "files": [

@@ -33,9 +33,16 @@ import { v1KeyRoutes } from "./routes/v1/keys.js";
 import { v1AuthRoutes } from "./routes/v1/auth.js";
 import { v1EventRoutes } from "./routes/v1/events.js";
 
+export { KeyStore } from "./auth/keys.js";
+export type { ApiKey } from "./auth/keys.js";
+
 export interface StationInstance {
   start(): Promise<void>;
   stop(): Promise<void>;
+  /** The KeyStore instance (available when auth is configured). */
+  keyStore?: KeyStore;
+  /** The resolved data directory path. */
+  dataDir: string;
 }
 
 export async function createStation(config: StationConfig, cwd: string, nextPort?: number): Promise<StationInstance> {
@@ -291,6 +298,8 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
   let httpServer: Server | null = null;
 
   return {
+    keyStore,
+    dataDir,
     async start() {
       // Start runners (non-blocking — they have internal poll loops)
       if (config.runRunners) {

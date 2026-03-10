@@ -397,6 +397,25 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  packages/station-tauri:
+    dependencies:
+      station-kit:
+        specifier: workspace:*
+        version: link:../station-kit
+      station-signal:
+        specifier: workspace:*
+        version: link:../station-signal
+    devDependencies:
+      '@types/node':
+        specifier: ^25.3.0
+        version: 25.3.0
+      station-adapter-sqlite:
+        specifier: workspace:*
+        version: link:../station-adapter-sqlite
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
 packages:
 
   '@drizzle-team/brocli@0.10.2':
