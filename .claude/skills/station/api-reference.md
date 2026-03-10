@@ -1555,6 +1555,82 @@ Common error codes:
 
 ---
 
+## 9. station-tauri
+
+npm: `station-tauri`
+
+Tauri v2 sidecar integration. Runs Station as a localhost-only background process for desktop apps. No dashboard UI.
+
+### Exports
+
+```ts
+import { createTauriStation, type TauriStationConfig, type TauriStation } from "station-tauri";
+```
+
+### createTauriStation()
+
+```ts
+async function createTauriStation(config: TauriStationConfig): Promise<TauriStation>;
+```
+
+Creates a Station instance configured for desktop apps. Auto-provisions an API key on first run (saved to `{dataDir}/.station-key`).
+
+### TauriStationConfig
+
+```ts
+interface TauriStationConfig {
+  dataDir: string;                // required -- data directory for DB and key file
+  port?: number;                  // default: 4400
+  signalsDir?: string;            // signals directory
+  broadcastsDir?: string;         // broadcasts directory
+}
+```
+
+### TauriStation
+
+```ts
+interface TauriStation {
+  port: number;                   // bound port
+  apiKey: string;                 // auto-provisioned API key (sk_live_...)
+  keyStore: KeyStore;             // key store instance
+  dataDir: string;                // resolved data directory
+  stop(): Promise<void>;          // graceful shutdown
+}
+```
+
+### StationInstance additions
+
+`StationInstance` (from station-kit internals) now exposes two additional properties:
+
+```ts
+interface StationInstance {
+  // ... existing properties ...
+  keyStore: KeyStore;             // API key store
+  dataDir: string;                // resolved data directory
+}
+```
+
+### Sidecar binary
+
+The `station-sidecar` bin is the standalone entry point for Tauri's sidecar spawn. It reads configuration from environment variables and outputs a JSON ready event to stdout.
+
+**Stdout on startup:**
+
+```json
+{"event":"ready","port":4400,"apiKey":"sk_live_..."}
+```
+
+### Sidecar environment variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `STATION_DATA_DIR` | Yes | Data directory for DB and key file |
+| `STATION_PORT` | No | Server port (default: 4400) |
+| `STATION_SIGNALS_DIR` | No | Signals directory |
+| `STATION_BROADCASTS_DIR` | No | Broadcasts directory |
+
+---
+
 ## Quick Reference: Import Patterns
 
 ### Adapter subpath imports
@@ -1573,6 +1649,9 @@ import { BroadcastSqliteAdapter } from "station-adapter-sqlite/broadcast";
 import { BroadcastPostgresAdapter } from "station-adapter-postgres/broadcast";
 import { BroadcastMysqlAdapter } from "station-adapter-mysql/broadcast";
 import { BroadcastRedisAdapter } from "station-adapter-redis/broadcast";
+
+// Tauri sidecar
+import { createTauriStation } from "station-tauri";
 ```
 
 Exception: MySQL broadcast adapter is also re-exported from the main entry:

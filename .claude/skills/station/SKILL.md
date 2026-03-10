@@ -22,6 +22,7 @@ You are an expert Station developer specializing in building type-safe backgroun
 9. **`.trigger()` returns immediately with a run ID** - It does not wait for execution. Use `runner.waitForRun(id)` to block until completion.
 10. **Zod v4 gotcha: never use `.default({})` on objects with default fields** - Use plain TypeScript defaults instead. Zod v4 internals: `schema._zod.def.type` (not `_def.typeName`).
 12. **`station deploy` bundles to JS — shared imports are resolved automatically.** Signals/broadcasts can import from `../lib/`, `../shared/`, etc. These are bundled into shared chunks by esbuild. No need to configure includes for imported code — only use `deploy.include` for non-JS assets.
+13. **Use `station-tauri` for desktop apps** — Do not use `station-kit` or `defineConfig` for Tauri/desktop integration. Use `createTauriStation()` from `station-tauri` instead. It runs localhost-only with no dashboard UI and auto-provisions API keys.
 
 ## Signal Pattern
 
@@ -342,6 +343,42 @@ Signal subscribers implement any subset of:
 Broadcast subscribers implement any subset of:
 `onBroadcastDiscovered`, `onBroadcastQueued`, `onBroadcastStarted`, `onBroadcastCompleted`, `onBroadcastFailed`, `onBroadcastCancelled`, `onNodeTriggered`, `onNodeCompleted`, `onNodeFailed`, `onNodeSkipped`
 
+## Tauri Sidecar (station-tauri)
+
+For running Station as a desktop app sidecar via Tauri v2.
+
+```ts
+import { createTauriStation } from "station-tauri";
+
+const station = await createTauriStation({
+  dataDir: "/path/to/app/data",
+  signalsDir: "./signals",
+  broadcastsDir: "./broadcasts",
+  port: 4400,
+});
+
+// station.port — bound port
+// station.apiKey — auto-provisioned API key
+// station.keyStore — key store instance
+// station.dataDir — resolved data directory
+await station.stop();
+```
+
+Standalone sidecar entry point (`station-sidecar` bin) outputs JSON to stdout on startup:
+
+```json
+{"event":"ready","port":4400,"apiKey":"sk_live_..."}
+```
+
+Environment variables for the sidecar:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `STATION_DATA_DIR` | Yes | Data directory for DB and key file |
+| `STATION_PORT` | No | Server port (default: 4400) |
+| `STATION_SIGNALS_DIR` | No | Signals directory |
+| `STATION_BROADCASTS_DIR` | No | Broadcasts directory |
+
 ## Design Principles
 
 1. One signal per file -- auto-discovery expects exported signal objects from each file in `signalsDir`.
@@ -358,4 +395,4 @@ Broadcast subscribers implement any subset of:
 ## Reference Documentation
 
 - `api-reference.md` - Complete API for all packages: types, interfaces, runner options
-- `examples.md` - Full working examples: ETL pipelines, CI workflows, monitoring, e-commerce
+- `examples.md` - Full working examples: ETL pipelines, CI workflows, monitoring, e-commerce, Tauri desktop

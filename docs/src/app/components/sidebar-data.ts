@@ -6,6 +6,7 @@ export const sections = [
       { href: "/docs/dashboard", label: "Dashboard" },
       { href: "/docs/remote-triggers", label: "Remote triggers" },
       { href: "/docs/agent-skill", label: "Agent skill" },
+      { href: "/docs/tauri-desktop", label: "Tauri desktop" },
     ],
   },
   {

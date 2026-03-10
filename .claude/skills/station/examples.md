@@ -1263,6 +1263,117 @@ These override config file values at runtime. If `auth` is not in the config but
 
 ---
 
+## 19. Tauri v2 Desktop App
+
+Running Station as a Tauri sidecar for desktop apps.
+
+### Create the station instance
+
+```ts
+// src-tauri/station/index.ts
+import { createTauriStation } from "station-tauri";
+
+const station = await createTauriStation({
+  dataDir: "/Users/me/.myapp",
+  signalsDir: "./signals",
+  port: 4400,
+});
+
+console.log(`Station ready on port ${station.port}`);
+console.log(`API key: ${station.apiKey}`);
+
+// Graceful shutdown
+process.on("SIGINT", async () => {
+  await station.stop();
+  process.exit(0);
+});
+```
+
+### Configure Tauri to spawn the sidecar
+
+In `tauri.conf.json`:
+
+```json
+{
+  "bundle": {
+    "externalBin": ["binaries/station-sidecar"]
+  }
+}
+```
+
+### Spawn and read the ready event from Tauri frontend
+
+```ts
+// src/lib/station.ts
+import { Command } from "@tauri-apps/plugin-shell";
+
+interface StationReady {
+  event: "ready";
+  port: number;
+  apiKey: string;
+}
+
+export async function startStation(dataDir: string): Promise<StationReady> {
+  const command = Command.sidecar("binaries/station-sidecar", [], {
+    env: {
+      STATION_DATA_DIR: dataDir,
+      STATION_PORT: "4400",
+      STATION_SIGNALS_DIR: "./signals",
+    },
+  });
+
+  return new Promise((resolve, reject) => {
+    command.stdout.on("data", (line: string) => {
+      try {
+        const msg = JSON.parse(line) as StationReady;
+        if (msg.event === "ready") resolve(msg);
+      } catch {
+        // ignore non-JSON lines
+      }
+    });
+
+    command.on("error", reject);
+    command.spawn();
+  });
+}
+```
+
+### Trigger signals from the frontend
+
+```ts
+// src/lib/trigger.ts
+import { configure } from "station-signal";
+import { sendEmail } from "./signals/send-email.js";
+
+// Use the API key and port from the ready event
+export function connectToStation(port: number, apiKey: string) {
+  configure({
+    endpoint: `http://localhost:${port}`,
+    apiKey,
+  });
+}
+
+// Then trigger signals as usual
+const runId = await sendEmail.trigger({
+  to: "user@example.com",
+  subject: "Hello from desktop",
+  body: "Sent via Tauri sidecar.",
+});
+```
+
+### Environment variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `STATION_DATA_DIR` | Yes | Data directory for DB and key file |
+| `STATION_PORT` | No | Server port (default: 4400) |
+| `STATION_SIGNALS_DIR` | No | Signals directory |
+| `STATION_BROADCASTS_DIR` | No | Broadcasts directory |
+
+The API key is auto-provisioned on first run and saved to `{STATION_DATA_DIR}/.station-key`. Subsequent launches reuse the same key.
+
+---
+
 ## Quick Reference
 
 | Concept | Syntax |
@@ -1299,6 +1410,7 @@ import { BroadcastRedisAdapter } from "station-adapter-redis/broadcast";
 import { MysqlAdapter } from "station-adapter-mysql";
 import { BroadcastMysqlAdapter } from "station-adapter-mysql/broadcast";
 import { defineConfig } from "station-kit";
+import { createTauriStation } from "station-tauri";
 ```
 
 ### Shutdown order
