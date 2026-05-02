@@ -294,9 +294,10 @@ export class BroadcastSqliteAdapter implements BroadcastQueueAdapter {
   // ─── Dynamic broadcast definitions ───────────────────────────────
 
   async saveDefinition(spec: DynamicBroadcastSpec): Promise<DynamicBroadcastSpec> {
-    // Serialize MAX(version) read + INSERT under a single transaction.
-    // better-sqlite3 transactions lock the database for writes, so two
-    // concurrent saves can't both pick the same version number.
+    // better-sqlite3 transactions serialize writers, so the MAX(version) read
+    // + INSERT can't be interleaved with another save — no PK collision is
+    // possible on the same DB. The transaction wrapper handles SAVEPOINTs
+    // for nested calls.
     const txn = this.db.transaction((spec: DynamicBroadcastSpec): DynamicBroadcastSpec => {
       const row = this.db
         .prepare(`SELECT MAX(version) AS v FROM ${this.definitionsTable} WHERE name = ?`)

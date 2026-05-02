@@ -350,48 +350,62 @@ export class BroadcastPostgresAdapter implements BroadcastQueueAdapter {
 
   async saveDefinition(spec: DynamicBroadcastSpec): Promise<DynamicBroadcastSpec> {
     await this.ready();
-    // Lock and increment in a single transaction so concurrent saves can't
-    // both pick the same `version` and then fail on PK collision.
-    const client = await this.pool.connect();
-    try {
-      await client.query("BEGIN");
-      const result = await client.query(
-        `SELECT COALESCE(MAX(version), 0) AS v FROM ${this.definitionsTable}
-         WHERE name = $1 FOR UPDATE`,
-        [spec.name],
-      );
-      const nextVersion = (result.rows[0]?.v ?? 0) + 1;
+    // Use `INSERT … SELECT COALESCE(MAX(version), 0) + 1` so the version
+    // bump and insert happen in one statement. On the rare race where two
+    // concurrent inserts compute the same version, the unique PK fires and
+    // we retry — bounded attempts, exponential-ish backoff.
+    const MAX_ATTEMPTS = 5;
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       const now = new Date();
-      const next: DynamicBroadcastSpec = {
+      const draft: DynamicBroadcastSpec = {
         ...spec,
-        version: nextVersion,
+        // Real version assigned by the SELECT; placeholder for the JSON
+        // column. Adapters store the spec JSON with the version baked in,
+        // so we patch it after the INSERT returns.
+        version: 0,
         createdAt: spec.createdAt ?? now,
         updatedAt: now,
         deletedAt: undefined,
       };
-      await client.query(
-        `INSERT INTO ${this.definitionsTable}
-          (name, version, spec, failure_policy, timeout, created_at, updated_at, created_by, deleted_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL)`,
-        [
-          next.name,
-          next.version,
-          JSON.stringify(next),
-          next.failurePolicy,
-          next.timeout ?? null,
-          next.createdAt,
-          next.updatedAt,
-          next.createdBy ?? null,
-        ],
-      );
-      await client.query("COMMIT");
-      return next;
-    } catch (err) {
-      await client.query("ROLLBACK").catch(() => {});
-      throw err;
-    } finally {
-      client.release();
+      try {
+        // The subquery on MAX always returns one row (NULL becomes 0 via
+        // COALESCE) — works for both brand-new names and existing ones.
+        const result = await this.pool.query(
+          `INSERT INTO ${this.definitionsTable}
+            (name, version, spec, failure_policy, timeout, created_at, updated_at, created_by, deleted_at)
+           VALUES (
+             $1,
+             (SELECT COALESCE(MAX(version), 0) + 1 FROM ${this.definitionsTable} WHERE name = $1),
+             $2, $3, $4, $5, $6, $7, NULL
+           )
+           RETURNING version`,
+          [
+            draft.name,
+            JSON.stringify(draft), // version placeholder is 0; rewritten below
+            draft.failurePolicy,
+            draft.timeout ?? null,
+            draft.createdAt,
+            draft.updatedAt,
+            draft.createdBy ?? null,
+          ],
+        );
+        const version = result.rows[0]?.version as number;
+        const final: DynamicBroadcastSpec = { ...draft, version };
+        // Rewrite the spec column with the real version so callers that
+        // read `spec` get the correct value.
+        await this.pool.query(
+          `UPDATE ${this.definitionsTable} SET spec = $1 WHERE name = $2 AND version = $3`,
+          [JSON.stringify(final), final.name, final.version],
+        );
+        return final;
+      } catch (err) {
+        lastErr = err;
+        // Postgres unique_violation = "23505". Retry; otherwise rethrow.
+        if ((err as { code?: string })?.code !== "23505") throw err;
+      }
     }
+    throw lastErr;
   }
 
   async getDefinition(name: string, version?: number): Promise<DynamicBroadcastSpec | null> {

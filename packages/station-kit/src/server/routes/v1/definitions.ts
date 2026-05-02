@@ -17,11 +17,41 @@ export interface V1DefinitionDeps {
 }
 
 /**
- * Read-scope routes — `validate` is read-only (no persistence) so it lives
- * here alongside the GETs mounted in server/index.ts.
+ * Read-scope routes for dynamic broadcast definitions: list, get, version
+ * history, get-by-version, plus the read-only `validate` endpoint.
  */
 export function v1DefinitionReadRoutes(deps: V1DefinitionDeps) {
   const app = new Hono();
+
+  app.get("/broadcast-definitions", async (c) => {
+    if (!deps.broadcastAdapter?.listDefinitions) return c.json({ data: [] });
+    const list = await deps.broadcastAdapter.listDefinitions();
+    return c.json({ data: list.map(serializeSpec) });
+  });
+
+  app.get("/broadcast-definitions/:name", async (c) => {
+    if (!deps.broadcastAdapter?.getDefinition) return c.json({ error: "unavailable" }, 503);
+    const spec = await deps.broadcastAdapter.getDefinition(c.req.param("name"));
+    if (!spec) return c.json({ error: "not_found" }, 404);
+    return c.json({ data: serializeSpec(spec) });
+  });
+
+  app.get("/broadcast-definitions/:name/versions", async (c) => {
+    if (!deps.broadcastAdapter?.listDefinitionVersions) return c.json({ data: [] });
+    const versions = await deps.broadcastAdapter.listDefinitionVersions(c.req.param("name"));
+    return c.json({ data: versions.map(serializeSpec) });
+  });
+
+  app.get("/broadcast-definitions/:name/versions/:n", async (c) => {
+    if (!deps.broadcastAdapter?.getDefinition) return c.json({ error: "unavailable" }, 503);
+    const version = parseInt(c.req.param("n"), 10);
+    if (Number.isNaN(version)) {
+      return c.json({ error: "bad_request", message: "Version must be a number." }, 400);
+    }
+    const spec = await deps.broadcastAdapter.getDefinition(c.req.param("name"), version);
+    if (!spec) return c.json({ error: "not_found" }, 404);
+    return c.json({ data: serializeSpec(spec) });
+  });
 
   app.post("/broadcast-definitions/validate", async (c) => {
     const body = await c.req.json().catch(() => ({}));

@@ -255,33 +255,6 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
   readRoutes.route("/", v1ExpressionRoutes());
   // Schedule GET + preview are read-scoped; mutating routes are mounted under admin below.
   readRoutes.route("/", v1ScheduleReadRoutes({ scheduleAdapter }));
-  // GET dynamic broadcast definitions also requires only `read` scope.
-  readRoutes.get("/broadcast-definitions", async (c) => {
-    if (!broadcastAdapter?.listDefinitions) return c.json({ data: [] });
-    const list = await broadcastAdapter.listDefinitions();
-    return c.json({ data: list });
-  });
-  readRoutes.get("/broadcast-definitions/:name", async (c) => {
-    if (!broadcastAdapter?.getDefinition) return c.json({ error: "unavailable" }, 503);
-    const spec = await broadcastAdapter.getDefinition(c.req.param("name"));
-    if (!spec) return c.json({ error: "not_found" }, 404);
-    return c.json({ data: spec });
-  });
-  readRoutes.get("/broadcast-definitions/:name/versions", async (c) => {
-    if (!broadcastAdapter?.listDefinitionVersions) return c.json({ data: [] });
-    const versions = await broadcastAdapter.listDefinitionVersions(c.req.param("name"));
-    return c.json({ data: versions });
-  });
-  readRoutes.get("/broadcast-definitions/:name/versions/:n", async (c) => {
-    if (!broadcastAdapter?.getDefinition) return c.json({ error: "unavailable" }, 503);
-    const version = parseInt(c.req.param("n"), 10);
-    if (Number.isNaN(version)) {
-      return c.json({ error: "bad_request", message: "Version must be a number." }, 400);
-    }
-    const spec = await broadcastAdapter.getDefinition(c.req.param("name"), version);
-    if (!spec) return c.json({ error: "not_found" }, 404);
-    return c.json({ data: spec });
-  });
   readRoutes.route("/", v1DefinitionReadRoutes({
     broadcastRunner,
     broadcastAdapter,

@@ -9,24 +9,30 @@ export class ScheduleMemoryAdapter implements ScheduleAdapter {
     if (this.schedules.has(schedule.id)) {
       throw new Error(`Schedule with id "${schedule.id}" already exists`);
     }
-    this.schedules.set(schedule.id, schedule);
+    this.schedules.set(schedule.id, { ...schedule });
   }
 
   async get(id: string): Promise<Schedule | null> {
-    return this.schedules.get(id) ?? null;
+    const s = this.schedules.get(id);
+    return s ? { ...s } : null;
   }
 
   async list(filter?: ScheduleListFilter): Promise<Schedule[]> {
     const now = new Date();
-    return Array.from(this.schedules.values()).filter((s) => {
-      if (filter?.kind && s.kind !== filter.kind) return false;
-      if (filter?.enabled !== undefined && s.enabled !== filter.enabled) return false;
-      if (filter?.due) {
-        if (!s.enabled) return false;
-        if (s.nextRunAt > now) return false;
-      }
-      return true;
-    });
+    // Return *copies* — the adapter is the source of truth, and mutations to
+    // its internal state via claimDue/update must not be visible to callers
+    // already holding a previously-listed schedule reference.
+    return Array.from(this.schedules.values())
+      .filter((s) => {
+        if (filter?.kind && s.kind !== filter.kind) return false;
+        if (filter?.enabled !== undefined && s.enabled !== filter.enabled) return false;
+        if (filter?.due) {
+          if (!s.enabled) return false;
+          if (s.nextRunAt > now) return false;
+        }
+        return true;
+      })
+      .map((s) => ({ ...s }));
   }
 
   async update(id: string, patch: SchedulePatch): Promise<void> {

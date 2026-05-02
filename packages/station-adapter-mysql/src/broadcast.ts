@@ -378,49 +378,63 @@ export class BroadcastMysqlAdapter implements BroadcastQueueAdapter {
   // ── Dynamic broadcast definitions ──────────────────────────────────────
 
   async saveDefinition(spec: DynamicBroadcastSpec): Promise<DynamicBroadcastSpec> {
-    // Use an explicit connection + transaction with `FOR UPDATE` so concurrent
-    // saves serialize on the version-lookup and don't both pick the same
-    // version (which would fail the PK on insert).
-    const conn = await this.pool.getConnection();
-    try {
-      await conn.beginTransaction();
-      const [rows] = await conn.execute<RowDataPacket[]>(
-        `SELECT COALESCE(MAX(version), 0) AS v FROM ${this.definitionsTable}
-         WHERE name = ? FOR UPDATE`,
-        [spec.name],
-      );
-      const nextVersion = ((rows[0] as { v: number })?.v ?? 0) + 1;
+    // Atomic compute + insert via an `INSERT … SELECT` against a one-row
+    // aggregate. `MAX(version)` always returns exactly one row (NULL on no
+    // matches → 0 via COALESCE). On the rare race where two concurrent
+    // inserts compute the same version, the unique PK fires and we retry.
+    const MAX_ATTEMPTS = 5;
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       const now = new Date();
-      const next: DynamicBroadcastSpec = {
+      const draft: DynamicBroadcastSpec = {
         ...spec,
-        version: nextVersion,
+        version: 0,
         createdAt: spec.createdAt ?? now,
         updatedAt: now,
         deletedAt: undefined,
       };
-      await conn.execute(
-        `INSERT INTO ${this.definitionsTable}
-          (name, version, spec, failure_policy, timeout, created_at, updated_at, created_by, deleted_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
-        [
-          next.name,
-          next.version,
-          JSON.stringify(next),
-          next.failurePolicy,
-          next.timeout ?? null,
-          dateToStr(next.createdAt),
-          dateToStr(next.updatedAt),
-          next.createdBy ?? null,
-        ],
-      );
-      await conn.commit();
-      return next;
-    } catch (err) {
-      await conn.rollback().catch(() => {});
-      throw err;
-    } finally {
-      conn.release();
+      try {
+        const [insertResult] = await this.pool.execute<ResultSetHeader>(
+          `INSERT INTO ${this.definitionsTable}
+            (name, version, spec, failure_policy, timeout, created_at, updated_at, created_by, deleted_at)
+           SELECT ?, COALESCE(MAX(version), 0) + 1, ?, ?, ?, ?, ?, ?, NULL
+           FROM ${this.definitionsTable} WHERE name = ?`,
+          [
+            draft.name,
+            JSON.stringify(draft),
+            draft.failurePolicy,
+            draft.timeout ?? null,
+            dateToStr(draft.createdAt),
+            dateToStr(draft.updatedAt),
+            draft.createdBy ?? null,
+            draft.name,
+          ],
+        );
+        if (insertResult.affectedRows !== 1) {
+          throw new Error("INSERT … SELECT inserted no rows");
+        }
+        // Recover the assigned version. We can't use RETURNING (MySQL
+        // doesn't support it), so SELECT the just-inserted row.
+        const [rows] = await this.pool.execute<RowDataPacket[]>(
+          `SELECT MAX(version) AS v FROM ${this.definitionsTable} WHERE name = ?`,
+          [draft.name],
+        );
+        const version = (rows[0] as { v: number })?.v;
+        const final: DynamicBroadcastSpec = { ...draft, version };
+        await this.pool.execute(
+          `UPDATE ${this.definitionsTable} SET spec = ? WHERE name = ? AND version = ?`,
+          [JSON.stringify(final), final.name, final.version],
+        );
+        return final;
+      } catch (err) {
+        lastErr = err;
+        const code = (err as { code?: string; errno?: number })?.code;
+        const errno = (err as { errno?: number })?.errno;
+        // ER_DUP_ENTRY = 1062 — primary key collision; retry.
+        if (code !== "ER_DUP_ENTRY" && errno !== 1062) throw err;
+      }
     }
+    throw lastErr;
   }
 
   async getDefinition(name: string, version?: number): Promise<DynamicBroadcastSpec | null> {
