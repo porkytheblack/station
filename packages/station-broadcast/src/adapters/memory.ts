@@ -6,11 +6,14 @@ import type {
   BroadcastRunStatus,
   BroadcastNodeRun,
   BroadcastNodeRunPatch,
+  DynamicBroadcastSpec,
 } from "../types.js";
 
 export class BroadcastMemoryAdapter implements BroadcastQueueAdapter {
   private runs = new Map<string, BroadcastRun>();
   private nodeRuns = new Map<string, BroadcastNodeRun>();
+  /** name -> version -> spec (full version history retained). */
+  private definitions = new Map<string, Map<number, DynamicBroadcastSpec>>();
 
   async addBroadcastRun(run: BroadcastRun): Promise<void> {
     this.runs.set(run.id, run);
@@ -116,6 +119,62 @@ export class BroadcastMemoryAdapter implements BroadcastQueueAdapter {
     );
   }
 
+  // ─── Dynamic broadcast definitions ───────────────────────────────
+
+  async saveDefinition(spec: DynamicBroadcastSpec): Promise<DynamicBroadcastSpec> {
+    let versions = this.definitions.get(spec.name);
+    if (!versions) {
+      versions = new Map();
+      this.definitions.set(spec.name, versions);
+    }
+    const latestVersion = Math.max(0, ...Array.from(versions.keys()));
+    const next: DynamicBroadcastSpec = {
+      ...spec,
+      version: latestVersion + 1,
+      createdAt: spec.createdAt ?? new Date(),
+      updatedAt: new Date(),
+      deletedAt: undefined,
+    };
+    versions.set(next.version, next);
+    return next;
+  }
+
+  async getDefinition(name: string, version?: number): Promise<DynamicBroadcastSpec | null> {
+    const versions = this.definitions.get(name);
+    if (!versions || versions.size === 0) return null;
+    if (version !== undefined) return versions.get(version) ?? null;
+    const latest = Math.max(...versions.keys());
+    return versions.get(latest) ?? null;
+  }
+
+  async listDefinitions(): Promise<DynamicBroadcastSpec[]> {
+    const out: DynamicBroadcastSpec[] = [];
+    for (const versions of this.definitions.values()) {
+      if (versions.size === 0) continue;
+      const latest = Math.max(...versions.keys());
+      const spec = versions.get(latest)!;
+      if (spec.deletedAt) continue;
+      out.push(spec);
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  async listDefinitionVersions(name: string): Promise<DynamicBroadcastSpec[]> {
+    const versions = this.definitions.get(name);
+    if (!versions) return [];
+    return Array.from(versions.values()).sort((a, b) => b.version - a.version);
+  }
+
+  async deleteDefinition(name: string): Promise<boolean> {
+    const versions = this.definitions.get(name);
+    if (!versions || versions.size === 0) return false;
+    const latest = Math.max(...versions.keys());
+    const spec = versions.get(latest)!;
+    if (spec.deletedAt) return false;
+    versions.set(latest, { ...spec, deletedAt: new Date() });
+    return true;
+  }
+
   generateId(): string {
     return randomUUID();
   }
@@ -127,5 +186,6 @@ export class BroadcastMemoryAdapter implements BroadcastQueueAdapter {
   async close(): Promise<void> {
     this.runs.clear();
     this.nodeRuns.clear();
+    this.definitions.clear();
   }
 }

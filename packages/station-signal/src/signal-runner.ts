@@ -35,6 +35,12 @@ interface RegisteredSignal {
   name: string;
   filePath: string;
   maxConcurrency?: number;
+  /**
+   * The actual Signal object — set when discovered via `discover()` or
+   * registered via `registerSignal()`. Allows callers (e.g. dynamic broadcasts)
+   * to access `inputSchema`, `outputSchema`, and `trigger()` without re-importing.
+   */
+  signal?: AnySignal;
 }
 
 interface RecurringSchedule {
@@ -45,6 +51,14 @@ interface RecurringSchedule {
   timeout: number;
   maxAttempts: number;
   input?: string;
+}
+
+/**
+ * Minimal interface a schedule reconciler needs from the runner. Decoupled
+ * so `station-signal` doesn't depend on `station-schedules`.
+ */
+export interface SignalScheduleReconciler {
+  tick(): Promise<void>;
 }
 
 export interface SignalRunnerOptions {
@@ -59,6 +73,11 @@ export interface SignalRunnerOptions {
   maxConcurrent?: number;
   /** Base delay (ms) for exponential retry backoff. @default 1000 */
   retryBackoffMs?: number;
+  /**
+   * Optional dynamic schedule reconciler. When set, the runner ticks it on
+   * the same cadence as run discovery. Wire `station-schedules` here.
+   */
+  scheduleReconciler?: SignalScheduleReconciler;
 }
 
 export class SignalRunner {
@@ -74,6 +93,7 @@ export class SignalRunner {
   private recurringSchedules = new Map<string, RecurringSchedule>();
   private subscribers: SignalSubscriber[];
   private maxConcurrent: number;
+  private scheduleReconciler?: SignalScheduleReconciler;
   private activeCount = 0;
   private activePerSignal = new Map<string, number>();
   /** Map runId → child process for cancel/timeout kill. */
@@ -101,6 +121,25 @@ export class SignalRunner {
     this.retryBackoffMs = options.retryBackoffMs ?? 1000;
     this.subscribers = options.subscribers ? [...options.subscribers] : [];
     this.maxConcurrent = options.maxConcurrent ?? 5;
+    this.scheduleReconciler = options.scheduleReconciler;
+  }
+
+  /**
+   * Trigger a registered signal by name, writing to this runner's adapter.
+   * Used by the schedule reconciler so dynamic schedules don't depend on
+   * the global config singleton.
+   */
+  async triggerSignal(name: string, input: unknown): Promise<string> {
+    const sig = this.registry.get(name)?.signal;
+    if (!sig) {
+      throw new Error(`Signal "${name}" is not registered (no Signal object available)`);
+    }
+    // Validate via the signal's Zod schema so bad input fails fast.
+    return sig.trigger(input);
+  }
+
+  hasPendingOrRunningForSignal(name: string): Promise<boolean> {
+    return this.adapter.hasRunWithStatus(name, ["pending", "running"]);
   }
 
   /** The underlying queue adapter. Useful for broadcast orchestration and advanced queries. */
@@ -115,7 +154,9 @@ export class SignalRunner {
 
   /** List all registered signals with metadata. */
   listRegistered(): Array<{ name: string; filePath: string; maxConcurrency?: number }> {
-    return Array.from(this.registry.values());
+    return Array.from(this.registry.values()).map(({ name, filePath, maxConcurrency }) => ({
+      name, filePath, maxConcurrency,
+    }));
   }
 
   /** Check whether a signal is registered by name. */
@@ -123,8 +164,37 @@ export class SignalRunner {
     return this.registry.has(name);
   }
 
+  /**
+   * Return the Signal object for a registered name, when available. Discovered
+   * signals always populate this; signals registered via `register(name, filePath)`
+   * only do so if the file is later loaded.
+   */
+  getSignal(name: string): AnySignal | undefined {
+    return this.registry.get(name)?.signal;
+  }
+
+  /** All Signal objects this runner has loaded, keyed by name. */
+  getAllSignals(): Map<string, AnySignal> {
+    const out = new Map<string, AnySignal>();
+    for (const entry of this.registry.values()) {
+      if (entry.signal) out.set(entry.name, entry.signal);
+    }
+    return out;
+  }
+
   register(name: string, filePath: string, options?: { maxConcurrency?: number }): this {
     this.registry.set(name, { name, filePath: resolve(filePath), maxConcurrency: options?.maxConcurrency });
+    return this;
+  }
+
+  /** Register a Signal object directly. */
+  registerSignal(signal: AnySignal, filePath: string): this {
+    this.registry.set(signal.name, {
+      name: signal.name,
+      filePath: resolve(filePath),
+      maxConcurrency: signal.maxConcurrency,
+      signal,
+    });
     return this;
   }
 
@@ -330,6 +400,7 @@ export class SignalRunner {
               name: value.name,
               filePath,
               maxConcurrency: value.maxConcurrency,
+              signal: value,
             });
             this.emit("onSignalDiscovered", { signalName: value.name, filePath });
             if (value.interval && !this.recurringSchedules.has(value.name)) {
@@ -362,6 +433,13 @@ export class SignalRunner {
     try {
     await this.checkTimeouts();
     await this.tickRecurring();
+    if (this.scheduleReconciler) {
+      try {
+        await this.scheduleReconciler.tick();
+      } catch (err) {
+        console.error("[station-signal] Schedule reconciler error:", err);
+      }
+    }
 
     const due = await this.adapter.getRunsDue();
     for (const run of due) {

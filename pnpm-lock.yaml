@@ -309,6 +309,9 @@ importers:
       station-broadcast:
         specifier: workspace:*
         version: link:../station-broadcast
+      station-schedules:
+        specifier: workspace:*
+        version: link:../station-schedules
       station-signal:
         specifier: workspace:*
         version: link:../station-signal
@@ -318,6 +321,10 @@ importers:
         version: 7.6.13
 
   packages/station-broadcast:
+    dependencies:
+      station-expressions:
+        specifier: workspace:*
+        version: link:../station-expressions
     devDependencies:
       '@types/node':
         specifier: ^25.3.0
@@ -325,6 +332,15 @@ importers:
       station-signal:
         specifier: workspace:*
         version: link:../station-signal
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
+  packages/station-expressions:
+    devDependencies:
+      '@types/node':
+        specifier: ^25.3.0
+        version: 25.3.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -352,6 +368,12 @@ importers:
       react-dom:
         specifier: ^19
         version: 19.2.4(react@19.2.4)
+      station-expressions:
+        specifier: workspace:*
+        version: link:../station-expressions
+      station-schedules:
+        specifier: workspace:*
+        version: link:../station-schedules
       tsx:
         specifier: ^4.21.0
         version: 4.21.0
@@ -380,6 +402,15 @@ importers:
       station-signal:
         specifier: workspace:*
         version: link:../station-signal
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
+  packages/station-schedules:
+    devDependencies:
+      '@types/node':
+        specifier: ^25.3.0
+        version: 25.3.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3

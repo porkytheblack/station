@@ -15,7 +15,7 @@ export function authResolver(deps: AuthDeps) {
     if (authHeader?.startsWith("Bearer ") && deps.keyStore) {
       const token = authHeader.slice(7);
       if (token.startsWith("sk_")) {
-        const key = deps.keyStore.verify(token);
+        const key = await deps.keyStore.verify(token);
         if (key) {
           c.set("authType", "api-key");
           c.set("apiKeyId", key.id);

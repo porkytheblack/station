@@ -1,10 +1,18 @@
 import type { SignalQueueAdapter } from "station-signal";
 import type { BroadcastQueueAdapter } from "station-broadcast";
+import type { ScheduleAdapter } from "station-schedules";
+import type { ApiKeyStorageAdapter } from "../server/auth/keys.js";
 
 export interface AuthConfig {
   username: string;
   password: string;
   sessionTtlMs?: number;
+  /**
+   * Pluggable storage backend for API keys. Defaults to a SQLite store at
+   * `<dataDir>/station-keys.db`. Provide a custom adapter to host keys in
+   * Postgres, MySQL, Redis, etc.
+   */
+  keyStorage?: ApiKeyStorageAdapter;
 }
 
 export interface RunnerConfig {
@@ -27,6 +35,11 @@ export interface StationConfig {
   host: string;
   adapter?: SignalQueueAdapter;
   broadcastAdapter?: BroadcastQueueAdapter;
+  /**
+   * Optional schedule storage adapter. When provided, runtime-editable
+   * schedules are persisted here and reconciled by both runners.
+   */
+  scheduleAdapter?: ScheduleAdapter;
   signalsDir?: string;
   broadcastsDir?: string;
   stationDir: string;
@@ -85,6 +98,7 @@ export function resolveConfig(input: StationUserConfig): StationConfig {
     host: input.host ?? envHost ?? DEFAULTS.host,
     adapter: input.adapter,
     broadcastAdapter: input.broadcastAdapter,
+    scheduleAdapter: input.scheduleAdapter,
     signalsDir: input.signalsDir,
     broadcastsDir: input.broadcastsDir,
     stationDir: input.stationDir ?? DEFAULTS.stationDir,

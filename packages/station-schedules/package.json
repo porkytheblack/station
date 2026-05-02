@@ -1,7 +1,7 @@
 {
-  "name": "station-broadcast",
-  "version": "1.0.3",
-  "description": "Workflow orchestration for station-signal — connect signals into DAGs",
+  "name": "station-schedules",
+  "version": "0.1.0",
+  "description": "Runtime-editable schedule store and reconciler for station-signal and station-broadcast",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -18,14 +18,7 @@
   },
   "type": "module",
   "engines": { "node": ">=18" },
-  "peerDependencies": {
-    "station-signal": "workspace:*"
-  },
-  "dependencies": {
-    "station-expressions": "workspace:*"
-  },
   "devDependencies": {
-    "station-signal": "workspace:*",
     "typescript": "^5.9.3",
     "@types/node": "^25.3.0"
   }

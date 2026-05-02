@@ -5,6 +5,14 @@ import { BroadcastValidationError } from "./errors.js";
 import type { BroadcastRun, FailurePolicy } from "./types.js";
 import { BROADCAST_BRAND, topologicalSort } from "./util.js";
 
+/** Evaluation context available to dynamic broadcast nodes. */
+export interface NodeEvalContext {
+  /** The broadcast's trigger input. */
+  input: unknown;
+  /** Upstream node outputs keyed by node name. */
+  upstream: Record<string, unknown>;
+}
+
 /** A named node in the broadcast DAG. */
 export interface BroadcastNode {
   readonly name: string;
@@ -14,8 +22,18 @@ export interface BroadcastNode {
   readonly dependsOn: readonly string[];
   readonly timeout: number;
   readonly maxAttempts: number;
+  /** Static-broadcast input mapper (sees only upstream outputs). */
   readonly map?: (upstream: Record<string, unknown>) => unknown;
+  /** Static-broadcast guard (sees only upstream outputs, or root input for root nodes). */
   readonly when?: (upstream: Record<string, unknown>) => boolean;
+  /**
+   * Dynamic-broadcast input mapper. When present, the runner passes `{ input, upstream }`
+   * and ignores `map`. Used by materialized dynamic broadcasts so expression `ref`s
+   * can reach both the trigger input and upstream outputs uniformly.
+   */
+  readonly evalInput?: (ctx: NodeEvalContext) => unknown;
+  /** Dynamic-broadcast guard taking `{ input, upstream }`. Preferred over `when` when present. */
+  readonly evalGuard?: (ctx: NodeEvalContext) => boolean;
 }
 
 export interface BroadcastDefinition {

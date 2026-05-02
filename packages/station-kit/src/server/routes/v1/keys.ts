@@ -17,7 +17,7 @@ export function v1KeyRoutes(deps: V1KeyDeps) {
     const name = body.name || "Unnamed key";
     const scopes = Array.isArray(body.scopes) ? body.scopes : ["trigger", "read"];
 
-    const { key, record } = deps.keyStore.create(name, scopes);
+    const { key, record } = await deps.keyStore.create(name, scopes);
     return c.json(
       {
         data: {
@@ -37,7 +37,7 @@ export function v1KeyRoutes(deps: V1KeyDeps) {
     if (!deps.keyStore) {
       return c.json({ error: "unavailable", message: "Auth not configured." }, 503);
     }
-    const keys = deps.keyStore.list();
+    const keys = await deps.keyStore.list();
     return c.json({ data: keys });
   });
 
@@ -46,7 +46,7 @@ export function v1KeyRoutes(deps: V1KeyDeps) {
       return c.json({ error: "unavailable", message: "Auth not configured." }, 503);
     }
     const id = c.req.param("id");
-    const success = deps.keyStore.revoke(id);
+    const success = await deps.keyStore.revoke(id);
     if (!success) {
       return c.json({ error: "not_found", message: "Key not found." }, 404);
     }

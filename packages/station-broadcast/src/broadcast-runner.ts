@@ -1,6 +1,6 @@
 import { readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import type { SignalRunner, SignalQueueAdapter } from "station-signal";
+import type { AnySignal, SignalRunner, SignalQueueAdapter } from "station-signal";
 import { parseInterval } from "station-signal";
 import type { BroadcastDefinition } from "./broadcast.js";
 import { configureBroadcast } from "./config.js";
@@ -10,9 +10,11 @@ import type { BroadcastSubscriber } from "./subscribers/index.js";
 import type {
   BroadcastRun,
   BroadcastNodeRun,
+  DynamicBroadcastSpec,
   FailurePolicy,
 } from "./types.js";
 import { isBroadcast } from "./util.js";
+import { materializeDynamic, type MaterializedDynamicBroadcast } from "./dynamic.js";
 
 interface RecurringBroadcastSchedule {
   broadcastName: string;
@@ -23,12 +25,27 @@ interface RecurringBroadcastSchedule {
   timeout?: number;
 }
 
+/** Minimal interface a schedule reconciler needs from the runner. */
+export interface BroadcastScheduleReconciler {
+  tick(): Promise<void>;
+}
+
 export interface BroadcastRunnerOptions {
   signalRunner: SignalRunner;
   broadcastsDir?: string;
   adapter?: BroadcastQueueAdapter;
   pollIntervalMs?: number;
   subscribers?: BroadcastSubscriber[];
+  /**
+   * How often (in poll ticks) to refresh the dynamic broadcast registry from
+   * the adapter. Default: 5. Set to 0 to disable reconciliation.
+   */
+  reconcileEveryNTicks?: number;
+  /**
+   * Optional dynamic schedule reconciler. When set, the runner ticks it on
+   * the same cadence as broadcast discovery. Wire `station-schedules` here.
+   */
+  scheduleReconciler?: BroadcastScheduleReconciler;
 }
 
 export class BroadcastRunner {
@@ -38,8 +55,18 @@ export class BroadcastRunner {
   private broadcastsDir?: string;
   private pollIntervalMs: number;
   private subscribers: BroadcastSubscriber[];
-  private registry = new Map<string, BroadcastDefinition>();
+  /** File-defined broadcasts (immutable, discovered at startup). */
+  private fileRegistry = new Map<string, BroadcastDefinition>();
+  /**
+   * Dynamic broadcasts (loaded from the adapter, refreshed on a cadence).
+   * Lives in a separate namespace so names can collide harmlessly.
+   */
+  private dynamicRegistry = new Map<string, MaterializedDynamicBroadcast>();
+  private signalRegistry = new Map<string, AnySignal>();
   private recurringSchedules = new Map<string, RecurringBroadcastSchedule>();
+  private reconcileEveryNTicks: number;
+  private scheduleReconciler?: BroadcastScheduleReconciler;
+  private tickCount = 0;
   private running = false;
   private stopping = false;
   private ticking = false;
@@ -54,32 +81,83 @@ export class BroadcastRunner {
     this.broadcastsDir = options.broadcastsDir;
     this.pollIntervalMs = options.pollIntervalMs ?? 1000;
     this.subscribers = options.subscribers ? [...options.subscribers] : [];
+    this.reconcileEveryNTicks = options.reconcileEveryNTicks ?? 5;
+    this.scheduleReconciler = options.scheduleReconciler;
+
+    // Pre-populate signal registry from the SignalRunner so dynamic broadcasts
+    // can resolve signal names. This is a snapshot; refreshed at registration time.
+    this.refreshSignalRegistry();
   }
 
-  /** List all registered broadcast definitions with metadata. */
-  listRegistered(): Array<{ name: string; nodeCount: number; failurePolicy: FailurePolicy; timeout?: number; interval?: string }> {
-    return Array.from(this.registry.values()).map((def) => ({
-      name: def.name,
-      nodeCount: def.nodes.length,
-      failurePolicy: def.failurePolicy,
-      timeout: def.timeout,
-      interval: def.interval,
-    }));
+  /**
+   * List all registered broadcast definitions with metadata. Includes both
+   * file-defined and dynamic broadcasts; the `kind` field disambiguates.
+   */
+  listRegistered(): Array<{
+    name: string;
+    kind: "file" | "dynamic";
+    nodeCount: number;
+    failurePolicy: FailurePolicy;
+    timeout?: number;
+    interval?: string;
+    version?: number;
+  }> {
+    const out: Array<{
+      name: string;
+      kind: "file" | "dynamic";
+      nodeCount: number;
+      failurePolicy: FailurePolicy;
+      timeout?: number;
+      interval?: string;
+      version?: number;
+    }> = [];
+    for (const def of this.fileRegistry.values()) {
+      out.push({
+        name: def.name,
+        kind: "file",
+        nodeCount: def.nodes.length,
+        failurePolicy: def.failurePolicy,
+        timeout: def.timeout,
+        interval: def.interval,
+      });
+    }
+    for (const entry of this.dynamicRegistry.values()) {
+      out.push({
+        name: entry.spec.name,
+        kind: "dynamic",
+        nodeCount: entry.spec.nodes.length,
+        failurePolicy: entry.spec.failurePolicy,
+        timeout: entry.spec.timeout,
+        version: entry.spec.version,
+      });
+    }
+    return out;
   }
 
-  /** Check whether a broadcast is registered by name. */
+  /** Check whether a broadcast is registered (file OR dynamic) by name. */
   hasBroadcast(name: string): boolean {
-    return this.registry.has(name);
+    return this.fileRegistry.has(name) || this.dynamicRegistry.has(name);
+  }
+
+  /** Whether a dynamic broadcast with this name is currently registered. */
+  hasDynamicBroadcast(name: string): boolean {
+    return this.dynamicRegistry.has(name);
   }
 
   /** Register a broadcast definition explicitly (alternative to auto-discovery). */
   register(definition: BroadcastDefinition): this {
-    if (this.registry.has(definition.name)) {
+    if (this.fileRegistry.has(definition.name)) {
       console.warn(
         `[station-broadcast] Duplicate broadcast name "${definition.name}" — overwriting.`,
       );
     }
-    this.registry.set(definition.name, definition);
+    this.fileRegistry.set(definition.name, definition);
+    // Cache referenced signals so dynamic broadcasts can use them too.
+    for (const node of definition.nodes) {
+      if (!this.signalRegistry.has(node.signalName)) {
+        this.signalRegistry.set(node.signalName, node.signal);
+      }
+    }
     if (definition.interval && !this.recurringSchedules.has(definition.name)) {
       this.scheduleRecurring(definition);
     }
@@ -152,27 +230,131 @@ export class BroadcastRunner {
   }
 
   /**
-   * Trigger a broadcast by name. Prefer this over `definition.trigger()` as it
-   * writes directly to this runner's adapter instead of the global singleton.
+   * Trigger a broadcast by name. Resolves to the file-defined registry first,
+   * then falls back to dynamic broadcasts. For dynamic broadcasts, the current
+   * spec is snapshotted into the run record so spec edits don't mutate the run.
    */
   async trigger(broadcastName: string, input: unknown): Promise<string> {
-    const definition = this.registry.get(broadcastName);
-    if (!definition) {
-      throw new Error(`No broadcast definition registered for "${broadcastName}"`);
+    const fileDef = this.fileRegistry.get(broadcastName);
+    if (fileDef) {
+      const id = this.adapter.generateId();
+      const bRun: BroadcastRun = {
+        id,
+        broadcastName,
+        input: JSON.stringify(input),
+        status: "pending",
+        failurePolicy: fileDef.failurePolicy,
+        timeout: fileDef.timeout,
+        createdAt: new Date(),
+      };
+      await this.adapter.addBroadcastRun(bRun);
+      this.emit("onBroadcastQueued", { broadcastRun: bRun });
+      return id;
+    }
+
+    const dynamic = this.dynamicRegistry.get(broadcastName);
+    if (dynamic) {
+      return this.triggerDynamic(broadcastName, input);
+    }
+
+    throw new Error(`No broadcast definition registered for "${broadcastName}"`);
+  }
+
+  /** Trigger a dynamic broadcast and snapshot its current spec into the run. */
+  async triggerDynamic(name: string, input: unknown): Promise<string> {
+    const entry = this.dynamicRegistry.get(name);
+    if (!entry) {
+      throw new Error(`No dynamic broadcast registered for "${name}"`);
     }
     const id = this.adapter.generateId();
     const bRun: BroadcastRun = {
       id,
-      broadcastName,
+      broadcastName: name,
       input: JSON.stringify(input),
       status: "pending",
-      failurePolicy: definition.failurePolicy,
-      timeout: definition.timeout,
+      failurePolicy: entry.spec.failurePolicy,
+      timeout: entry.spec.timeout,
       createdAt: new Date(),
+      definitionSnapshot: JSON.stringify(entry.spec),
     };
     await this.adapter.addBroadcastRun(bRun);
     this.emit("onBroadcastQueued", { broadcastRun: bRun });
     return id;
+  }
+
+  /** Force a refresh of the dynamic broadcast registry from the adapter. */
+  async reconcileDynamicDefinitions(): Promise<void> {
+    if (!this.adapter.listDefinitions) return;
+    let specs: DynamicBroadcastSpec[];
+    try {
+      specs = await this.adapter.listDefinitions();
+    } catch (err) {
+      console.error("[station-broadcast] Failed to list dynamic definitions:", err);
+      return;
+    }
+
+    this.refreshSignalRegistry();
+
+    const seen = new Set<string>();
+    for (const spec of specs) {
+      seen.add(spec.name);
+      const existing = this.dynamicRegistry.get(spec.name);
+      if (existing && existing.spec.version === spec.version) continue;
+      try {
+        const materialized = materializeDynamic(spec, this.signalRegistry);
+        this.dynamicRegistry.set(spec.name, materialized);
+      } catch (err) {
+        console.warn(
+          `[station-broadcast] Skipping dynamic broadcast "${spec.name}" v${spec.version}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
+
+    // Drop registrations that no longer exist (deleted or filtered out).
+    for (const name of [...this.dynamicRegistry.keys()]) {
+      if (!seen.has(name)) this.dynamicRegistry.delete(name);
+    }
+  }
+
+  private refreshSignalRegistry(): void {
+    for (const [name, sig] of this.signalRunner.getAllSignals()) {
+      this.signalRegistry.set(name, sig);
+    }
+  }
+
+  /**
+   * Whether any pending or running BroadcastRun exists for `broadcastName`.
+   * Used by the schedule reconciler to skip overlapping fires.
+   */
+  hasPendingOrRunningForBroadcast(broadcastName: string): Promise<boolean> {
+    return this.adapter.hasBroadcastRunWithStatus(broadcastName, ["pending", "running"]);
+  }
+
+  /**
+   * Resolve the BroadcastDefinition to use for a run. For runs with a
+   * `definitionSnapshot`, the snapshot is materialized fresh so spec edits
+   * after trigger time don't affect this run. Otherwise the file registry is
+   * consulted, then the live dynamic registry as a fallback.
+   */
+  private resolveDefinitionForRun(bRun: BroadcastRun): BroadcastDefinition | null {
+    if (bRun.definitionSnapshot) {
+      try {
+        const spec = JSON.parse(bRun.definitionSnapshot) as DynamicBroadcastSpec;
+        return materializeDynamic(spec, this.signalRegistry).definition;
+      } catch (err) {
+        console.error(
+          `[station-broadcast] Failed to materialize snapshot for run ${bRun.id}:`,
+          err,
+        );
+        return null;
+      }
+    }
+    const fileDef = this.fileRegistry.get(bRun.broadcastName);
+    if (fileDef) return fileDef;
+    const dynamic = this.dynamicRegistry.get(bRun.broadcastName);
+    return dynamic ? dynamic.definition : null;
   }
 
   async start(): Promise<void> {
@@ -183,6 +365,10 @@ export class BroadcastRunner {
     if (this.broadcastsDir) {
       await this.discover(resolve(this.broadcastsDir));
     }
+
+    // Initial reconciliation so dynamic broadcasts are available before the
+    // first tick (otherwise pending dynamic runs would fail their first init).
+    await this.reconcileDynamicDefinitions();
 
     const shutdown = () => {
       console.log("[station-broadcast] Received shutdown signal, stopping...");
@@ -270,7 +456,12 @@ export class BroadcastRunner {
         const mod = await import(filePath);
         for (const value of Object.values(mod)) {
           if (isBroadcast(value)) {
-            this.registry.set(value.name, value);
+            this.fileRegistry.set(value.name, value);
+            for (const node of value.nodes) {
+              if (!this.signalRegistry.has(node.signalName)) {
+                this.signalRegistry.set(node.signalName, node.signal);
+              }
+            }
             this.emit("onBroadcastDiscovered", { broadcastName: value.name, filePath });
             if (value.interval && !this.recurringSchedules.has(value.name)) {
               this.scheduleRecurring(value);
@@ -301,7 +492,23 @@ export class BroadcastRunner {
     if (this.ticking) return;
     this.ticking = true;
     try {
+      this.tickCount++;
+      if (
+        this.reconcileEveryNTicks > 0 &&
+        this.tickCount % this.reconcileEveryNTicks === 0
+      ) {
+        await this.reconcileDynamicDefinitions();
+      }
+
       await this.tickRecurring();
+
+      if (this.scheduleReconciler) {
+        try {
+          await this.scheduleReconciler.tick();
+        } catch (err) {
+          console.error("[station-broadcast] Schedule reconciler error:", err);
+        }
+      }
 
       // Advance running broadcasts first
       const running = await this.adapter.getBroadcastRunsRunning();
@@ -358,7 +565,8 @@ export class BroadcastRunner {
     const fresh = await this.adapter.getBroadcastRun(bRun.id);
     if (!fresh || fresh.status !== "pending") return;
 
-    const definition = this.registry.get(bRun.broadcastName);
+    // Use the snapshot if present (dynamic), else file/dynamic registry.
+    const definition = this.resolveDefinitionForRun(fresh);
     if (!definition) {
       const error = `No broadcast definition registered for "${bRun.broadcastName}"`;
       // H6: Mutate bRun before emitting so subscribers see current state
@@ -404,7 +612,7 @@ export class BroadcastRunner {
   // ─── Advance broadcast ─────────────────────────────────────────────
 
   private async advanceBroadcast(bRun: BroadcastRun): Promise<void> {
-    const definition = this.registry.get(bRun.broadcastName);
+    const definition = this.resolveDefinitionForRun(bRun);
     if (!definition) {
       await this.adapter.updateBroadcastRun(bRun.id, {
         status: "failed",
@@ -646,15 +854,17 @@ export class BroadcastRunner {
       }
 
       // M10: when guard always receives upstreamOutputs (broadcast input for root nodes)
-      const guardInput = node.dependsOn.length === 0
-        ? JSON.parse(bRun.input)
-        : upstreamOutputs;
+      const broadcastInput = JSON.parse(bRun.input);
+      const guardInput = node.dependsOn.length === 0 ? broadcastInput : upstreamOutputs;
+      const evalCtx = { input: broadcastInput, upstream: upstreamOutputs };
 
-      // Evaluate `when` guard — M1: wrap in try/catch
-      if (node.when) {
+      // Evaluate guard — `evalGuard` (dynamic) takes precedence over `when` (static)
+      if (node.evalGuard || node.when) {
         let guardResult: boolean;
         try {
-          guardResult = node.when(guardInput);
+          guardResult = node.evalGuard
+            ? node.evalGuard(evalCtx)
+            : node.when!(guardInput);
         } catch (err) {
           const error = err instanceof Error ? err.message : String(err);
           nodeRun.status = "failed";
@@ -686,10 +896,27 @@ export class BroadcastRunner {
         }
       }
 
-      // Compute input for this node's signal — M1: wrap map in try/catch
+      // Compute input for this node's signal — M1: wrap evaluator in try/catch.
+      // `evalInput` (dynamic) takes precedence over `map` (static).
       let nodeInput: unknown;
-      if (node.dependsOn.length === 0) {
-        nodeInput = JSON.parse(bRun.input);
+      if (node.evalInput) {
+        try {
+          nodeInput = node.evalInput(evalCtx);
+        } catch (err) {
+          const error = err instanceof Error ? err.message : String(err);
+          nodeRun.status = "failed";
+          nodeRun.error = error;
+          nodeRun.completedAt = new Date();
+          await this.adapter.updateNodeRun(nodeRun.id, {
+            status: "failed",
+            error,
+            completedAt: nodeRun.completedAt,
+          });
+          this.emit("onNodeFailed", { broadcastRun: bRun, nodeRun, error });
+          continue;
+        }
+      } else if (node.dependsOn.length === 0) {
+        nodeInput = broadcastInput;
       } else if (node.map) {
         try {
           nodeInput = node.map(upstreamOutputs);

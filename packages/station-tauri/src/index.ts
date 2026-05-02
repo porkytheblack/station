@@ -59,7 +59,7 @@ export async function createTauriStation(opts: TauriStationConfig): Promise<Taur
   if (!station.keyStore) {
     throw new Error("Station auth was not initialized — this should not happen");
   }
-  const apiKey = getOrCreateApiKey(station.keyStore, station.dataDir);
+  const apiKey = await getOrCreateApiKey(station.keyStore, station.dataDir);
 
   return {
     port,

@@ -11,7 +11,17 @@ export type {
   BroadcastNodeRunPatch,
   BroadcastNodeSkipReason,
   FailurePolicy,
+  DynamicBroadcastSpec,
+  DynamicNodeSpec,
+  DynamicExpr,
 } from "./types.js";
+
+export {
+  materializeDynamic,
+  validateDynamicSpec,
+  type DynamicValidationContext,
+  type MaterializedDynamicBroadcast,
+} from "./dynamic.js";
 
 export {
   type BroadcastQueueAdapter,

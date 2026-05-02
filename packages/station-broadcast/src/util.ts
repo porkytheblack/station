@@ -1,4 +1,4 @@
-import type { BroadcastDefinition, BroadcastNode } from "./broadcast.js";
+import type { BroadcastDefinition } from "./broadcast.js";
 import { BroadcastCycleError } from "./errors.js";
 
 export const BROADCAST_BRAND = Symbol.for("station-broadcast");
@@ -8,19 +8,25 @@ export function isBroadcast(value: unknown): value is BroadcastDefinition {
   return (value as Record<symbol, unknown>)[BROADCAST_BRAND] === true;
 }
 
+/** Minimal shape the topological sort needs. */
+export interface DagNode {
+  readonly name: string;
+  readonly dependsOn: readonly string[];
+}
+
 /**
  * Topological sort with cycle detection.
  * Returns nodes in dependency order (roots first).
  * Throws BroadcastCycleError if a cycle is found.
  */
-export function topologicalSort(
+export function topologicalSort<T extends DagNode>(
   broadcastName: string,
-  nodes: readonly BroadcastNode[],
-): BroadcastNode[] {
+  nodes: readonly T[],
+): T[] {
   const nodeMap = new Map(nodes.map((n) => [n.name, n]));
   const visited = new Set<string>();
   const visiting = new Set<string>();
-  const sorted: BroadcastNode[] = [];
+  const sorted: T[] = [];
 
   function visit(name: string, path: string[]): void {
     if (visited.has(name)) return;

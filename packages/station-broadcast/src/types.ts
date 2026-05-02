@@ -19,6 +19,49 @@ export interface BroadcastRun {
   startedAt?: Date;
   completedAt?: Date;
   error?: string;
+  /**
+   * For runs of dynamic broadcasts: a JSON-serialized DynamicBroadcastSpec
+   * captured at trigger time. The advance loop reads from this rather than
+   * the live registry so edits to the spec don't mutate in-flight runs.
+   */
+  definitionSnapshot?: string;
+}
+
+// ─── Dynamic broadcasts ─────────────────────────────────────────────
+
+/**
+ * A JSON-serialized expression AST. Stored as `unknown` here to avoid a
+ * hard dependency on `station-expressions` from the core types module —
+ * adapters round-trip the value untouched.
+ */
+export type DynamicExpr = unknown;
+
+export interface DynamicNodeSpec {
+  /** Node label, unique within the spec. */
+  name: string;
+  /** Must resolve to a registered signal at materialization time. */
+  signalName: string;
+  dependsOn: string[];
+  /** ExprNode JSON; absent ⇒ pass-through (single-dep) or upstream object (multi-dep) */
+  input?: DynamicExpr;
+  /** ExprNode JSON returning boolean; absent ⇒ always run */
+  when?: DynamicExpr;
+}
+
+export interface DynamicBroadcastSpec {
+  /** Namespace-scoped — never collides with file-defined broadcasts. */
+  name: string;
+  /** Monotonically incremented on each save. */
+  version: number;
+  failurePolicy: FailurePolicy;
+  timeout?: number;
+  nodes: DynamicNodeSpec[];
+  createdAt: Date;
+  updatedAt: Date;
+  /** API key id or session user that authored this version. */
+  createdBy?: string;
+  /** Soft-delete marker — definitions are retained for run-history inspection. */
+  deletedAt?: Date;
 }
 
 export type BroadcastRunPatch = Partial<Omit<BroadcastRun, "id" | "broadcastName" | "createdAt">>;
