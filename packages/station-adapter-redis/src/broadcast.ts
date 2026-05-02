@@ -33,6 +33,7 @@ import {
   broadcastDefinitionKey,
   broadcastDefinitionVersionsKey,
   broadcastDefinitionNamesKey,
+  broadcastDefinitionCounterKey,
 } from "./shared.js";
 
 export interface BroadcastRedisAdapterOptions {
@@ -305,10 +306,21 @@ export class BroadcastRedisAdapter implements BroadcastQueueAdapter {
 
   async saveDefinition(spec: DynamicBroadcastSpec): Promise<DynamicBroadcastSpec> {
     const versionsKey = broadcastDefinitionVersionsKey(this.prefix, spec.name);
-    // ZRANGE WITHSCORES on a single-element top entry — score is the version.
-    const top = await this.redis.zrevrange(versionsKey, 0, 0, "WITHSCORES");
-    const latestVersion = top.length === 2 ? Number(top[1]) : 0;
-    const nextVersion = latestVersion + 1;
+    const namesKey = broadcastDefinitionNamesKey(this.prefix);
+    const deletedKey = this.deletedFlagKey();
+    const counterKey = broadcastDefinitionCounterKey(this.prefix, spec.name);
+
+    // Atomic version bump. The Lua script seeds the counter from the existing
+    // zset on first call (so an upgrade from a pre-counter installation
+    // doesn't reuse old versions), then INCRs. Concurrent callers always
+    // observe distinct values.
+    const nextVersion = (await this.redis.eval(
+      BUMP_VERSION_LUA,
+      2,
+      counterKey,
+      versionsKey,
+    )) as number;
+
     const now = new Date();
     const next: DynamicBroadcastSpec = {
       ...spec,
@@ -318,14 +330,10 @@ export class BroadcastRedisAdapter implements BroadcastQueueAdapter {
       deletedAt: undefined,
     };
     const pipeline = this.redis.multi();
-    pipeline.set(
-      broadcastDefinitionKey(this.prefix, spec.name, nextVersion),
-      JSON.stringify(next),
-    );
+    pipeline.set(broadcastDefinitionKey(this.prefix, spec.name, nextVersion), JSON.stringify(next));
     pipeline.zadd(versionsKey, String(nextVersion), String(nextVersion));
-    pipeline.sadd(broadcastDefinitionNamesKey(this.prefix), spec.name);
-    // Clear any soft-delete marker (per-name)
-    pipeline.hdel(this.deletedFlagKey(), spec.name);
+    pipeline.sadd(namesKey, spec.name);
+    pipeline.hdel(deletedKey, spec.name);
     await pipeline.exec();
     return next;
   }
@@ -492,3 +500,17 @@ function deserializeSpec(json: string): DynamicBroadcastSpec {
   if (obj.deletedAt) obj.deletedAt = new Date(obj.deletedAt);
   return obj;
 }
+
+const BUMP_VERSION_LUA = `
+local counterKey = KEYS[1]
+local versionsKey = KEYS[2]
+local exists = redis.call('EXISTS', counterKey)
+if exists == 0 then
+  local top = redis.call('ZREVRANGE', versionsKey, 0, 0, 'WITHSCORES')
+  local seed = 0
+  if #top == 2 then seed = tonumber(top[2]) end
+  redis.call('SET', counterKey, seed)
+end
+return redis.call('INCR', counterKey)
+`;
+

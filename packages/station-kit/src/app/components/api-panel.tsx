@@ -23,8 +23,42 @@ export interface ApiPanelProps {
 export function ApiPanel({ title = "API equivalent", snippets }: ApiPanelProps) {
   const [open, setOpen] = useState(false);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
+  const [copyFailedIdx, setCopyFailedIdx] = useState<number | null>(null);
 
   if (snippets.length === 0) return null;
+
+  async function copyText(text: string, idx: number): Promise<void> {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        setCopiedIdx(idx);
+        setTimeout(() => setCopiedIdx((c) => (c === idx ? null : c)), 1500);
+        return;
+      }
+      throw new Error("clipboard API unavailable");
+    } catch {
+      // Fall back to the legacy approach for non-secure-context deploys.
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.left = "-9999px";
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand("copy");
+        document.body.removeChild(ta);
+        if (ok) {
+          setCopiedIdx(idx);
+          setTimeout(() => setCopiedIdx((c) => (c === idx ? null : c)), 1500);
+        } else {
+          throw new Error("execCommand copy returned false");
+        }
+      } catch {
+        setCopyFailedIdx(idx);
+        setTimeout(() => setCopyFailedIdx((c) => (c === idx ? null : c)), 2000);
+      }
+    }
+  }
 
   return (
     <details
@@ -63,17 +97,10 @@ export function ApiPanel({ title = "API equivalent", snippets }: ApiPanelProps) 
                 <button
                   type="button"
                   className="btn btn--sm"
-                  onClick={async () => {
-                    try {
-                      await navigator.clipboard.writeText(cmd);
-                      setCopiedIdx(i);
-                      setTimeout(() => setCopiedIdx((c) => (c === i ? null : c)), 1500);
-                    } catch {
-                      // ignore — user can select-and-copy manually
-                    }
-                  }}
+                  onClick={() => copyText(cmd, i)}
+                  title={copyFailedIdx === i ? "Copy failed — select the text manually" : ""}
                 >
-                  {copiedIdx === i ? "Copied" : "Copy"}
+                  {copiedIdx === i ? "Copied" : copyFailedIdx === i ? "Copy failed" : "Copy"}
                 </button>
               </div>
               <pre className="mono" style={{
@@ -103,9 +130,14 @@ function toCurl(snippet: ApiSnippet): string {
     }
   }
   const path = `${snippet.path}${queryParts.length ? `?${queryParts.join("&")}` : ""}`;
+  // Use the dashboard's actual origin so users can copy and run the snippet
+  // against the same server. SSR fall-back uses a placeholder.
+  const origin = typeof window !== "undefined" && window.location?.origin
+    ? window.location.origin
+    : "https://your-station.example.com";
   const lines: string[] = [];
   lines.push(`curl -X ${snippet.method} \\`);
-  lines.push(`  https://your-station.example.com${path} \\`);
+  lines.push(`  ${origin}${path} \\`);
   lines.push(`  -H 'Authorization: Bearer sk_live_…' \\`);
   if (snippet.body !== undefined) {
     lines.push(`  -H 'Content-Type: application/json' \\`);

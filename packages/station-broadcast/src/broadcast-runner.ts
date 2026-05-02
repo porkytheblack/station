@@ -282,6 +282,15 @@ export class BroadcastRunner {
     return id;
   }
 
+  /**
+   * Tracks specs that failed to materialize so each tick can retry them when
+   * the signal registry changes. Without this, a temporarily missing signal
+   * would wedge a broadcast permanently — even after the signal returns —
+   * because the spec's version wouldn't change.
+   */
+  private failedMaterializations = new Map<string, DynamicBroadcastSpec>();
+  private lastSignalRegistrySize = 0;
+
   /** Force a refresh of the dynamic broadcast registry from the adapter. */
   async reconcileDynamicDefinitions(): Promise<void> {
     if (!this.adapter.listDefinitions) return;
@@ -294,16 +303,31 @@ export class BroadcastRunner {
     }
 
     this.refreshSignalRegistry();
+    const signalsChanged = this.signalRegistry.size !== this.lastSignalRegistrySize;
+    this.lastSignalRegistrySize = this.signalRegistry.size;
 
     const seen = new Set<string>();
     for (const spec of specs) {
       seen.add(spec.name);
       const existing = this.dynamicRegistry.get(spec.name);
-      if (existing && existing.spec.version === spec.version) continue;
+      const previouslyFailed = this.failedMaterializations.has(spec.name);
+      // Skip if we already have this exact version and it's not a previous
+      // failure waiting on a signal-registry change.
+      if (existing && existing.spec.version === spec.version && !previouslyFailed) continue;
+      // If the same failed version is still in play, only retry when signals
+      // have changed — otherwise we'd log every tick.
+      if (
+        previouslyFailed &&
+        this.failedMaterializations.get(spec.name)?.version === spec.version &&
+        !signalsChanged
+      ) continue;
+
       try {
         const materialized = materializeDynamic(spec, this.signalRegistry);
         this.dynamicRegistry.set(spec.name, materialized);
+        this.failedMaterializations.delete(spec.name);
       } catch (err) {
+        this.failedMaterializations.set(spec.name, spec);
         console.warn(
           `[station-broadcast] Skipping dynamic broadcast "${spec.name}" v${spec.version}: ${
             err instanceof Error ? err.message : String(err)
@@ -315,6 +339,9 @@ export class BroadcastRunner {
     // Drop registrations that no longer exist (deleted or filtered out).
     for (const name of [...this.dynamicRegistry.keys()]) {
       if (!seen.has(name)) this.dynamicRegistry.delete(name);
+    }
+    for (const name of [...this.failedMaterializations.keys()]) {
+      if (!seen.has(name)) this.failedMaterializations.delete(name);
     }
   }
 
@@ -622,11 +649,25 @@ export class BroadcastRunner {
       return;
     }
 
-    // M8: Broadcast-level timeout check
+    // M8: Broadcast-level timeout check. Cancel running children directly so
+    // we emit a single terminal `onBroadcastFailed` for this run rather than
+    // racing `onBroadcastCancelled` + `onBroadcastFailed`.
     if (bRun.timeout && bRun.startedAt) {
       const elapsed = Date.now() - bRun.startedAt.getTime();
       if (elapsed > bRun.timeout) {
-        await this.cancel(bRun.id);
+        const nodeRuns = await this.adapter.getNodeRuns(bRun.id);
+        for (const nr of nodeRuns) {
+          if (nr.status === "running" && nr.signalRunId) {
+            await this.signalRunner.cancel(nr.signalRunId);
+          }
+          if (nr.status === "pending" || nr.status === "running") {
+            await this.adapter.updateNodeRun(nr.id, {
+              status: "skipped",
+              skipReason: "cancelled",
+              completedAt: new Date(),
+            });
+          }
+        }
         const error = `Broadcast timed out after ${bRun.timeout}ms`;
         bRun.status = "failed";
         bRun.completedAt = new Date();

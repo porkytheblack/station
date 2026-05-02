@@ -17,11 +17,10 @@ export interface V1DefinitionDeps {
 }
 
 /**
- * v1 routes for dynamic broadcast definition CRUD + validation.
- * Static (file-defined) broadcasts live under /broadcasts and are
- * intentionally separate.
+ * Read-scope routes — `validate` is read-only (no persistence) so it lives
+ * here alongside the GETs mounted in server/index.ts.
  */
-export function v1DefinitionRoutes(deps: V1DefinitionDeps) {
+export function v1DefinitionReadRoutes(deps: V1DefinitionDeps) {
   const app = new Hono();
 
   app.post("/broadcast-definitions/validate", async (c) => {
@@ -34,6 +33,16 @@ export function v1DefinitionRoutes(deps: V1DefinitionDeps) {
     const result = validateDynamicSpec(spec, ctx);
     return c.json({ data: result });
   });
+
+  return app;
+}
+
+/**
+ * Admin-scope routes for mutating dynamic broadcast definitions. GETs are
+ * mounted under read scope in server/index.ts.
+ */
+export function v1DefinitionRoutes(deps: V1DefinitionDeps) {
+  const app = new Hono();
 
   app.post("/broadcast-definitions", async (c) => {
     if (!deps.broadcastAdapter?.saveDefinition) {
@@ -72,43 +81,8 @@ export function v1DefinitionRoutes(deps: V1DefinitionDeps) {
     return c.json({ data: serializeSpec(saved) }, 201);
   });
 
-  app.get("/broadcast-definitions", async (c) => {
-    if (!deps.broadcastAdapter?.listDefinitions) {
-      return c.json({ data: [] });
-    }
-    const specs = await deps.broadcastAdapter.listDefinitions();
-    return c.json({ data: specs.map(serializeSpec) });
-  });
-
-  app.get("/broadcast-definitions/:name", async (c) => {
-    if (!deps.broadcastAdapter?.getDefinition) {
-      return c.json({ error: "unavailable" }, 503);
-    }
-    const spec = await deps.broadcastAdapter.getDefinition(c.req.param("name"));
-    if (!spec) return c.json({ error: "not_found" }, 404);
-    return c.json({ data: serializeSpec(spec) });
-  });
-
-  app.get("/broadcast-definitions/:name/versions", async (c) => {
-    if (!deps.broadcastAdapter?.listDefinitionVersions) {
-      return c.json({ data: [] });
-    }
-    const versions = await deps.broadcastAdapter.listDefinitionVersions(c.req.param("name"));
-    return c.json({ data: versions.map(serializeSpec) });
-  });
-
-  app.get("/broadcast-definitions/:name/versions/:n", async (c) => {
-    if (!deps.broadcastAdapter?.getDefinition) {
-      return c.json({ error: "unavailable" }, 503);
-    }
-    const version = parseInt(c.req.param("n"), 10);
-    if (Number.isNaN(version)) {
-      return c.json({ error: "bad_request", message: "Version must be a number." }, 400);
-    }
-    const spec = await deps.broadcastAdapter.getDefinition(c.req.param("name"), version);
-    if (!spec) return c.json({ error: "not_found" }, 404);
-    return c.json({ data: serializeSpec(spec) });
-  });
+  // GET routes for definitions live in the read-scope mount in server/index.ts;
+  // this router only exposes mutating endpoints under admin scope.
 
   app.delete("/broadcast-definitions/:name", async (c) => {
     if (!deps.broadcastAdapter?.deleteDefinition) {

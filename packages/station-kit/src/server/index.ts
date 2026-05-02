@@ -37,8 +37,8 @@ import { v1TriggerRoutes } from "./routes/v1/trigger.js";
 import { v1KeyRoutes } from "./routes/v1/keys.js";
 import { v1AuthRoutes } from "./routes/v1/auth.js";
 import { v1EventRoutes } from "./routes/v1/events.js";
-import { v1DefinitionRoutes } from "./routes/v1/definitions.js";
-import { v1ScheduleRoutes } from "./routes/v1/schedules.js";
+import { v1DefinitionRoutes, v1DefinitionReadRoutes } from "./routes/v1/definitions.js";
+import { v1ScheduleRoutes, v1ScheduleReadRoutes } from "./routes/v1/schedules.js";
 import { v1ExpressionRoutes } from "./routes/v1/expressions.js";
 
 export {
@@ -253,18 +253,8 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
   readRoutes.route("/", v1BroadcastRoutes({ broadcastRunner, broadcastAdapter, broadcastSubscriber: stationBroadcastSub }));
   readRoutes.route("/", v1EventRoutes({ sseHub }));
   readRoutes.route("/", v1ExpressionRoutes());
-  // GET-only schedule routes use read scope; mutating routes are mounted under admin below.
-  readRoutes.get("/schedules", async (c) => {
-    if (!scheduleAdapter) return c.json({ data: [] });
-    const list = await scheduleAdapter.list();
-    return c.json({ data: list });
-  });
-  readRoutes.get("/schedules/:id", async (c) => {
-    if (!scheduleAdapter) return c.json({ error: "unavailable" }, 503);
-    const s = await scheduleAdapter.get(c.req.param("id"));
-    if (!s) return c.json({ error: "not_found" }, 404);
-    return c.json({ data: s });
-  });
+  // Schedule GET + preview are read-scoped; mutating routes are mounted under admin below.
+  readRoutes.route("/", v1ScheduleReadRoutes({ scheduleAdapter }));
   // GET dynamic broadcast definitions also requires only `read` scope.
   readRoutes.get("/broadcast-definitions", async (c) => {
     if (!broadcastAdapter?.listDefinitions) return c.json({ data: [] });
@@ -282,6 +272,22 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
     const versions = await broadcastAdapter.listDefinitionVersions(c.req.param("name"));
     return c.json({ data: versions });
   });
+  readRoutes.get("/broadcast-definitions/:name/versions/:n", async (c) => {
+    if (!broadcastAdapter?.getDefinition) return c.json({ error: "unavailable" }, 503);
+    const version = parseInt(c.req.param("n"), 10);
+    if (Number.isNaN(version)) {
+      return c.json({ error: "bad_request", message: "Version must be a number." }, 400);
+    }
+    const spec = await broadcastAdapter.getDefinition(c.req.param("name"), version);
+    if (!spec) return c.json({ error: "not_found" }, 404);
+    return c.json({ data: spec });
+  });
+  readRoutes.route("/", v1DefinitionReadRoutes({
+    broadcastRunner,
+    broadcastAdapter,
+    signalRunner,
+    signalSubscriber: stationSignalSub,
+  }));
   v1.route("/", readRoutes);
 
   // Trigger-scope routes

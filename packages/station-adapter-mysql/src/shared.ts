@@ -6,6 +6,41 @@ export function validateTableName(name: string): string {
   return name;
 }
 
+/**
+ * MySQL error codes we treat as "already exists" — the operation is then a
+ * successful no-op. Anything else surfaces. Reference:
+ *   ER_DUP_KEYNAME (1061)  — index with this name already exists
+ *   ER_DUP_FIELDNAME (1060) — column with this name already exists
+ *   ER_TABLE_EXISTS_ERROR (1050) — table already exists
+ */
+const ALREADY_EXISTS_CODES = new Set([1050, 1060, 1061]);
+
+interface MysqlError {
+  errno?: number;
+  code?: string;
+  message?: string;
+}
+
+/**
+ * Run an idempotent DDL statement. MySQL doesn't accept `CREATE INDEX IF NOT
+ * EXISTS` until very recent versions; this helper accepts the duplicate-name
+ * error and treats it as a no-op, propagating anything else (permission
+ * errors, network, syntax) so real failures are still visible.
+ */
+export async function runIdempotentDdl(
+  exec: (sql: string) => Promise<unknown>,
+  sql: string,
+): Promise<void> {
+  try {
+    await exec(sql);
+  } catch (err) {
+    const e = err as MysqlError;
+    if (e?.errno !== undefined && ALREADY_EXISTS_CODES.has(e.errno)) return;
+    if (e?.code === "ER_DUP_KEYNAME" || e?.code === "ER_DUP_FIELDNAME" || e?.code === "ER_TABLE_EXISTS_ERROR") return;
+    throw err;
+  }
+}
+
 /** Convert a Date to an ISO string for storage, or pass through null/undefined as null. */
 export function dateToStr(value: unknown): string | null {
   if (value instanceof Date) return value.toISOString();

@@ -11,7 +11,7 @@ import type {
   DynamicBroadcastSpec,
 } from "station-broadcast";
 
-import { validateTableName, dateToStr, createColumnMapper, rowToObject } from "./shared.js";
+import { validateTableName, dateToStr, createColumnMapper, rowToObject, runIdempotentDdl } from "./shared.js";
 
 // ── Column mappings ────────────────────────────────────────────────────
 
@@ -123,22 +123,24 @@ export class BroadcastMysqlAdapter implements BroadcastQueueAdapter {
       )
     `);
 
-    // Idempotent migration for pre-existing tables
-    try {
-      await pool.execute(`ALTER TABLE ${runsTable} ADD COLUMN definition_snapshot TEXT`);
-    } catch {
-      // Column already exists
-    }
+    // Idempotent migration for pre-existing tables — only swallows the
+    // duplicate-column error, real failures still surface.
+    await runIdempotentDdl(
+      (sql) => pool.execute(sql),
+      `ALTER TABLE ${runsTable} ADD COLUMN definition_snapshot TEXT`,
+    );
 
-    await pool.execute(`
-      CREATE INDEX IF NOT EXISTS idx_${runsTable}_status
-        ON ${runsTable} (status, next_run_at)
-    `);
+    // MySQL doesn't accept CREATE INDEX IF NOT EXISTS on most versions; the
+    // helper turns the duplicate-name error into a no-op.
+    await runIdempotentDdl(
+      (sql) => pool.execute(sql),
+      `CREATE INDEX idx_${runsTable}_status ON ${runsTable} (status, next_run_at)`,
+    );
 
-    await pool.execute(`
-      CREATE INDEX IF NOT EXISTS idx_${runsTable}_name
-        ON ${runsTable} (broadcast_name)
-    `);
+    await runIdempotentDdl(
+      (sql) => pool.execute(sql),
+      `CREATE INDEX idx_${runsTable}_name ON ${runsTable} (broadcast_name)`,
+    );
 
     // Create broadcast_runs_nodes table
     await pool.execute(`
@@ -160,10 +162,10 @@ export class BroadcastMysqlAdapter implements BroadcastQueueAdapter {
       )
     `);
 
-    await pool.execute(`
-      CREATE INDEX IF NOT EXISTS idx_${nodesTable}_run_id
-        ON ${nodesTable} (broadcast_run_id)
-    `);
+    await runIdempotentDdl(
+      (sql) => pool.execute(sql),
+      `CREATE INDEX idx_${nodesTable}_run_id ON ${nodesTable} (broadcast_run_id)`,
+    );
 
     // Dynamic broadcast definitions
     await pool.execute(`
@@ -376,35 +378,49 @@ export class BroadcastMysqlAdapter implements BroadcastQueueAdapter {
   // ── Dynamic broadcast definitions ──────────────────────────────────────
 
   async saveDefinition(spec: DynamicBroadcastSpec): Promise<DynamicBroadcastSpec> {
-    const [rows] = await this.pool.execute<RowDataPacket[]>(
-      `SELECT COALESCE(MAX(version), 0) AS v FROM ${this.definitionsTable} WHERE name = ?`,
-      [spec.name],
-    );
-    const nextVersion = ((rows[0] as { v: number })?.v ?? 0) + 1;
-    const now = new Date();
-    const next: DynamicBroadcastSpec = {
-      ...spec,
-      version: nextVersion,
-      createdAt: spec.createdAt ?? now,
-      updatedAt: now,
-      deletedAt: undefined,
-    };
-    await this.pool.execute(
-      `INSERT INTO ${this.definitionsTable}
-        (name, version, spec, failure_policy, timeout, created_at, updated_at, created_by, deleted_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
-      [
-        next.name,
-        next.version,
-        JSON.stringify(next),
-        next.failurePolicy,
-        next.timeout ?? null,
-        dateToStr(next.createdAt),
-        dateToStr(next.updatedAt),
-        next.createdBy ?? null,
-      ],
-    );
-    return next;
+    // Use an explicit connection + transaction with `FOR UPDATE` so concurrent
+    // saves serialize on the version-lookup and don't both pick the same
+    // version (which would fail the PK on insert).
+    const conn = await this.pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [rows] = await conn.execute<RowDataPacket[]>(
+        `SELECT COALESCE(MAX(version), 0) AS v FROM ${this.definitionsTable}
+         WHERE name = ? FOR UPDATE`,
+        [spec.name],
+      );
+      const nextVersion = ((rows[0] as { v: number })?.v ?? 0) + 1;
+      const now = new Date();
+      const next: DynamicBroadcastSpec = {
+        ...spec,
+        version: nextVersion,
+        createdAt: spec.createdAt ?? now,
+        updatedAt: now,
+        deletedAt: undefined,
+      };
+      await conn.execute(
+        `INSERT INTO ${this.definitionsTable}
+          (name, version, spec, failure_policy, timeout, created_at, updated_at, created_by, deleted_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+        [
+          next.name,
+          next.version,
+          JSON.stringify(next),
+          next.failurePolicy,
+          next.timeout ?? null,
+          dateToStr(next.createdAt),
+          dateToStr(next.updatedAt),
+          next.createdBy ?? null,
+        ],
+      );
+      await conn.commit();
+      return next;
+    } catch (err) {
+      await conn.rollback().catch(() => {});
+      throw err;
+    } finally {
+      conn.release();
+    }
   }
 
   async getDefinition(name: string, version?: number): Promise<DynamicBroadcastSpec | null> {

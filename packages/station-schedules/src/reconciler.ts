@@ -59,49 +59,59 @@ export class ScheduleReconciler {
   }
 
   private async fireOne(schedule: Schedule): Promise<void> {
-    if (this.opts.hasPendingOrRunning) {
-      const pending = await this.opts.hasPendingOrRunning(schedule);
-      if (pending) {
-        // Skip firing but still advance nextRunAt so we don't busy-loop.
-        await this.advance(schedule, undefined, undefined);
-        return;
-      }
-    }
-
-    // Atomic claim when supported — prevents double-fire across multiple runners.
+    // Always claim first — the claim is the gate, the only thing that
+    // guarantees at-most-once across multiple runners. The pending/running
+    // check below is an additional optimisation that runs *after* a successful
+    // claim, never before it.
+    const newNext = new Date(Date.now() + this.opts.parseInterval(schedule.interval));
     if (this.opts.adapter.claimDue) {
-      const newNext = new Date(Date.now() + this.opts.parseInterval(schedule.interval));
       const claimed = await this.opts.adapter.claimDue(
         schedule.id,
         schedule.nextRunAt,
         newNext,
       );
       if (!claimed) return;
-      const runId = await this.opts.triggerFn(schedule);
-      await this.opts.adapter.update(schedule.id, {
-        lastRunAt: new Date(),
-        lastRunId: runId,
-        lastRunStatus: "triggered",
-      });
-      return;
+    } else {
+      // No atomic claim available — fall back to a best-effort advance so we
+      // don't busy-loop on the same schedule. This is racy for multi-instance
+      // deployments; adapters should implement claimDue.
+      console.warn(
+        "[station-schedules] Schedule adapter has no claimDue — multi-runner deployments may double-fire schedules.",
+      );
+      await this.opts.adapter.update(schedule.id, { nextRunAt: newNext });
     }
 
-    // Non-atomic fallback.
-    const runId = await this.opts.triggerFn(schedule);
-    await this.advance(schedule, runId, "triggered");
-  }
+    if (this.opts.hasPendingOrRunning) {
+      try {
+        const pending = await this.opts.hasPendingOrRunning(schedule);
+        if (pending) {
+          // We've already advanced nextRunAt via the claim; just record we
+          // skipped and bail.
+          await this.opts.adapter.update(schedule.id, {
+            lastRunAt: new Date(),
+            lastRunStatus: "skipped:overlap",
+          });
+          return;
+        }
+      } catch (err) {
+        this.opts.onError?.(err instanceof Error ? err : new Error(String(err)), schedule);
+        // Fall through and trigger anyway — better to overlap than to drop.
+      }
+    }
 
-  private async advance(
-    schedule: Schedule,
-    lastRunId: string | undefined,
-    lastRunStatus: string | undefined,
-  ): Promise<void> {
-    const next = new Date(Date.now() + this.opts.parseInterval(schedule.interval));
+    let runId: string | undefined;
+    let status = "triggered";
+    try {
+      runId = await this.opts.triggerFn(schedule);
+    } catch (err) {
+      status = "errored";
+      this.opts.onError?.(err instanceof Error ? err : new Error(String(err)), schedule);
+    }
+
     await this.opts.adapter.update(schedule.id, {
-      nextRunAt: next,
       lastRunAt: new Date(),
-      lastRunId,
-      lastRunStatus,
+      lastRunId: runId,
+      lastRunStatus: status,
     });
   }
 }

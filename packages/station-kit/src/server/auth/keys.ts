@@ -221,8 +221,12 @@ export class KeyStore {
     if (record.revoked) return null;
     if (record.expiresAt && new Date(record.expiresAt) < new Date()) return null;
 
-    // Touch is best-effort — don't block verification on the write.
-    Promise.resolve(this.storage.touch(record.id, new Date().toISOString())).catch(() => {});
+    // Touch is best-effort — don't block verification on the write. Wrap in
+    // an explicit deferred so a synchronous throw from a sync `touch()` is
+    // also swallowed, matching the async case.
+    Promise.resolve()
+      .then(() => this.storage.touch(record.id, new Date().toISOString()))
+      .catch(() => {});
 
     return record;
   }

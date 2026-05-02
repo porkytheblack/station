@@ -123,6 +123,11 @@ export class BroadcastChain<TInput> {
       if (isSignal(arg)) {
         signals.push(arg);
       } else if (typeof arg === "object" && arg !== null) {
+        if (options !== undefined) {
+          throw new BroadcastValidationError(
+            `then() in broadcast "${this._name}" received multiple options objects — only one is allowed per call.`,
+          );
+        }
         options = arg as ThenOptions;
       }
     }

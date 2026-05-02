@@ -8,7 +8,8 @@ export interface V1ScheduleDeps {
 
 const KIND_VALUES: ScheduleKind[] = ["signal", "broadcast-static", "broadcast-dynamic"];
 
-export function v1ScheduleRoutes(deps: V1ScheduleDeps) {
+/** Read-scope routes: list / get / preview. */
+export function v1ScheduleReadRoutes(deps: V1ScheduleDeps) {
   const app = new Hono();
 
   app.get("/schedules", async (c) => {
@@ -32,6 +33,30 @@ export function v1ScheduleRoutes(deps: V1ScheduleDeps) {
     return c.json({ data: serialize(s) });
   });
 
+  app.post("/schedules/:id/preview", async (c) => {
+    if (!deps.scheduleAdapter) return c.json({ error: "unavailable" }, 503);
+    const id = c.req.param("id");
+    const s = await deps.scheduleAdapter.get(id);
+    if (!s) return c.json({ error: "not_found" }, 404);
+    const body = await c.req.json().catch(() => ({}));
+    const count = Math.min(20, Math.max(1, Number(body.count) || 5));
+    const ms = parseInterval(s.interval);
+    const fires: string[] = [];
+    let next = s.nextRunAt.getTime();
+    for (let i = 0; i < count; i++) {
+      fires.push(new Date(next).toISOString());
+      next += ms;
+    }
+    return c.json({ data: { fires } });
+  });
+
+  return app;
+}
+
+/** Admin-scope routes: create / update / delete. */
+export function v1ScheduleRoutes(deps: V1ScheduleDeps) {
+  const app = new Hono();
+
   app.post("/schedules", async (c) => {
     if (!deps.scheduleAdapter) return c.json({ error: "unavailable" }, 503);
     const body = await c.req.json().catch(() => ({}));
@@ -54,6 +79,18 @@ export function v1ScheduleRoutes(deps: V1ScheduleDeps) {
         error: "bad_request",
         message: `interval invalid: ${err instanceof Error ? err.message : String(err)}`,
       }, 400);
+    }
+    // Reject circular / non-serializable inputs before they reach the adapter,
+    // which would otherwise surface as a 500 with a stacktrace.
+    if (input !== undefined) {
+      try {
+        JSON.stringify(input);
+      } catch (err) {
+        return c.json({
+          error: "bad_request",
+          message: `input is not JSON-serializable: ${err instanceof Error ? err.message : String(err)}`,
+        }, 400);
+      }
     }
 
     const apiKeyId = c.get("apiKeyId" as never) as string | undefined;
@@ -93,9 +130,25 @@ export function v1ScheduleRoutes(deps: V1ScheduleDeps) {
       }
       patch.interval = body.interval;
     }
-    if ("input" in body) patch.input = body.input;
+    if ("input" in body) {
+      try {
+        JSON.stringify(body.input);
+      } catch (err) {
+        return c.json({
+          error: "bad_request",
+          message: `input is not JSON-serializable: ${err instanceof Error ? err.message : String(err)}`,
+        }, 400);
+      }
+      patch.input = body.input;
+    }
     if ("enabled" in body) patch.enabled = Boolean(body.enabled);
-    if ("nextRunAt" in body) patch.nextRunAt = new Date(body.nextRunAt);
+    if ("nextRunAt" in body) {
+      const parsed = new Date(body.nextRunAt);
+      if (Number.isNaN(parsed.getTime())) {
+        return c.json({ error: "bad_request", message: "nextRunAt must be a valid date" }, 400);
+      }
+      patch.nextRunAt = parsed;
+    }
 
     await deps.scheduleAdapter.update(id, patch);
     const updated = await deps.scheduleAdapter.get(id);
@@ -107,23 +160,6 @@ export function v1ScheduleRoutes(deps: V1ScheduleDeps) {
     const ok = await deps.scheduleAdapter.delete(c.req.param("id"));
     if (!ok) return c.json({ error: "not_found" }, 404);
     return c.json({ data: { deleted: true } });
-  });
-
-  app.post("/schedules/:id/preview", async (c) => {
-    if (!deps.scheduleAdapter) return c.json({ error: "unavailable" }, 503);
-    const id = c.req.param("id");
-    const s = await deps.scheduleAdapter.get(id);
-    if (!s) return c.json({ error: "not_found" }, 404);
-    const body = await c.req.json().catch(() => ({}));
-    const count = Math.min(20, Math.max(1, Number(body.count) || 5));
-    const ms = parseInterval(s.interval);
-    const fires: string[] = [];
-    let next = s.nextRunAt.getTime();
-    for (let i = 0; i < count; i++) {
-      fires.push(new Date(next).toISOString());
-      next += ms;
-    }
-    return c.json({ data: { fires } });
   });
 
   return app;

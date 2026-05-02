@@ -7,7 +7,7 @@ import type {
   ScheduleAdapter,
   ScheduleListFilter,
 } from "station-schedules";
-import { validateTableName, dateToStr, toDate } from "./shared.js";
+import { validateTableName, dateToStr, toDate, runIdempotentDdl } from "./shared.js";
 
 export interface ScheduleMysqlAdapterOptions {
   connectionString?: string;
@@ -58,9 +58,10 @@ export class ScheduleMysqlAdapter implements ScheduleAdapter {
         created_by      VARCHAR(255)
       )
     `);
-    await pool.execute(`
-      CREATE INDEX IF NOT EXISTS idx_${table}_due ON ${table} (enabled, next_run_at)
-    `);
+    await runIdempotentDdl(
+      (sql) => pool.execute(sql),
+      `CREATE INDEX idx_${table}_due ON ${table} (enabled, next_run_at)`,
+    );
 
     return new ScheduleMysqlAdapter(pool, table, ownsPool);
   }

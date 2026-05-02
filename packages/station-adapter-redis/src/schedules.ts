@@ -41,6 +41,12 @@ export class ScheduleRedisAdapter implements ScheduleAdapter {
   }
 
   async add(schedule: Schedule): Promise<void> {
+    // Match the SQL adapters' "fail on duplicate ID" semantics — runners
+    // depend on `add` rejecting collisions for at-least-once correctness.
+    const exists = await this.redis.exists(scheduleHashKey(this.prefix, schedule.id));
+    if (exists) {
+      throw new Error(`Schedule with id "${schedule.id}" already exists`);
+    }
     const hash = scheduleToHash(schedule);
     const pipeline = this.redis.multi();
     pipeline.hset(scheduleHashKey(this.prefix, schedule.id), hash);
@@ -102,6 +108,9 @@ export class ScheduleRedisAdapter implements ScheduleAdapter {
         if (value === undefined) delFields.push("input");
         else setArgs.input = JSON.stringify(value);
       } else if (key === "enabled") {
+        // `undefined` would silently disable the schedule via the falsy check —
+        // treat it as a no-op instead.
+        if (value === undefined) continue;
         setArgs.enabled = value ? "1" : "0";
       } else if (SCHEDULE_DATE_FIELDS.has(key)) {
         if (value instanceof Date) setArgs[key] = value.toISOString();

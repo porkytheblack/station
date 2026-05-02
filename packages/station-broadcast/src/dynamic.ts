@@ -83,8 +83,8 @@ function buildNode(
       `Dynamic broadcast "${broadcastName}" references unregistered signal "${spec.signalName}"`,
     );
   }
-  const inputExpr = spec.input as ExprNode | undefined;
-  const whenExpr = spec.when as ExprNode | undefined;
+  const inputExpr = spec.input !== undefined ? assertExprNode(spec.input, `${broadcastName}.${spec.name}.input`) : undefined;
+  const whenExpr = spec.when !== undefined ? assertExprNode(spec.when, `${broadcastName}.${spec.name}.when`) : undefined;
 
   return {
     name: spec.name,
@@ -228,4 +228,18 @@ function pushExprErrors(
   for (const e of result.errors) {
     errors.push({ node: nodeName, field, message: `${e.path}: ${e.message}` });
   }
+}
+
+const VALID_EXPR_KINDS = new Set(["ref", "lit", "tmpl", "op", "obj", "arr"]);
+
+/** Validate the structural shape of an ExprNode at materialization time. */
+function assertExprNode(value: unknown, context: string): ExprNode {
+  if (!value || typeof value !== "object") {
+    throw new Error(`Invalid expression at ${context}: expected ExprNode object, got ${typeof value}`);
+  }
+  const kind = (value as { kind?: unknown }).kind;
+  if (typeof kind !== "string" || !VALID_EXPR_KINDS.has(kind)) {
+    throw new Error(`Invalid expression at ${context}: unknown kind "${String(kind)}"`);
+  }
+  return value as ExprNode;
 }

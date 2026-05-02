@@ -125,17 +125,36 @@ export class SignalRunner {
   }
 
   /**
-   * Trigger a registered signal by name, writing to this runner's adapter.
-   * Used by the schedule reconciler so dynamic schedules don't depend on
-   * the global config singleton.
+   * Trigger a registered signal by name, writing to **this runner's** adapter.
+   * Used by the schedule reconciler so dynamic schedules don't depend on the
+   * global `configure()` singleton — important when multiple SignalRunner
+   * instances coexist or when the global adapter differs from this runner's.
    */
   async triggerSignal(name: string, input: unknown): Promise<string> {
     const sig = this.registry.get(name)?.signal;
     if (!sig) {
       throw new Error(`Signal "${name}" is not registered (no Signal object available)`);
     }
-    // Validate via the signal's Zod schema so bad input fails fast.
-    return sig.trigger(input);
+    // Validate via the signal's Zod schema so bad input fails fast, then
+    // write directly to this runner's adapter rather than through getAdapter().
+    const result = sig.inputSchema.safeParse(input);
+    if (!result.success) {
+      throw new Error(`Invalid input for signal "${name}": ${result.error.message}`);
+    }
+    const id = this.adapter.generateId();
+    const run: Run = {
+      id,
+      signalName: name,
+      kind: "trigger",
+      input: JSON.stringify(result.data),
+      status: "pending",
+      attempts: 0,
+      maxAttempts: sig.maxAttempts,
+      timeout: sig.timeout,
+      createdAt: new Date(),
+    };
+    await this.adapter.addRun(run);
+    return id;
   }
 
   hasPendingOrRunningForSignal(name: string): Promise<boolean> {

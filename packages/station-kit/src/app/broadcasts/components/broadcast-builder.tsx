@@ -14,6 +14,8 @@ export interface BroadcastBuilderProps {
   json: string;
   onChange: (next: string) => void;
   validation: DynamicValidationResult | null;
+  /** Reset the validation state from the parent (e.g. on json change). */
+  onValidationStale?: () => void;
   signals: SignalMeta[];
   onValidate: () => void;
   onSave: () => void;
@@ -36,9 +38,29 @@ export interface BroadcastBuilderProps {
  *      `{ input, upstream }` context and renders the trace.
  */
 export function BroadcastBuilder(props: BroadcastBuilderProps) {
-  const { json, onChange, validation, signals, onValidate, onSave, saveLabel, saving, error, rightActions, specName } = props;
+  const { json, onChange, validation, onValidationStale, signals, onValidate, onSave, saveLabel, saving, error, rightActions, specName } = props;
 
   const [tab, setTab] = useState<"visual" | "json" | "dryrun">("visual");
+  const dagCommitRef = useRef<(() => Promise<void>) | null>(null);
+
+  // Any change to the JSON invalidates the previous validation result — the
+  // user shouldn't be blocked by stale errors after fixing them, and the Save
+  // button shouldn't stay disabled on already-corrected specs.
+  function emitChange(next: string) {
+    onChange(next);
+    onValidationStale?.();
+  }
+
+  // Wraps the parent's save so any in-flight expression edits in the DAG
+  // editor are flushed before the save fires.
+  async function handleSaveClick() {
+    try {
+      await dagCommitRef.current?.();
+    } catch {
+      // commit errors are surfaced inline in the inspector; don't block save
+    }
+    onSave();
+  }
 
   // Try to parse the JSON to provide the visual + dry-run views with a
   // structured spec. If parsing fails, those tabs surface a parse error.
@@ -52,7 +74,7 @@ export function BroadcastBuilder(props: BroadcastBuilderProps) {
   }, [json]);
 
   function setSpec(next: DynamicBroadcastSpec) {
-    onChange(JSON.stringify(next, null, 2));
+    emitChange(JSON.stringify(next, null, 2));
   }
 
   function handleImport(file: File) {
@@ -63,7 +85,7 @@ export function BroadcastBuilder(props: BroadcastBuilderProps) {
         // Validate parseable; allow either spec or wrapping export object.
         const parsed = JSON.parse(text);
         const spec = parsed?.spec ?? parsed;
-        onChange(JSON.stringify(spec, null, 2));
+        emitChange(JSON.stringify(spec, null, 2));
       } catch (err) {
         alert(`Import failed: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -101,6 +123,7 @@ export function BroadcastBuilder(props: BroadcastBuilderProps) {
             spec={parsed.spec}
             signals={signals}
             onChange={setSpec}
+            commitRef={dagCommitRef}
           />
         ) : (
           <div style={{
@@ -118,7 +141,7 @@ export function BroadcastBuilder(props: BroadcastBuilderProps) {
       {tab === "json" && (
         <JsonEditor
           json={json}
-          onChange={onChange}
+          onChange={emitChange}
           signals={signals}
         />
       )}
@@ -131,7 +154,7 @@ export function BroadcastBuilder(props: BroadcastBuilderProps) {
         <button className="btn" onClick={onValidate} disabled={saving}>Validate</button>
         <button
           className="btn btn--primary"
-          onClick={onSave}
+          onClick={handleSaveClick}
           disabled={saving || (validation !== null && !validation.ok)}
         >
           {saveLabel}

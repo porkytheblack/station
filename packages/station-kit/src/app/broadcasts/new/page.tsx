@@ -89,6 +89,7 @@ export default function NewDynamicBroadcastPage() {
         json={json}
         onChange={setJson}
         validation={validation}
+        onValidationStale={() => setValidation(null)}
         signals={signals}
         onValidate={handleValidate}
         onSave={handleSave}

@@ -256,7 +256,23 @@ function computeDiff(left: unknown, right: unknown): DiffResult {
 
 function stripVolatile(spec: DynamicBroadcastSpec): Omit<DynamicBroadcastSpec, "createdAt" | "updatedAt" | "deletedAt" | "createdBy" | "version"> & { version: number } {
   const { createdAt: _c, updatedAt: _u, deletedAt: _d, createdBy: _b, ...rest } = spec;
-  return rest;
+  // Deep-sort keys so the diff doesn't fire on insertion-order changes
+  // (e.g. spread-then-patch reorders `name` after spread).
+  return sortKeysDeep(rest) as ReturnType<typeof stripVolatile>;
+}
+
+function sortKeysDeep<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((v) => sortKeysDeep(v)) as unknown as T;
+  }
+  if (value && typeof value === "object") {
+    const sorted: Record<string, unknown> = {};
+    for (const k of Object.keys(value as Record<string, unknown>).sort()) {
+      sorted[k] = sortKeysDeep((value as Record<string, unknown>)[k]);
+    }
+    return sorted as T;
+  }
+  return value;
 }
 
 const labelStyle: React.CSSProperties = {

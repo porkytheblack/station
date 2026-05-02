@@ -166,11 +166,7 @@ export function DynamicBroadcastDetail({ name }: { name: string }) {
           borderRadius: "4px",
           fontSize: "0.8125rem",
         }}>
-          Triggered run <button
-            className="link mono"
-            onClick={() => router.push(`/broadcasts/${name}/runs/${lastRunId}`)}
-            style={{ background: "none", border: "none", color: "inherit", textDecoration: "underline", cursor: "pointer" }}
-          >{lastRunId}</button>
+          Triggered run <span className="mono">{lastRunId}</span>
         </div>
       )}
 
@@ -190,6 +186,7 @@ export function DynamicBroadcastDetail({ name }: { name: string }) {
         json={json}
         onChange={setJson}
         validation={validation}
+        onValidationStale={() => setValidation(null)}
         signals={signals}
         onValidate={handleValidate}
         onSave={handleSave}

@@ -176,7 +176,14 @@ function walkPath(
   let cur: SchemaField = start;
   for (let i = 0; i < rest.length; i++) {
     const key = rest[i];
-    if (cur.type === "any" || cur.type === "unknown") return ANY;
+    // When traversing through `any`/`unknown` we can't know whether the
+    // property exists. Return `unknown` (rather than `any`) so checkAssignable
+    // can flag this when the expected slot has a real type — catches the
+    // common case of a missing broadcast input schema piping into a
+    // strictly-typed signal.
+    if (cur.type === "any" || cur.type === "unknown") {
+      return { type: "unknown" };
+    }
     if (cur.type === "object") {
       if (cur.properties && Object.prototype.hasOwnProperty.call(cur.properties, key)) {
         cur = cur.properties[key];
@@ -206,8 +213,21 @@ function checkAssignable(
   path: string,
   errors: ValidationError[],
 ): void {
+  // The expected slot doesn't care — short-circuit OK.
   if (expected.type === "any" || expected.type === "unknown") return;
-  if (actual.type === "any" || actual.type === "unknown") return;
+  // A literal `any` actual is treated as assignable (caller declared "any").
+  if (actual.type === "any") return;
+  // An `unknown` actual is what walkPath returns when it traversed through
+  // `any` — i.e. we can't know the property exists. When the expected slot
+  // has structure, surface this so the user knows a broadcast input schema
+  // would help.
+  if (actual.type === "unknown") {
+    errors.push({
+      path,
+      message: `Reference resolves through an unknown / unconstrained schema; declare an input schema for structural checks`,
+    });
+    return;
+  }
 
   if (expected.type === "union") {
     // Pass if any branch matches; collect errors only if none do.

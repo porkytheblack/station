@@ -56,6 +56,13 @@ function evalNode(node: ExprNode, ctx: EvalContext, state: EvalState): unknown {
 
     case "op":
       return evalOp(node.op, node.args, ctx, state);
+
+    default: {
+      // Defensive: a malformed AST should fail loudly rather than silently
+      // returning undefined, which would mask real bugs upstream.
+      const kind = (node as { kind?: unknown }).kind;
+      throw new ExpressionEvalError(`Unknown ExprNode kind: ${String(kind)}`);
+    }
   }
 }
 
@@ -96,12 +103,14 @@ function evalOp(
       return !v;
     }
     case "&&": {
-      // Short-circuit
+      // Short-circuit; track the last seen truthy value so we can return it
+      // without re-evaluating the final argument.
+      let last: unknown = true;
       for (const a of args) {
-        const v = evalNode(a, ctx, state);
-        if (!v) return v;
+        last = evalNode(a, ctx, state);
+        if (!last) return last;
       }
-      return args.length > 0 ? evalNode(args[args.length - 1], ctx, state) : true;
+      return last;
     }
     case "||": {
       let last: unknown = false;

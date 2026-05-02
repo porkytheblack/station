@@ -45,6 +45,9 @@ export const broadcastDefinitionVersionsKey = (prefix: string, name: string) =>
   key(prefix, "broadcast-def-versions", name);
 export const broadcastDefinitionNamesKey = (prefix: string) =>
   key(prefix, "broadcast-defs", "names");
+/** Per-name atomic counter used by saveDefinition to bump versions. */
+export const broadcastDefinitionCounterKey = (prefix: string, name: string) =>
+  key(prefix, "broadcast-def-counter", name);
 
 // Schedule keys
 export const scheduleHashKey = (prefix: string, id: string) => key(prefix, "schedule", id);

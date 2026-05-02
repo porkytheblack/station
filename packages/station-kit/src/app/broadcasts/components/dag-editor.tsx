@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { DynamicBroadcastSpec, DynamicNodeSpec, SignalMeta } from "../../hooks/use-api";
 import { DAGView, type DagNode } from "../../components/dag-view";
 import { useApi } from "../../hooks/use-api";
@@ -14,6 +14,12 @@ export interface DagEditorProps {
    * editor calls back so the parent can render trace results.
    */
   onDryRun?: (spec: DynamicBroadcastSpec) => void;
+  /**
+   * Parent-supplied ref that exposes a `commit()` callback. The parent should
+   * `await ref.current?.()` before triggering a save so any in-flight
+   * expression edits land in the spec.
+   */
+  commitRef?: React.MutableRefObject<(() => Promise<void>) | null>;
 }
 
 /**
@@ -25,11 +31,23 @@ export interface DagEditorProps {
  *   - dependency picker dropdown sourced from existing node names
  *   - inline expression validation via /v1/expressions/validate
  */
-export function DagEditor({ spec, onChange, signals }: DagEditorProps) {
+export function DagEditor({ spec, onChange, signals, commitRef }: DagEditorProps) {
   const [selectedNode, setSelectedNode] = useState<string | null>(
     spec.nodes[0]?.name ?? null,
   );
   const api = useApi();
+  const inspectorCommitRef = useRef<(() => Promise<void>) | null>(null);
+
+  // Expose a commit() to the parent so save flows can await pending edits.
+  useEffect(() => {
+    if (!commitRef) return;
+    commitRef.current = async () => {
+      await inspectorCommitRef.current?.();
+    };
+    return () => {
+      if (commitRef.current && commitRef === commitRef) commitRef.current = null;
+    };
+  }, [commitRef]);
 
   const dagNodes: DagNode[] = useMemo(
     () =>
@@ -74,24 +92,24 @@ export function DagEditor({ spec, onChange, signals }: DagEditorProps) {
   }
 
   function updateNode(name: string, patch: Partial<DynamicNodeSpec>) {
+    const renamed = "name" in patch && typeof patch.name === "string" && patch.name !== name;
+    const newName = renamed ? (patch.name as string) : name;
+
+    // Apply the patch and rewire dependencies referencing the old name in a
+    // *single* updater pass — two consecutive setNodes calls would each close
+    // over the pre-update spec and the second would clobber the first.
     setNodes((prev) =>
       prev.map((n) => {
-        if (n.name !== name) return n;
-        const next = { ...n, ...patch };
-        // If renaming, rewrite all dependsOn references after this map step.
-        return next;
+        const dependsOn = renamed
+          ? n.dependsOn.map((d) => (d === name ? newName : d))
+          : n.dependsOn;
+        if (n.name !== name) {
+          return dependsOn === n.dependsOn ? n : { ...n, dependsOn };
+        }
+        return { ...n, ...patch, dependsOn };
       }),
     );
-    if ("name" in patch && patch.name && patch.name !== name) {
-      // Rewire dependencies that referenced the old name.
-      setNodes((prev) =>
-        prev.map((n) => ({
-          ...n,
-          dependsOn: n.dependsOn.map((d) => (d === name ? (patch.name as string) : d)),
-        })),
-      );
-      setSelectedNode(patch.name);
-    }
+    if (renamed) setSelectedNode(newName);
   }
 
   return (
@@ -109,9 +127,17 @@ export function DagEditor({ spec, onChange, signals }: DagEditorProps) {
           overflowX: "auto",
         }}>
           {spec.nodes.length === 0 ? (
-            <div style={{ color: "var(--muted)", fontSize: "0.875rem", textAlign: "center", padding: "2rem" }}>
-              Click a signal in the palette to add the first node.
-            </div>
+            signals.length === 0 ? (
+              <div style={{ color: "var(--muted)", fontSize: "0.875rem", textAlign: "center", padding: "2rem", lineHeight: 1.6 }}>
+                No signals are registered.<br />
+                Define one in your <span className="mono">signals/</span> directory or visit{" "}
+                <a href="/signals" style={{ color: "var(--text)", textDecoration: "underline" }}>/signals</a>.
+              </div>
+            ) : (
+              <div style={{ color: "var(--muted)", fontSize: "0.875rem", textAlign: "center", padding: "2rem" }}>
+                Click a signal in the palette to add the first node.
+              </div>
+            )
           ) : (
             <DAGView
               nodes={dagNodes}
@@ -132,6 +158,7 @@ export function DagEditor({ spec, onChange, signals }: DagEditorProps) {
         onChange={(patch) => selected && updateNode(selected.name, patch)}
         onRemove={(name) => removeNode(name)}
         api={api}
+        commitRef={inspectorCommitRef}
       />
     </div>
   );
@@ -211,13 +238,26 @@ interface NodeInspectorProps {
   onChange: (patch: Partial<DynamicNodeSpec>) => void;
   onRemove: (name: string) => void;
   api: ReturnType<typeof useApi>;
+  /**
+   * Parent-supplied ref. The inspector populates it with a `commit()` that
+   * flushes any uncommitted text-area edits into the spec — used by the
+   * top-level Save flow so racing the click against blur doesn't lose edits.
+   */
+  commitRef?: React.MutableRefObject<(() => Promise<void>) | null>;
 }
 
-function NodeInspector({ node, allNodes, onChange, onRemove, api }: NodeInspectorProps) {
+function NodeInspector({ node, allNodes, onChange, onRemove, api, commitRef }: NodeInspectorProps) {
   const [inputSrc, setInputSrc] = useState<string>("");
   const [whenSrc, setWhenSrc] = useState<string>("");
   const [inputErr, setInputErr] = useState<string | null>(null);
   const [whenErr, setWhenErr] = useState<string | null>(null);
+  // Latest source values readable from the imperative commit() — refs avoid
+  // the stale-closure problem when commit fires from outside React's lifecycle.
+  const inputSrcRef = useRef("");
+  const whenSrcRef = useRef("");
+
+  useEffect(() => { inputSrcRef.current = inputSrc; }, [inputSrc]);
+  useEffect(() => { whenSrcRef.current = whenSrc; }, [whenSrc]);
 
   // Keep editor source in sync when the selected node changes.
   useEffect(() => {
@@ -244,14 +284,15 @@ function NodeInspector({ node, allNodes, onChange, onRemove, api }: NodeInspecto
   const candidateDeps = allNodes.filter((n) => n.name !== node.name);
 
   async function tryCommitInput() {
-    if (!inputSrc.trim()) {
+    const src = inputSrcRef.current;
+    if (!src.trim()) {
       onChange({ input: undefined });
       setInputErr(null);
       return;
     }
     // Accept either JSON AST (preferred) or a parser source.
     try {
-      const ast = JSON.parse(inputSrc);
+      const ast = JSON.parse(src);
       onChange({ input: ast });
       setInputErr(null);
       return;
@@ -259,7 +300,7 @@ function NodeInspector({ node, allNodes, onChange, onRemove, api }: NodeInspecto
       // fall through — try the parser
     }
     try {
-      const res = await api.parseExpression(inputSrc);
+      const res = await api.parseExpression(src);
       onChange({ input: res.data.node });
       setInputErr(null);
     } catch (err) {
@@ -268,13 +309,14 @@ function NodeInspector({ node, allNodes, onChange, onRemove, api }: NodeInspecto
   }
 
   async function tryCommitWhen() {
-    if (!whenSrc.trim()) {
+    const src = whenSrcRef.current;
+    if (!src.trim()) {
       onChange({ when: undefined });
       setWhenErr(null);
       return;
     }
     try {
-      const ast = JSON.parse(whenSrc);
+      const ast = JSON.parse(src);
       onChange({ when: ast });
       setWhenErr(null);
       return;
@@ -282,13 +324,24 @@ function NodeInspector({ node, allNodes, onChange, onRemove, api }: NodeInspecto
       // fall through
     }
     try {
-      const res = await api.parseExpression(whenSrc);
+      const res = await api.parseExpression(src);
       onChange({ when: res.data.node });
       setWhenErr(null);
     } catch (err) {
       setWhenErr(err instanceof Error ? err.message : String(err));
     }
   }
+
+  // Expose commit() to the parent so its save flow can flush pending edits.
+  useEffect(() => {
+    if (!commitRef) return;
+    commitRef.current = async () => {
+      await Promise.all([tryCommitInput(), tryCommitWhen()]);
+    };
+    return () => {
+      if (commitRef) commitRef.current = null;
+    };
+  }, [commitRef]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <aside style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>

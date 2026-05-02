@@ -6,6 +6,9 @@ export class ScheduleMemoryAdapter implements ScheduleAdapter {
   private schedules = new Map<string, Schedule>();
 
   async add(schedule: Schedule): Promise<void> {
+    if (this.schedules.has(schedule.id)) {
+      throw new Error(`Schedule with id "${schedule.id}" already exists`);
+    }
     this.schedules.set(schedule.id, schedule);
   }
 
@@ -29,7 +32,16 @@ export class ScheduleMemoryAdapter implements ScheduleAdapter {
   async update(id: string, patch: SchedulePatch): Promise<void> {
     const existing = this.schedules.get(id);
     if (!existing) return;
-    const next: Schedule = { ...existing, ...patch, updatedAt: new Date() };
+    // Drop `undefined` keys from the patch so callers can't accidentally
+    // null out fields by passing `{ lastRunId: undefined }` etc.; if a
+    // patch needs to clear a field, it can pass `null` (handled per-field
+    // below for fields that allow it).
+    const cleaned: Partial<Schedule> = {};
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === undefined) continue;
+      (cleaned as Record<string, unknown>)[key] = value;
+    }
+    const next: Schedule = { ...existing, ...cleaned, updatedAt: new Date() };
     this.schedules.set(id, next);
   }
 

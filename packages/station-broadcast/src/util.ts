@@ -38,7 +38,14 @@ export function topologicalSort<T extends DagNode>(
 
     visiting.add(name);
     const node = nodeMap.get(name);
-    if (!node) return; // Guard: skip unknown nodes (validated elsewhere)
+    if (!node) {
+      // Unknown dependency — caller should have flagged this elsewhere; either way
+      // we must clean up `visiting` so a sibling path that references the same
+      // unknown name doesn't trip a false cycle error.
+      visiting.delete(name);
+      visited.add(name);
+      return;
+    }
     for (const dep of node.dependsOn) {
       visit(dep, [...path, name]);
     }

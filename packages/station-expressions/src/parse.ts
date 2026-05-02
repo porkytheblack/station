@@ -217,7 +217,16 @@ class Parser {
       // Numbers
       if (ch >= "0" && ch <= "9") {
         const start = i;
-        while (i < src.length && ((src[i] >= "0" && src[i] <= "9") || src[i] === ".")) i++;
+        let dotSeen = false;
+        while (i < src.length && ((src[i] >= "0" && src[i] <= "9") || src[i] === ".")) {
+          if (src[i] === ".") {
+            if (dotSeen) {
+              throw new ExpressionParseError("Invalid numeric literal — multiple decimal points", i);
+            }
+            dotSeen = true;
+          }
+          i++;
+        }
         this.tokens.push({ kind: "num", value: src.slice(start, i), pos: start });
         continue;
       }

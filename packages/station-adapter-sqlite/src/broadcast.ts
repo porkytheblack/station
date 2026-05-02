@@ -294,39 +294,42 @@ export class BroadcastSqliteAdapter implements BroadcastQueueAdapter {
   // ─── Dynamic broadcast definitions ───────────────────────────────
 
   async saveDefinition(spec: DynamicBroadcastSpec): Promise<DynamicBroadcastSpec> {
-    const row = this.db
-      .prepare(`SELECT MAX(version) AS v FROM ${this.definitionsTable} WHERE name = ?`)
-      .get(spec.name) as { v: number | null } | undefined;
-    const nextVersion = (row?.v ?? 0) + 1;
-    const now = new Date();
-
-    const next: DynamicBroadcastSpec = {
-      ...spec,
-      version: nextVersion,
-      createdAt: spec.createdAt ?? now,
-      updatedAt: now,
-      deletedAt: undefined,
-    };
-
-    this.db
-      .prepare(`
-        INSERT INTO ${this.definitionsTable}
-          (name, version, spec, failure_policy, timeout, created_at, updated_at, created_by, deleted_at)
-        VALUES
-          (@name, @version, @spec, @failure_policy, @timeout, @created_at, @updated_at, @created_by, NULL)
-      `)
-      .run({
-        name: next.name,
-        version: next.version,
-        spec: JSON.stringify(next),
-        failure_policy: next.failurePolicy,
-        timeout: next.timeout ?? null,
-        created_at: dateToStr(next.createdAt),
-        updated_at: dateToStr(next.updatedAt),
-        created_by: next.createdBy ?? null,
-      });
-
-    return next;
+    // Serialize MAX(version) read + INSERT under a single transaction.
+    // better-sqlite3 transactions lock the database for writes, so two
+    // concurrent saves can't both pick the same version number.
+    const txn = this.db.transaction((spec: DynamicBroadcastSpec): DynamicBroadcastSpec => {
+      const row = this.db
+        .prepare(`SELECT MAX(version) AS v FROM ${this.definitionsTable} WHERE name = ?`)
+        .get(spec.name) as { v: number | null } | undefined;
+      const nextVersion = (row?.v ?? 0) + 1;
+      const now = new Date();
+      const next: DynamicBroadcastSpec = {
+        ...spec,
+        version: nextVersion,
+        createdAt: spec.createdAt ?? now,
+        updatedAt: now,
+        deletedAt: undefined,
+      };
+      this.db
+        .prepare(`
+          INSERT INTO ${this.definitionsTable}
+            (name, version, spec, failure_policy, timeout, created_at, updated_at, created_by, deleted_at)
+          VALUES
+            (@name, @version, @spec, @failure_policy, @timeout, @created_at, @updated_at, @created_by, NULL)
+        `)
+        .run({
+          name: next.name,
+          version: next.version,
+          spec: JSON.stringify(next),
+          failure_policy: next.failurePolicy,
+          timeout: next.timeout ?? null,
+          created_at: dateToStr(next.createdAt),
+          updated_at: dateToStr(next.updatedAt),
+          created_by: next.createdBy ?? null,
+        });
+      return next;
+    });
+    return txn(spec);
   }
 
   async getDefinition(name: string, version?: number): Promise<DynamicBroadcastSpec | null> {
