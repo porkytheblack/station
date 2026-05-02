@@ -73,7 +73,7 @@ class SignalBuilder<TInput = unknown, TOutput = void> {
   /** Set output schema. Infers TOutput from Zod type. */
   output<T>(schema: z.ZodType<T>): SignalBuilder<TInput, T>;
 
-  /** Set recurring interval. Format: "<number><s|m|h|d>" (e.g. "5m", "1h"). */
+  /** Set recurring interval. Format: "<number><ms|s|m|h|d|w>" (e.g. "5m", "100ms", "1w"). */
   every(interval: string): SignalBuilder<TInput, TOutput>;
 
   /** Set timeout in milliseconds. Default: 300000 (5 min). */
@@ -513,8 +513,8 @@ class StationRemoteError extends Error {
 
 ```ts
 function parseInterval(interval: string): number;
-// Parses "5m", "30s", "1h", "2d", or "every 5m" format. Returns milliseconds.
-// Valid units: s (1000), m (60000), h (3600000), d (86400000)
+// Parses "100ms", "30s", "5m", "1h", "2d", "1w", or "every 5m" format. Returns milliseconds.
+// Valid units: ms (1), s (1000), m (60000), h (3600000), d (86400000), w (604800000)
 
 function isSignal(value: unknown): value is AnySignal;
 const SIGNAL_BRAND: unique symbol; // Symbol.for("station-signal")
@@ -592,7 +592,7 @@ class BroadcastChain<TInput> {
   /** Set broadcast-level timeout in ms. Auto-fails if exceeded. */
   timeout(ms: number): BroadcastChain<TInput>;
 
-  /** Set recurring interval. Format: "<number><s|m|h|d>". */
+  /** Set recurring interval. Format: "<number><ms|s|m|h|d|w>". */
   every(interval: string): BroadcastChain<TInput>;
 
   /** Set default input for recurring broadcasts. */
@@ -713,6 +713,8 @@ interface BroadcastRunnerOptions {
   adapter?: BroadcastQueueAdapter;
   pollIntervalMs?: number;              // default: 1000
   subscribers?: BroadcastSubscriber[];
+  /** Schedule reconciler. station-kit wires one in automatically when `config.scheduleAdapter` is set. */
+  scheduleReconciler?: ScheduleReconciler;
 }
 
 class BroadcastRunner {
@@ -757,8 +759,26 @@ class BroadcastRunner {
   /**
    * Trigger a broadcast by name. Writes directly to this runner's adapter.
    * Prefer this over definition.trigger() for local usage.
+   * If the name resolves to a dynamic broadcast, falls through to triggerDynamic.
    */
   trigger(broadcastName: string, input: unknown): Promise<string>;
+
+  /**
+   * Trigger a dynamic broadcast and snapshot its current spec into
+   * BroadcastRun.definitionSnapshot. Edits to the spec after this call do
+   * not affect the resulting run.
+   */
+  triggerDynamic(name: string, input: unknown): Promise<string>;
+
+  /** True if a dynamic broadcast with this name is currently registered. */
+  hasDynamicBroadcast(name: string): boolean;
+
+  /**
+   * Refresh the dynamic broadcast registry from the adapter. Called
+   * automatically each tick; expose for tests or eager updates after a
+   * `saveDefinition`.
+   */
+  reconcileDynamicDefinitions(): Promise<void>;
 
   /** Start the runner loop. Blocks until stop() is called. */
   start(): Promise<void>;
@@ -786,6 +806,12 @@ interface BroadcastRun {
   startedAt?: Date;
   completedAt?: Date;
   error?: string;
+  /**
+   * For runs of dynamic broadcasts: a JSON-serialized DynamicBroadcastSpec
+   * captured at trigger time. The advance loop reads from this rather than
+   * the live registry so spec edits don't mutate in-flight runs.
+   */
+  definitionSnapshot?: string;
 }
 
 type BroadcastRunPatch = Partial<Omit<BroadcastRun, "id" | "broadcastName" | "createdAt">>;
@@ -835,12 +861,22 @@ interface BroadcastQueueAdapter {
   updateNodeRun(id: string, patch: BroadcastNodeRunPatch): Promise<void>;
   getNodeRuns(broadcastRunId: string): Promise<BroadcastNodeRun[]>;
 
+  // Dynamic broadcast definitions (optional — adapters that don't implement
+  // these cannot host runtime-editable broadcasts; static broadcasts still work).
+  saveDefinition?(spec: DynamicBroadcastSpec): Promise<DynamicBroadcastSpec>;
+  getDefinition?(name: string, version?: number): Promise<DynamicBroadcastSpec | null>;
+  listDefinitions?(): Promise<DynamicBroadcastSpec[]>;
+  listDefinitionVersions?(name: string): Promise<DynamicBroadcastSpec[]>;
+  deleteDefinition?(name: string): Promise<boolean>;
+
   // Utility
   generateId(): string;
   ping(): Promise<boolean>;
   close?(): Promise<void>;
 }
 ```
+
+See §9 for `DynamicBroadcastSpec` and the contract for these methods (version monotonicity, soft-delete semantics).
 
 ### BroadcastMemoryAdapter
 
@@ -1209,6 +1245,12 @@ interface AuthConfig {
   username: string;
   password: string;
   sessionTtlMs?: number;   // default: 86400000 (24h)
+  /**
+   * Pluggable storage backend for API keys. Defaults to a SqliteKeyStorage at
+   * `<dataDir>/station-keys.db`. Provide a custom `ApiKeyStorageAdapter` to
+   * host keys in Postgres, MySQL, Redis, etc. (See §7.5 below.)
+   */
+  keyStorage?: ApiKeyStorageAdapter;
 }
 
 interface RunnerConfig {
@@ -1231,6 +1273,11 @@ interface StationConfig {
   host: string;                          // default: "localhost"
   adapter?: SignalQueueAdapter;
   broadcastAdapter?: BroadcastQueueAdapter;
+  /**
+   * Optional schedule storage. When provided, runtime-editable schedules are
+   * persisted here and reconciled by both runners. (See §10.)
+   */
+  scheduleAdapter?: ScheduleAdapter;
   signalsDir?: string;                   // auto-detects "./signals" if exists
   broadcastsDir?: string;                // auto-detects "./broadcasts" if exists
   runner: RunnerConfig;
@@ -1340,6 +1387,100 @@ These env vars override config values at runtime:
 
 If `auth` is not set in config but both `STATION_AUTH_USERNAME` and `STATION_AUTH_PASSWORD` are set, auth is enabled automatically.
 
+### 7.5 KeyStore (API key storage)
+
+API keys live behind a pluggable `ApiKeyStorageAdapter`. The `KeyStore` class owns crypto (UUIDs, SHA-256 hashing, key generation) and delegates persistence to the adapter.
+
+```ts
+import {
+  KeyStore,
+  SqliteKeyStorage,
+  MemoryKeyStorage,
+  type ApiKeyStorageAdapter,
+  type ApiKey,
+  type ApiKeyPublic,
+} from "station-kit/server/auth/keys";  // internal path; mirrors server bundle
+```
+
+#### ApiKeyStorageAdapter
+
+```ts
+interface ApiKey {
+  id: string;
+  name: string;
+  keyHash: string;       // sha256 hex
+  keyPrefix: string;     // first 12 chars of the raw key, e.g. "sk_live_abc"
+  scopes: string[];
+  createdAt: string;     // ISO
+  lastUsed: string | null;
+  expiresAt: string | null;
+  revoked: boolean;
+}
+
+type ApiKeyPublic = Omit<ApiKey, "keyHash">;
+
+interface ApiKeyStorageAdapter {
+  insert(record: ApiKey): Promise<void> | void;
+  findByHash(keyHash: string): Promise<ApiKey | null> | ApiKey | null;
+  list(): Promise<ApiKeyPublic[]> | ApiKeyPublic[];
+  touch(id: string, lastUsedIso: string): Promise<void> | void;
+  revoke(id: string): Promise<boolean> | boolean;
+  close?(): Promise<void> | void;
+}
+```
+
+Methods may return synchronously or as promises — `KeyStore` awaits results either way.
+
+#### KeyStore (async)
+
+```ts
+class KeyStore {
+  /**
+   * Pass an ApiKeyStorageAdapter for any backend, or a string path to fall back
+   * to a SqliteKeyStorage at that path (backwards compatible).
+   */
+  constructor(storageOrDbPath: ApiKeyStorageAdapter | string);
+
+  create(name: string, scopes?: string[]): Promise<{ key: string; record: ApiKey }>;
+  verify(rawKey: string): Promise<ApiKey | null>;
+  list(): Promise<ApiKeyPublic[]>;
+  revoke(id: string): Promise<boolean>;
+  close(): Promise<void>;
+}
+```
+
+**Breaking change:** all `KeyStore` methods are async. Direct callers must `await` (the dashboard / Tauri sidecar already do).
+
+#### Built-in implementations
+
+```ts
+class SqliteKeyStorage implements ApiKeyStorageAdapter {
+  constructor(options: { dbPath: string; tableName?: string });
+}
+
+class MemoryKeyStorage implements ApiKeyStorageAdapter {
+  constructor();
+}
+```
+
+`SqliteKeyStorage` is the default when station-kit boots without a `keyStorage` configured. `MemoryKeyStorage` is intended for tests and ephemeral deployments — keys do not survive process restart.
+
+#### Configuring custom storage
+
+```ts
+import { defineConfig } from "station-kit";
+
+export default defineConfig({
+  auth: {
+    username: "admin",
+    password: process.env.PW!,
+    keyStorage: new MyPostgresKeyStorage(pool),
+  },
+});
+```
+
+`auth.keyStorage` is a plain `ApiKeyStorageAdapter` — anyone can implement it against Postgres / MySQL / Redis / etc. without forking station-kit.
+
 ---
 
 ## 8. Station v1 API Endpoints
@@ -1397,6 +1538,15 @@ Response (201):
 ```json
 { "data": { "id": "uuid", "broadcastName": "my-broadcast", "status": "pending", "createdAt": "..." } }
 ```
+
+```
+POST /api/v1/trigger-dynamic-broadcast
+```
+
+Body: `{ "broadcastName": "my-dynamic", "input": { ... } }`
+Response (201): `{ "data": { "id": "uuid", "broadcastName": "my-dynamic", "status": "pending", "createdAt": "..." } }`
+
+Errors: `404 not_found` if no dynamic broadcast with that name is registered; `400 trigger_failed` if the spec couldn't be materialized (e.g. its referenced signal isn't loaded).
 
 ### Read (scope: `read`)
 
@@ -1555,7 +1705,373 @@ Common error codes:
 
 ---
 
-## 9. station-tauri
+## 9. Dynamic Broadcasts
+
+Runtime-editable broadcasts persisted as JSON specs and reconciled into the runner's live registry on each tick. Distinct from file-defined broadcasts — names live in a separate registry and may collide harmlessly.
+
+### DynamicBroadcastSpec / DynamicNodeSpec
+
+```ts
+import type { DynamicBroadcastSpec, DynamicNodeSpec } from "station-broadcast";
+
+interface DynamicNodeSpec {
+  /** Unique within the spec. */
+  name: string;
+  /** Must resolve to a registered signal at materialization time. */
+  signalName: string;
+  dependsOn: string[];
+  /** ExprNode JSON; absent ⇒ pass-through (single-dep) or upstream object (multi-dep). */
+  input?: ExprNode;
+  /** ExprNode JSON returning boolean; absent ⇒ always run. */
+  when?: ExprNode;
+}
+
+interface DynamicBroadcastSpec {
+  name: string;
+  /** Monotonically incremented on each save. */
+  version: number;
+  failurePolicy: FailurePolicy;
+  timeout?: number;
+  nodes: DynamicNodeSpec[];
+  createdAt: Date;
+  updatedAt: Date;
+  /** API key id or session user that authored this version. */
+  createdBy?: string;
+  /** Soft-delete marker — definitions are retained for run-history inspection. */
+  deletedAt?: Date;
+}
+```
+
+### Adapter contract (optional methods)
+
+The optional `BroadcastQueueAdapter` definition methods (see §2) follow these rules:
+
+- `saveDefinition(spec)` — assigns the next version (`max(existing) + 1`) and returns the persisted record. Caller-supplied `version` is ignored. Clears any `deletedAt`.
+- `getDefinition(name)` — returns the latest non-deleted version, or `null`.
+- `getDefinition(name, version)` — returns that exact version (including soft-deleted ones — for history inspection).
+- `listDefinitions()` — latest of each name, excluding soft-deleted definitions.
+- `listDefinitionVersions(name)` — full version history, newest first, includes deleted versions.
+- `deleteDefinition(name)` — soft-deletes the latest version, returns `true` on success. Recreating later via `saveDefinition` continues at the next version (NOT v1).
+
+### BroadcastRunner methods
+
+```ts
+class BroadcastRunner {
+  // ... base methods ...
+  triggerDynamic(name: string, input: unknown): Promise<string>;
+  hasDynamicBroadcast(name: string): boolean;
+  reconcileDynamicDefinitions(): Promise<void>;
+}
+```
+
+`triggerDynamic` snapshots the current spec into `BroadcastRun.definitionSnapshot`. The advance loop materializes from the snapshot, so spec edits after trigger time never mutate in-flight runs.
+
+`reconcileDynamicDefinitions()` is called automatically on `start()` and on each tick. It also retries previously-failed materializations whenever the signal registry size changes (so a broadcast that referenced a not-yet-loaded signal recovers automatically).
+
+### Validation
+
+```ts
+import { validateDynamicSpec, type DynamicValidationContext, type DynamicValidationResult } from "station-broadcast";
+
+interface DynamicValidationContext {
+  signalSchemas: Map<string, { inputSchema: SchemaField; outputSchema: SchemaField }>;
+  /** When omitted, refs to `input.*` aren't type-checked. */
+  broadcastInputSchema?: SchemaField;
+}
+
+interface DynamicValidationError {
+  /** node name, or "$" for spec-level errors */
+  node: string;
+  field?: string;     // "input" | "when" | "signalName" | "dependsOn"
+  message: string;
+}
+
+interface DynamicValidationResult {
+  ok: boolean;
+  errors: DynamicValidationError[];
+}
+
+function validateDynamicSpec(
+  spec: DynamicBroadcastSpec,
+  ctx: DynamicValidationContext,
+): DynamicValidationResult;
+```
+
+Checks: unique node names, signals exist, dependencies exist, no cycles, expression well-formedness against schemas.
+
+### v1 endpoints
+
+| Endpoint | Scope | Description |
+|---|---|---|
+| `POST /api/v1/broadcast-definitions` | `admin` | Create a new definition or new version. Body: `DynamicBroadcastSpec` (server assigns `version`, `createdBy`). Validates first; returns `422 validation_failed` on errors. |
+| `POST /api/v1/broadcast-definitions/validate` | `read` | Validate a spec without persisting. Response: `{ data: DynamicValidationResult }`. |
+| `GET /api/v1/broadcast-definitions` | `read` | List the latest non-deleted version of each definition. |
+| `GET /api/v1/broadcast-definitions/:name` | `read` | Get the latest version of `:name`. |
+| `GET /api/v1/broadcast-definitions/:name/versions` | `read` | Full version history, newest first. |
+| `GET /api/v1/broadcast-definitions/:name/versions/:n` | `read` | Get specific version `n`. |
+| `DELETE /api/v1/broadcast-definitions/:name` | `admin` | Soft-delete the latest version. |
+| `POST /api/v1/trigger-dynamic-broadcast` | `trigger` | Trigger by name. Snapshots current spec into the run. |
+
+All endpoints return 503 `unavailable` when the broadcast adapter doesn't implement the relevant optional method.
+
+---
+
+## 10. station-schedules
+
+Runtime-editable schedule store + reconciler shared by `SignalRunner` and `BroadcastRunner`. Distinct from file-defined `.every()` schedules in code.
+
+npm: `station-schedules`
+
+### Exports
+
+```ts
+import {
+  ScheduleReconciler,
+  ScheduleMemoryAdapter,
+  type Schedule,
+  type SchedulePatch,
+  type ScheduleKind,
+  type ScheduleAdapter,
+  type ScheduleListFilter,
+  type ScheduleReconcilerOptions,
+} from "station-schedules";
+```
+
+### Schedule type
+
+```ts
+type ScheduleKind = "signal" | "broadcast-static" | "broadcast-dynamic";
+
+interface Schedule {
+  id: string;
+  kind: ScheduleKind;
+  /** Signal name OR broadcast name OR dynamic broadcast name. */
+  target: string;
+  /** Parsed by station-signal's parseInterval — "100ms", "5m", "1h", "1d", "1w". */
+  interval: string;
+  input?: unknown;       // JSON-serializable; passed to target on each fire
+  enabled: boolean;
+  nextRunAt: Date;
+  lastRunAt?: Date;
+  lastRunStatus?: string;   // "triggered" | "errored" | "skipped:overlap" | …
+  lastRunId?: string;       // run ID for click-through
+  createdAt: Date;
+  updatedAt: Date;
+  createdBy?: string;       // API key id of the author
+}
+
+type SchedulePatch = Partial<Omit<Schedule, "id" | "kind" | "target" | "createdAt">>;
+```
+
+### ScheduleAdapter interface
+
+```ts
+interface ScheduleListFilter {
+  kind?: ScheduleKind;
+  enabled?: boolean;
+  /** When true, returns enabled schedules with nextRunAt <= now. */
+  due?: boolean;
+}
+
+interface ScheduleAdapter {
+  add(schedule: Schedule): Promise<void>;
+  get(id: string): Promise<Schedule | null>;
+  list(filter?: ScheduleListFilter): Promise<Schedule[]>;
+  update(id: string, patch: SchedulePatch): Promise<void>;
+  delete(id: string): Promise<boolean>;
+  /**
+   * Atomically advance nextRunAt only if it still matches expectedNextRunAt.
+   * Returns true if the caller successfully claimed the schedule. Required
+   * for multi-instance correctness — adapters without this fall back to a
+   * non-atomic advance (single-process only).
+   */
+  claimDue?(id: string, expectedNextRunAt: Date, newNextRunAt: Date): Promise<boolean>;
+  generateId(): string;
+  ping(): Promise<boolean>;
+  close?(): Promise<void>;
+}
+```
+
+### Persistent adapter packages
+
+Imported via subpath, mirroring the broadcast adapter pattern:
+
+| Adapter | Import path |
+|---|---|
+| SQLite | `station-adapter-sqlite/schedules` (`ScheduleSqliteAdapter`) |
+| Postgres | `station-adapter-postgres/schedules` (`SchedulePostgresAdapter`) |
+| MySQL | `station-adapter-mysql/schedules` (`ScheduleMysqlAdapter` — async `create`) |
+| Redis | `station-adapter-redis/schedules` (`ScheduleRedisAdapter`) |
+
+All implement `claimDue` atomically:
+
+- **SQLite** — `UPDATE ... WHERE next_run_at = ?` (single-writer DB).
+- **Postgres** — `UPDATE ... WHERE next_run_at = $1 RETURNING id`.
+- **MySQL** — `UPDATE ...`, decided by `affectedRows > 0`.
+- **Redis** — Lua `EVAL` script comparing `ZSCORE` and updating atomically.
+
+### ScheduleReconciler
+
+```ts
+interface ScheduleReconcilerOptions {
+  adapter: ScheduleAdapter;
+  /** Which kinds this reconciler handles — others are skipped. */
+  kinds: ScheduleKind[];
+  triggerFn: (schedule: Schedule) => Promise<string>;
+  /** Returns true if a pending or running run already exists for this target. */
+  hasPendingOrRunning?: (schedule: Schedule) => Promise<boolean>;
+  parseInterval: (interval: string) => number;
+  onError?: (err: Error, schedule?: Schedule) => void;
+}
+
+class ScheduleReconciler {
+  constructor(opts: ScheduleReconcilerOptions);
+  /** Run one reconciliation pass. Safe to call from a runner's tick loop. */
+  tick(): Promise<void>;
+}
+```
+
+`tick()` flow per due schedule:
+
+1. `claimDue(id, currentNextRunAt, newNextRunAt)` — bails if another runner already claimed.
+2. Optional `hasPendingOrRunning` — sets `lastRunStatus = "skipped:overlap"` and skips firing if true.
+3. `triggerFn(schedule)` — records `lastRunAt`, `lastRunId`, and `lastRunStatus` (`"triggered"` or `"errored"`).
+
+If `triggerFn` throws, the schedule still has its `nextRunAt` advanced (via the claim) and records an error status — schedules can never busy-loop on a recurring failure.
+
+### Runner wiring
+
+Both `SignalRunnerOptions` and `BroadcastRunnerOptions` accept `scheduleReconciler?: ScheduleReconciler`. station-kit constructs and wires reconcilers automatically when `config.scheduleAdapter` is set:
+
+- one reconciler per runner, with `kinds` set to `["signal"]` for the SignalRunner and `["broadcast-static", "broadcast-dynamic"]` for the BroadcastRunner.
+
+### v1 endpoints
+
+| Endpoint | Scope | Description |
+|---|---|---|
+| `POST /api/v1/schedules` | `admin` | Create. Body: `{ kind, target, interval, input?, enabled? }`. `nextRunAt` defaults to `now + intervalMs`. Returns 201 with the persisted Schedule. |
+| `GET /api/v1/schedules` | `read` | List. Query: `?kind=signal&enabled=true`. |
+| `GET /api/v1/schedules/:id` | `read` | Get one. |
+| `PATCH /api/v1/schedules/:id` | `admin` | Update. Accepts `interval`, `input`, `enabled`, `nextRunAt`. |
+| `DELETE /api/v1/schedules/:id` | `admin` | Delete. |
+| `POST /api/v1/schedules/:id/preview` | `read` | Preview next N fire times (1-20, default 5). Body: `{ count?: number }`. Response: `{ data: { fires: ISO8601[] } }`. |
+
+All return 503 `unavailable` when no `scheduleAdapter` is configured.
+
+---
+
+## 11. station-expressions
+
+Pure, deterministic expression language. Used by `DynamicNodeSpec.input` (mappings) and `DynamicNodeSpec.when` (guards). JSON-serializable AST plus a string syntax compiled to AST.
+
+npm: `station-expressions`
+
+Properties:
+
+- **No I/O, no time, no randomness** — pure functions of `{ input, upstream }`.
+- **No loops, no recursion, no user-defined functions** — bounded complexity (`MAX_NODES = 10_000`).
+- Total over well-typed inputs that pass `validate` against the real schemas.
+
+### Exports
+
+```ts
+import {
+  evaluate,
+  validate,
+  parse,
+  stringify,
+  ExpressionEvalError,
+  ExpressionParseError,
+  type ExprNode,
+  type BinaryOp,
+  type UnaryOp,
+  type SchemaField,
+  type EvalContext,
+  type ValidationContext,
+  type ValidationError,
+  type ValidationResult,
+} from "station-expressions";
+```
+
+### ExprNode
+
+```ts
+type BinaryOp = "==" | "!=" | ">" | "<" | ">=" | "<=" | "&&" | "||" | "+" | "-" | "*" | "/";
+type UnaryOp = "!";
+
+type ExprNode =
+  | { kind: "ref"; path: string[] }
+  | { kind: "lit"; value: unknown }
+  | { kind: "tmpl"; parts: (string | ExprNode)[] }
+  | { kind: "op"; op: BinaryOp | UnaryOp; args: ExprNode[] }
+  | { kind: "obj"; entries: Record<string, ExprNode> }
+  | { kind: "arr"; items: ExprNode[] };
+```
+
+#### Reference paths
+
+| Path                         | Resolves to                                  |
+|------------------------------|----------------------------------------------|
+| `["input", "foo"]`           | The broadcast's trigger input, field `foo`   |
+| `["upstream", "node", "f"]`  | An upstream node's output, field `f`         |
+| `["node", "f"]`              | Shorthand for `["upstream", "node", "f"]`    |
+
+Missing paths return `undefined` rather than throwing — use `validate` to catch missing-property errors at save time.
+
+#### Operators
+
+`==`, `!=`, `>`, `<`, `>=`, `<=`, `&&`, `||`, `!`, `+`, `-`, `*`, `/`.
+
+`+` is overloaded: if either operand is a string, the result is string concatenation; otherwise numeric addition. Equality is strict (`===`).
+
+### SchemaField (validator)
+
+```ts
+type SchemaField =
+  | { type: "string" | "number" | "boolean" | "null" | "any" | "unknown" }
+  | { type: "array"; items?: SchemaField }
+  | { type: "object"; properties?: Record<string, SchemaField>; additionalProperties?: boolean }
+  | { type: "union"; options: SchemaField[] };
+```
+
+Mirrors the shape produced by Station's existing `inputSchema` / `outputSchema` reflection.
+
+### Public API
+
+```ts
+interface EvalContext {
+  input: unknown;
+  upstream: Record<string, unknown>;
+}
+
+interface ValidationContext {
+  inputSchema: SchemaField;
+  upstreamSchemas: Record<string, SchemaField>;
+  /** When validating an `input` mapping, the target signal's input schema. */
+  expectedSchema?: SchemaField;
+}
+
+function evaluate(node: ExprNode, ctx: EvalContext): unknown;
+function validate(node: ExprNode, ctx: ValidationContext): ValidationResult;
+function parse(source: string): ExprNode;     // throws ExpressionParseError
+function stringify(node: ExprNode): string;
+```
+
+### v1 endpoints (all `read` scope)
+
+| Endpoint | Description |
+|---|---|
+| `POST /api/v1/expressions/parse` | Body: `{ source: string }`. Response: `{ data: { node: ExprNode } }`. Errors: `400 parse_error` with `position`. |
+| `POST /api/v1/expressions/evaluate` | Body: `{ node: ExprNode, context?: { input?, upstream? } }`. Response: `{ data: { value: unknown } }`. |
+| `POST /api/v1/expressions/validate` | Body: `{ node: ExprNode, schemaContext?: { inputSchema?, upstreamSchemas?, expectedSchema? } }`. Response: `{ data: ValidationResult }`. |
+
+### Escape hatch
+
+When the language can't express something — async lookups, complex string manipulation, business logic — write a code-defined signal in TypeScript and reference it from your dynamic broadcast graph. The signal is the unit of arbitrary code; expressions just connect them.
+
+---
+
+## 12. station-tauri
 
 npm: `station-tauri`
 
