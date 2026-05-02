@@ -733,6 +733,80 @@ registerAdapter("my-adapter", (options) => {
         to the child process as a lightweight JSON payload, and the adapter is
         reconstructed from the registered factory.
       </p>
+
+      <hr className="divider" />
+
+      {/* ── Schedule adapters ── */}
+
+      <h3>Schedule adapters</h3>
+      <p>
+        Runtime <Link href="/docs/schedules">schedules</Link> are stored
+        through a separate <code>ScheduleAdapter</code> interface, not the
+        signal or broadcast queue adapter. Each backend ships its
+        implementation in a sub-path of the corresponding adapter package, so
+        you import only what you need:
+      </p>
+      <table className="api-table">
+        <thead>
+          <tr>
+            <th>Import</th>
+            <th>Backend</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>station-adapter-sqlite/schedules</code></td>
+            <td>SQLite (better-sqlite3, single-writer DB serialises claims).</td>
+          </tr>
+          <tr>
+            <td><code>station-adapter-postgres/schedules</code></td>
+            <td>Postgres (<code>UPDATE … RETURNING id</code> for atomic claims).</td>
+          </tr>
+          <tr>
+            <td><code>station-adapter-mysql/schedules</code></td>
+            <td>MySQL (<code>UPDATE … WHERE …</code>; <code>affectedRows</code> decides the winner).</td>
+          </tr>
+          <tr>
+            <td><code>station-adapter-redis/schedules</code></td>
+            <td>Redis (Lua <code>EVAL</code> compares <code>ZSCORE</code> and updates atomically).</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>
+        All four implement <code>claimDue</code>, which is what makes
+        schedules safe across multiple runner processes. The in-memory
+        adapter shipped with <code>station-schedules</code> is single-process
+        only and is meant for tests.
+      </p>
+
+      <hr className="divider" />
+
+      {/* ── Dynamic broadcast methods ── */}
+
+      <h3>Dynamic broadcast methods</h3>
+      <p>
+        <Link href="/docs/dynamic-broadcasts">Dynamic broadcasts</Link> live
+        on the same <code>BroadcastQueueAdapter</code> as broadcast runs, via
+        five optional methods:
+      </p>
+      <Code>{`interface BroadcastQueueAdapter {
+  // ...existing run/node methods...
+
+  saveDefinition?(spec: DynamicBroadcastSpec): Promise<DynamicBroadcastSpec>;
+  getDefinition?(name: string, version?: number): Promise<DynamicBroadcastSpec | null>;
+  listDefinitions?(): Promise<DynamicBroadcastSpec[]>;
+  listDefinitionVersions?(name: string): Promise<DynamicBroadcastSpec[]>;
+  deleteDefinition?(name: string): Promise<boolean>;
+}`}</Code>
+      <p>
+        All four backends — <code>station-adapter-sqlite</code>,{" "}
+        <code>station-adapter-postgres</code>,{" "}
+        <code>station-adapter-mysql</code> and{" "}
+        <code>station-adapter-redis</code> — implement these on their
+        broadcast adapter. Custom adapters that omit them stay compatible: the
+        rest of the broadcast surface keeps working, and the dynamic-broadcast
+        endpoints respond <code>501 Not Implemented</code>.
+      </p>
     </>
   );
 }
