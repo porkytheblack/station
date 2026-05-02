@@ -1,4 +1,5 @@
 import { Metadata } from "next";
+import Link from "next/link";
 import { Code } from "../../components/Code";
 
 export const metadata: Metadata = {
@@ -992,6 +993,28 @@ await signalRunner.stop({ graceful: true });`}</Code>
       <p>
         The built-in <code>ConsoleBroadcastSubscriber</code> logs all events to
         stdout with a <code>[station-broadcast]</code> prefix.
+      </p>
+
+      <hr className="divider" />
+
+      {/* ── Dynamic broadcasts ── */}
+
+      <h3>Dynamic broadcasts</h3>
+      <p>
+        Everything on this page describes file-defined broadcasts: definitions
+        you build with <code>broadcast(...)</code> at module scope and ship in
+        your codebase. Station also supports{" "}
+        <Link href="/docs/dynamic-broadcasts">dynamic broadcasts</Link> —
+        runtime-defined DAGs persisted through the broadcast adapter and
+        edited over the v1 API or the dashboard&apos;s graph builder.
+      </p>
+      <p>
+        The two registries are separate; a name in one never collides with a
+        name in the other. The builder API documented above is unchanged —
+        dynamic broadcasts are an opt-in additive surface, not a replacement.
+        If you need to compose existing signals into a workflow at runtime
+        without redeploying, see the{" "}
+        <Link href="/docs/dynamic-broadcasts">Dynamic broadcasts</Link> guide.
       </p>
     </>
   );

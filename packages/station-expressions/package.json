@@ -1,0 +1,26 @@
+{
+  "name": "station-expressions",
+  "version": "0.1.0",
+  "description": "Pure, deterministic expression AST + evaluator + validator for Station dynamic broadcasts",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "src"],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts"
+  },
+  "type": "module",
+  "engines": { "node": ">=18" },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "@types/node": "^25.3.0"
+  }
+}

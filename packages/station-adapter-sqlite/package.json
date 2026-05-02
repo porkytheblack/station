@@ -14,6 +14,11 @@
       "types": "./dist/broadcast.d.ts",
       "import": "./dist/broadcast.js",
       "default": "./dist/broadcast.js"
+    },
+    "./schedules": {
+      "types": "./dist/schedules.d.ts",
+      "import": "./dist/schedules.js",
+      "default": "./dist/schedules.js"
     }
   },
   "files": [
@@ -22,7 +27,8 @@
   ],
   "scripts": {
     "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts"
   },
   "license": "MIT",
   "type": "module",
@@ -37,6 +43,12 @@
   },
   "peerDependencies": {
     "station-signal": "workspace:*",
-    "station-broadcast": "workspace:*"
+    "station-broadcast": "workspace:*",
+    "station-schedules": "workspace:*"
+  },
+  "peerDependenciesMeta": {
+    "station-schedules": {
+      "optional": true
+    }
   }
 }

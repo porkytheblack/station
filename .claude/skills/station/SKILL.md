@@ -1,12 +1,22 @@
 ---
 name: station
-description: Use this skill when building with the Station background job framework. This includes creating signals (background jobs), defining broadcasts (DAG workflows), configuring adapters (SQLite, PostgreSQL, MySQL, Redis), setting up runners, writing subscribers, and configuring the Station dashboard. Station is a TypeScript-first framework for type-safe background jobs with Zod validation.
+description: Use this skill when building with the Station background job framework. This includes creating signals (background jobs), defining broadcasts (DAG workflows), authoring runtime-editable dynamic broadcasts, scheduling signals/broadcasts at runtime, writing expressions for `input` mappings and `when` guards, configuring adapters (SQLite, PostgreSQL, MySQL, Redis), customizing API key storage, setting up runners, writing subscribers, and configuring the Station dashboard. Station is a TypeScript-first framework for type-safe background jobs with Zod validation.
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash
 ---
 
 # Station Task Expert
 
 You are an expert Station developer specializing in building type-safe background job systems and DAG workflows.
+
+## When to use this skill
+
+Triggers include:
+
+- Defining or triggering signals / file-defined broadcasts.
+- "Create a dynamic broadcast" / "edit a broadcast at runtime" / "validate a broadcast spec" — runtime-editable broadcasts persisted via the v1 API. See **Dynamic broadcasts** below and `api-reference.md` §9, `examples.md` §20.
+- "Schedule a signal", "schedule a broadcast", "edit a schedule", "preview next fire times" — runtime schedules, distinct from `.every()` in code. See **Schedules** below and `api-reference.md` §10, `examples.md` §21.
+- "Write an expression", "validate this expression", "what does `input.foo` mean" — Station's expression language used inside dynamic broadcasts. See **Expressions** below and `api-reference.md` §11, `examples.md` §22.
+- "Use Postgres / MySQL / Redis for API keys" or "configure custom API key storage" — pluggable `ApiKeyStorageAdapter`. See **KeyStore** below and `api-reference.md` §7.5.
 
 ## Critical Rules
 
@@ -23,6 +33,10 @@ You are an expert Station developer specializing in building type-safe backgroun
 10. **Zod v4 gotcha: never use `.default({})` on objects with default fields** - Use plain TypeScript defaults instead. Zod v4 internals: `schema._zod.def.type` (not `_def.typeName`).
 12. **`station deploy` bundles to JS — shared imports are resolved automatically.** Signals/broadcasts can import from `../lib/`, `../shared/`, etc. These are bundled into shared chunks by esbuild. No need to configure includes for imported code — only use `deploy.include` for non-JS assets.
 13. **Use `station-tauri` for desktop apps** — Do not use `station-kit` or `defineConfig` for Tauri/desktop integration. Use `createTauriStation()` from `station-tauri` instead. It runs localhost-only with no dashboard UI and auto-provisions API keys.
+14. **Dynamic broadcasts and file-defined broadcasts live in separate registries** — names can collide harmlessly. The runner snapshots a dynamic spec into `BroadcastRun.definitionSnapshot` on trigger; spec edits never mutate in-flight runs. Versions are monotonic across delete + recreate (a recreated definition continues at the next version, not v1).
+15. **Runtime schedules are additive** — `.every()` in signal/broadcast files keeps working. The `Schedule` adapter is a separate import path (`station-adapter-{sqlite,postgres,mysql,redis}/schedules`). Multi-runner deployments require an adapter that implements `claimDue` for at-most-once firing.
+16. **Expressions are pure and JSON-serializable** — used by `DynamicNodeSpec.input` / `.when`. No I/O, no time, no randomness. If you can't express something, write a code-defined signal in TypeScript and reference it from the dynamic broadcast graph — the signal is the unit of arbitrary code, expressions just connect them.
+17. **`KeyStore` methods are now async** — `create`, `verify`, `list`, `revoke`, `close` all return Promises. Anyone calling them directly must `await`. The `new KeyStore("path/to/db")` string constructor still works (constructs a `SqliteKeyStorage`), but the methods are async regardless.
 
 ## Signal Pattern
 
@@ -315,7 +329,7 @@ docker run -p 4400:4400 \
 | `.timeout(ms)` | Max execution time (default: 300000) |
 | `.retries(n)` | Retry attempts after failure (default: 0) |
 | `.concurrency(n)` | Max concurrent runs for this signal |
-| `.every(interval)` | Recurring schedule: `"30s"`, `"5m"`, `"1h"`, `"1d"` |
+| `.every(interval)` | Recurring schedule: `"100ms"`, `"30s"`, `"5m"`, `"1h"`, `"1d"`, `"1w"` |
 | `.withInput(data)` | Default input for recurring signals |
 | `.run(handler)` | Single handler function (returns signal) |
 | `.step(name, fn)` | Add pipeline step (returns StepBuilder) |
@@ -342,6 +356,100 @@ Signal subscribers implement any subset of:
 
 Broadcast subscribers implement any subset of:
 `onBroadcastDiscovered`, `onBroadcastQueued`, `onBroadcastStarted`, `onBroadcastCompleted`, `onBroadcastFailed`, `onBroadcastCancelled`, `onNodeTriggered`, `onNodeCompleted`, `onNodeFailed`, `onNodeSkipped`
+
+## Dynamic Broadcasts
+
+Runtime-editable broadcasts. The DAG is JSON (a `DynamicBroadcastSpec`) persisted via the broadcast adapter and reconciled into the runner's live registry.
+
+```ts
+// A spec is a plain JSON object. Persist it via POST /api/v1/broadcast-definitions.
+const spec = {
+  name: "high-value-order",
+  failurePolicy: "skip-downstream",
+  nodes: [
+    { name: "score", signalName: "score-order", dependsOn: [] },
+    {
+      name: "notify",
+      signalName: "notify-vip",
+      dependsOn: ["score"],
+      when: { kind: "op", op: ">", args: [
+        { kind: "ref", path: ["score", "score"] },
+        { kind: "lit", value: 0.8 },
+      ]},
+      input: { kind: "obj", entries: {
+        orderId: { kind: "ref", path: ["input", "orderId"] },
+      }},
+    },
+  ],
+};
+```
+
+- `DynamicNodeSpec.input` / `.when` are `ExprNode`s — see the Expressions section below.
+- File-defined and dynamic broadcasts live in **separate registries**; names may collide.
+- `triggerDynamic` snapshots the spec into `BroadcastRun.definitionSnapshot`. Edits to the spec do not affect in-flight runs.
+- Save bumps `version` monotonically. Delete is soft. Recreating a deleted name continues at the next version (not v1).
+- v1 endpoints (`api-reference.md` §9): create / validate / list / get / version-history / get-by-version / delete / `trigger-dynamic-broadcast`.
+
+## Schedules (station-schedules)
+
+Runtime-editable schedules — distinct from `.every()` in signal/broadcast files. Three kinds: `signal`, `broadcast-static`, `broadcast-dynamic`.
+
+```ts
+// station.config.ts
+import { defineConfig } from "station-kit";
+import { ScheduleSqliteAdapter } from "station-adapter-sqlite/schedules";
+
+export default defineConfig({
+  // ... adapter / broadcastAdapter ...
+  scheduleAdapter: new ScheduleSqliteAdapter({ dbPath: "./station.db" }),
+});
+```
+
+When `scheduleAdapter` is set, station-kit wires a `ScheduleReconciler` into both runners automatically. For hand-rolled runners, pass `scheduleReconciler` to `SignalRunner` / `BroadcastRunner` constructor options.
+
+`interval` grammar (handled by `parseInterval` from `station-signal`): `"100ms"`, `"30s"`, `"5m"`, `"1h"`, `"1d"`, `"1w"`.
+
+Multi-runner deployments require an adapter implementing `claimDue` for at-most-once firing. The in-memory adapter is single-process only.
+
+v1 endpoints: `POST /api/v1/schedules`, `GET /api/v1/schedules`, `GET /api/v1/schedules/:id`, `PATCH /api/v1/schedules/:id`, `DELETE /api/v1/schedules/:id`, `POST /api/v1/schedules/:id/preview` (next N fire times). See `api-reference.md` §10 and `examples.md` §21.
+
+## Expressions (station-expressions)
+
+Pure, deterministic expression language for `DynamicNodeSpec.input` and `.when`. JSON-serializable AST plus an optional string syntax (`parse` / `stringify`).
+
+```ts
+import { evaluate, validate, parse, stringify } from "station-expressions";
+
+// Author from string, persist as AST.
+const node = parse(`input.amount > 100 && upstream.score.value >= 0.8`);
+
+evaluate(node, { input: { amount: 250 }, upstream: { score: { value: 0.9 } } });
+// → true
+```
+
+- `ExprNode` kinds: `ref`, `lit`, `tmpl`, `op`, `obj`, `arr`.
+- Reference paths: `input.foo` (broadcast trigger input), `upstream.nodeName.field` (upstream node output), `nodeName.field` (shorthand).
+- Operators: `==`, `!=`, `<`, `>`, `<=`, `>=`, `&&`, `||`, `!`, `+`, `-`, `*`, `/`. `+` is overloaded to string-concat if either operand is a string.
+- v1 endpoints (read scope): `POST /api/v1/expressions/{parse,evaluate,validate}`.
+- **Escape hatch**: when the language can't express something, write a code-defined signal in TypeScript and reference it from the broadcast graph. The signal is the unit of arbitrary code; expressions just connect them.
+
+## API Key Storage (pluggable)
+
+API keys live behind `ApiKeyStorageAdapter`. Default is `SqliteKeyStorage`. Pass a custom adapter via `auth.keyStorage` to host keys in any backend.
+
+```ts
+import { defineConfig } from "station-kit";
+
+export default defineConfig({
+  auth: {
+    username: "admin",
+    password: "secret",
+    keyStorage: new MyPostgresKeyStorage(pool), // implements ApiKeyStorageAdapter
+  },
+});
+```
+
+The `ApiKeyStorageAdapter` interface is `{ insert, findByHash, list, touch, revoke, close? }`. Methods may be sync or async — `KeyStore` awaits them either way. **Breaking change**: all `KeyStore` methods (`create`, `verify`, `list`, `revoke`, `close`) are now async; callers must `await`. The `new KeyStore("path/to/keys.db")` string overload still works for backwards compatibility (constructs a `SqliteKeyStorage`). See `api-reference.md` §7.5 for the interface and `examples.md` §23 for a custom adapter skeleton.
 
 ## Tauri Sidecar (station-tauri)
 
@@ -394,5 +502,5 @@ Environment variables for the sidecar:
 
 ## Reference Documentation
 
-- `api-reference.md` - Complete API for all packages: types, interfaces, runner options
-- `examples.md` - Full working examples: ETL pipelines, CI workflows, monitoring, e-commerce, Tauri desktop
+- `api-reference.md` - Complete API for all packages: types, interfaces, runner options. Sections 9-11 cover dynamic broadcasts, schedules, and expressions; §7.5 covers the `ApiKeyStorageAdapter` interface.
+- `examples.md` - Full working examples: ETL pipelines, CI workflows, monitoring, e-commerce, Tauri desktop. Sections 20-23 cover dynamic broadcasts, schedules, expressions, and custom API key storage.

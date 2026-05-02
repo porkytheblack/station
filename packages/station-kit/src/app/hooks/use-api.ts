@@ -81,6 +81,51 @@ export interface BroadcastMeta {
   interval: string | null;
 }
 
+// ─── Dynamic broadcasts / schedules / expressions ───────────────────
+
+export type ScheduleKind = "signal" | "broadcast-static" | "broadcast-dynamic";
+
+export interface Schedule {
+  id: string;
+  kind: ScheduleKind;
+  target: string;
+  interval: string;
+  input?: unknown;
+  enabled: boolean;
+  nextRunAt: string;
+  lastRunAt?: string;
+  lastRunStatus?: string;
+  lastRunId?: string;
+  createdAt: string;
+  updatedAt: string;
+  createdBy?: string;
+}
+
+export interface DynamicNodeSpec {
+  name: string;
+  signalName: string;
+  dependsOn: string[];
+  input?: unknown;
+  when?: unknown;
+}
+
+export interface DynamicBroadcastSpec {
+  name: string;
+  version: number;
+  failurePolicy: "fail-fast" | "skip-downstream" | "continue";
+  timeout?: number;
+  nodes: DynamicNodeSpec[];
+  createdAt: string;
+  updatedAt: string;
+  createdBy?: string;
+  deletedAt?: string;
+}
+
+export interface DynamicValidationResult {
+  ok: boolean;
+  errors: Array<{ node: string; field?: string; message: string }>;
+}
+
 export function useApi() {
   return {
     // Health
@@ -128,6 +173,78 @@ export function useApi() {
     getBroadcastRunLogs: (id: string) => fetchApi<Array<{ runId: string; signalName: string; level: string; message: string; timestamp: string; nodeName: string }>>(`/broadcast-runs/${id}/logs`),
     cancelBroadcastRun: (id: string) => fetchApi<{ cancelled: boolean }>(`/broadcast-runs/${id}/cancel`, { method: "POST" }),
     rerunBroadcastRun: (id: string) => fetchApi<{ id: string; broadcastName: string; status: string }>(`/broadcast-runs/${id}/rerun`, { method: "POST" }),
+
+    // Dynamic broadcast definitions (v1)
+    getBroadcastDefinitions: () =>
+      fetchApi<DynamicBroadcastSpec[]>("/v1/broadcast-definitions"),
+    getBroadcastDefinition: (name: string) =>
+      fetchApi<DynamicBroadcastSpec>(`/v1/broadcast-definitions/${encodeURIComponent(name)}`),
+    getBroadcastDefinitionVersions: (name: string) =>
+      fetchApi<DynamicBroadcastSpec[]>(`/v1/broadcast-definitions/${encodeURIComponent(name)}/versions`),
+    saveBroadcastDefinition: (spec: Partial<DynamicBroadcastSpec>) =>
+      fetchApi<DynamicBroadcastSpec>("/v1/broadcast-definitions", {
+        method: "POST",
+        body: JSON.stringify(spec),
+      }),
+    validateBroadcastDefinition: (spec: Partial<DynamicBroadcastSpec>) =>
+      fetchApi<DynamicValidationResult>("/v1/broadcast-definitions/validate", {
+        method: "POST",
+        body: JSON.stringify(spec),
+      }),
+    deleteBroadcastDefinition: (name: string) =>
+      fetchApi<{ deleted: boolean }>(`/v1/broadcast-definitions/${encodeURIComponent(name)}`, {
+        method: "DELETE",
+      }),
+    triggerDynamicBroadcast: (broadcastName: string, input?: unknown) =>
+      fetchApi<{ id: string }>("/v1/trigger-dynamic-broadcast", {
+        method: "POST",
+        body: JSON.stringify({ broadcastName, input: input ?? {} }),
+      }),
+
+    // Schedules (v1)
+    getSchedules: (filter?: { kind?: ScheduleKind; enabled?: boolean }) => {
+      const q = new URLSearchParams();
+      if (filter?.kind) q.set("kind", filter.kind);
+      if (filter?.enabled !== undefined) q.set("enabled", String(filter.enabled));
+      const qs = q.toString();
+      return fetchApi<Schedule[]>(`/v1/schedules${qs ? `?${qs}` : ""}`);
+    },
+    getSchedule: (id: string) => fetchApi<Schedule>(`/v1/schedules/${id}`),
+    createSchedule: (input: { kind: ScheduleKind; target: string; interval: string; input?: unknown; enabled?: boolean }) =>
+      fetchApi<Schedule>("/v1/schedules", { method: "POST", body: JSON.stringify(input) }),
+    updateSchedule: (id: string, patch: Partial<{ interval: string; input: unknown; enabled: boolean; nextRunAt: string }>) =>
+      fetchApi<Schedule>(`/v1/schedules/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+    deleteSchedule: (id: string) =>
+      fetchApi<{ deleted: boolean }>(`/v1/schedules/${id}`, { method: "DELETE" }),
+    previewSchedule: (id: string, count = 5) =>
+      fetchApi<{ fires: string[] }>(`/v1/schedules/${id}/preview`, {
+        method: "POST",
+        body: JSON.stringify({ count }),
+      }),
+
+    // Expressions (v1)
+    evaluateExpression: (node: unknown, context?: { input?: unknown; upstream?: Record<string, unknown> }) =>
+      fetchApi<{ value: unknown }>("/v1/expressions/evaluate", {
+        method: "POST",
+        body: JSON.stringify({ node, context }),
+      }),
+    validateExpression: (
+      node: unknown,
+      schemaContext?: {
+        inputSchema?: unknown;
+        upstreamSchemas?: Record<string, unknown>;
+        expectedSchema?: unknown;
+      },
+    ) =>
+      fetchApi<{ ok: boolean; errors: Array<{ path: string; message: string }> }>(
+        "/v1/expressions/validate",
+        { method: "POST", body: JSON.stringify({ node, schemaContext }) },
+      ),
+    parseExpression: (source: string) =>
+      fetchApi<{ node: unknown }>("/v1/expressions/parse", {
+        method: "POST",
+        body: JSON.stringify({ source }),
+      }),
 
     // API Keys (v1 admin routes — session cookie provides admin scope)
     getApiKeys: () => fetchApi<Array<{ id: string; name: string; keyPrefix: string; scopes: string[]; createdAt: string; lastUsed: string | null; expiresAt: string | null; revoked: boolean }>>("/v1/keys"),

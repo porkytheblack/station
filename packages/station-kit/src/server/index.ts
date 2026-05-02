@@ -4,10 +4,15 @@ import { serve } from "@hono/node-server";
 import { resolve } from "node:path";
 import { existsSync } from "node:fs";
 import type { Server } from "node:http";
-import { SignalRunner, MemoryAdapter } from "station-signal";
+import { SignalRunner, MemoryAdapter, parseInterval } from "station-signal";
 import { BroadcastRunner, BroadcastMemoryAdapter } from "station-broadcast";
 import type { SignalQueueAdapter } from "station-signal";
 import type { BroadcastQueueAdapter } from "station-broadcast";
+import {
+  ScheduleReconciler,
+  type Schedule,
+  type ScheduleAdapter,
+} from "station-schedules";
 import type { StationConfig } from "../config/schema.js";
 import { ensureStationDir } from "../station-dir.js";
 import { WebSocketHub } from "./ws.js";
@@ -19,7 +24,7 @@ import { healthRoutes } from "./routes/health.js";
 import { signalRoutes } from "./routes/signals.js";
 import { runRoutes } from "./routes/runs.js";
 import { broadcastRoutes } from "./routes/broadcasts.js";
-import { KeyStore } from "./auth/keys.js";
+import { KeyStore, SqliteKeyStorage } from "./auth/keys.js";
 import { verifySessionToken, verifyCredentials, createSessionToken, type SessionConfig } from "./auth/session.js";
 import { authResolver } from "./middleware/auth.js";
 import { requireScope } from "./middleware/scope-guard.js";
@@ -32,9 +37,21 @@ import { v1TriggerRoutes } from "./routes/v1/trigger.js";
 import { v1KeyRoutes } from "./routes/v1/keys.js";
 import { v1AuthRoutes } from "./routes/v1/auth.js";
 import { v1EventRoutes } from "./routes/v1/events.js";
+import { v1DefinitionRoutes, v1DefinitionReadRoutes } from "./routes/v1/definitions.js";
+import { v1ScheduleRoutes, v1ScheduleReadRoutes } from "./routes/v1/schedules.js";
+import { v1ExpressionRoutes } from "./routes/v1/expressions.js";
 
-export { KeyStore } from "./auth/keys.js";
-export type { ApiKey } from "./auth/keys.js";
+export {
+  KeyStore,
+  SqliteKeyStorage,
+  MemoryKeyStorage,
+} from "./auth/keys.js";
+export type {
+  ApiKey,
+  ApiKeyPublic,
+  ApiKeyStorageAdapter,
+  SqliteKeyStorageOptions,
+} from "./auth/keys.js";
 
 export interface StationInstance {
   start(): Promise<void>;
@@ -62,7 +79,9 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
   let sessionConfig: SessionConfig | undefined;
 
   if (config.auth) {
-    keyStore = new KeyStore(resolve(dataDir, "station-keys.db"));
+    const storage = config.auth.keyStorage
+      ?? new SqliteKeyStorage({ dbPath: resolve(dataDir, "station-keys.db") });
+    keyStore = new KeyStore(storage);
     sessionConfig = {
       username: config.auth.username,
       password: config.auth.password,
@@ -94,8 +113,23 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
   // Create runners if enabled
   let signalRunner: SignalRunner | undefined;
   let broadcastRunner: BroadcastRunner | undefined;
+  const scheduleAdapter: ScheduleAdapter | undefined = config.scheduleAdapter;
 
   if (config.runRunners) {
+    // Build schedule reconcilers up front. Each reconciler handles only the
+    // kinds it's responsible for; the runner ticks it once per loop.
+    const signalScheduleReconciler = scheduleAdapter
+      ? new ScheduleReconciler({
+          adapter: scheduleAdapter,
+          kinds: ["signal"],
+          parseInterval,
+          triggerFn: (s: Schedule) => signalRunner!.triggerSignal(s.target, s.input ?? {}),
+          hasPendingOrRunning: (s: Schedule) =>
+            signalRunner!.hasPendingOrRunningForSignal(s.target),
+          onError: (err) => console.error("[station] Signal schedule reconciler:", err),
+        })
+      : undefined;
+
     signalRunner = new SignalRunner({
       signalsDir,
       adapter: signalAdapter,
@@ -104,15 +138,29 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
       maxAttempts: config.runner.maxAttempts,
       retryBackoffMs: config.runner.retryBackoffMs,
       subscribers: [stationSignalSub],
+      scheduleReconciler: signalScheduleReconciler,
     });
 
     if (broadcastsDir || broadcastAdapter) {
+      const broadcastScheduleReconciler = scheduleAdapter
+        ? new ScheduleReconciler({
+            adapter: scheduleAdapter,
+            kinds: ["broadcast-static", "broadcast-dynamic"],
+            parseInterval,
+            triggerFn: (s: Schedule) => broadcastRunner!.trigger(s.target, s.input ?? {}),
+            hasPendingOrRunning: (s: Schedule) =>
+              broadcastRunner!.hasPendingOrRunningForBroadcast(s.target),
+            onError: (err) => console.error("[station] Broadcast schedule reconciler:", err),
+          })
+        : undefined;
+
       broadcastRunner = new BroadcastRunner({
         signalRunner,
         broadcastsDir,
         adapter: broadcastAdapter ?? new BroadcastMemoryAdapter(),
         pollIntervalMs: config.broadcastRunner.pollIntervalMs,
         subscribers: [stationBroadcastSub],
+        scheduleReconciler: broadcastScheduleReconciler,
       });
     }
   }
@@ -204,6 +252,15 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
   readRoutes.route("/", v1RunRoutes({ signalRunner, signalAdapter, logBuffer, logStore }));
   readRoutes.route("/", v1BroadcastRoutes({ broadcastRunner, broadcastAdapter, broadcastSubscriber: stationBroadcastSub }));
   readRoutes.route("/", v1EventRoutes({ sseHub }));
+  readRoutes.route("/", v1ExpressionRoutes());
+  // Schedule GET + preview are read-scoped; mutating routes are mounted under admin below.
+  readRoutes.route("/", v1ScheduleReadRoutes({ scheduleAdapter }));
+  readRoutes.route("/", v1DefinitionReadRoutes({
+    broadcastRunner,
+    broadcastAdapter,
+    signalRunner,
+    signalSubscriber: stationSignalSub,
+  }));
   v1.route("/", readRoutes);
 
   // Trigger-scope routes
@@ -239,10 +296,17 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
   });
   v1.route("/", cancelRoutes);
 
-  // Admin-scope routes
+  // Admin-scope routes — destructive / mutating endpoints
   const adminRoutes = new Hono();
   adminRoutes.use("/*", requireScope("admin"));
   adminRoutes.route("/", v1KeyRoutes({ keyStore }));
+  adminRoutes.route("/", v1DefinitionRoutes({
+    broadcastRunner,
+    broadcastAdapter,
+    signalRunner,
+    signalSubscriber: stationSignalSub,
+  }));
+  adminRoutes.route("/", v1ScheduleRoutes({ scheduleAdapter }));
   v1.route("/", adminRoutes);
 
   app.route("/api/v1", v1);
@@ -338,7 +402,7 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
       wsHub.close();
       sseHub.close();
       logStore.close();
-      keyStore?.close();
+      await keyStore?.close();
       if (httpServer) {
         httpServer.close();
       }

@@ -77,6 +77,26 @@ function IconSettings() {
   );
 }
 
+function IconSchedules() {
+  /* Clock face — recurring schedule */
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" aria-hidden="true">
+      <circle cx="7" cy="7" r="5.5" />
+      <path d="M7 4v3l2 1.5" />
+    </svg>
+  );
+}
+
+function IconPlayground() {
+  /* Beaker — experiment / playground */
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M5 1h4M5.5 1v4L2 11.5a1.5 1.5 0 0 0 1.3 2.3h7.4a1.5 1.5 0 0 0 1.3-2.3L8.5 5V1" />
+      <path d="M3.5 8.5h7" />
+    </svg>
+  );
+}
+
 function NavLink({
   href,
   label,
@@ -135,6 +155,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
           <NavLink href="/" label="Overview" section="overview" icon={<IconOverview />} />
           <NavLink href="/signals" label="Signals" section="signals" icon={<IconSignals />} />
           <NavLink href="/broadcasts" label="Broadcasts" section="broadcasts" icon={<IconBroadcasts />} />
+          <NavLink href="/schedules" label="Schedules" section="schedules" icon={<IconSchedules />} />
+          <div className="station-sidebar-nav-label" style={{ marginTop: "1rem" }}>Tools</div>
+          <NavLink href="/playground/expression" label="Expressions" section="playground" icon={<IconPlayground />} />
           <div className="station-sidebar-nav-label" style={{ marginTop: "1rem" }}>Admin</div>
           <NavLink href="/settings" label="Settings" section="settings" icon={<IconSettings />} />
         </nav>

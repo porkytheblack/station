@@ -32,7 +32,8 @@
   "scripts": {
     "build": "tsc && next build && cp -r .next/static .next/standalone/packages/station-kit/.next/static",
     "dev": "tsx src/cli.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test test/**/*.test.ts"
   },
   "peerDependencies": {
     "station-broadcast": "workspace:*",
@@ -46,6 +47,8 @@
     "next": "^15",
     "react": "^19",
     "react-dom": "^19",
+    "station-expressions": "workspace:*",
+    "station-schedules": "workspace:*",
     "tsx": "^4.21.0",
     "ws": "^8"
   },
@@ -55,6 +58,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/ws": "^8",
+    "station-adapter-sqlite": "workspace:*",
     "station-broadcast": "workspace:*",
     "station-signal": "workspace:*",
     "typescript": "^5.9.3"

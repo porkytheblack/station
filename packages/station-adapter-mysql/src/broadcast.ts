@@ -8,9 +8,10 @@ import type {
   BroadcastRunStatus,
   BroadcastNodeRun,
   BroadcastNodeRunPatch,
+  DynamicBroadcastSpec,
 } from "station-broadcast";
 
-import { validateTableName, dateToStr, createColumnMapper, rowToObject } from "./shared.js";
+import { validateTableName, dateToStr, createColumnMapper, rowToObject, runIdempotentDdl } from "./shared.js";
 
 // ── Column mappings ────────────────────────────────────────────────────
 
@@ -21,6 +22,7 @@ const { toColumn: toBroadcastRunCol, toField: toBroadcastRunField } = createColu
   startedAt: "started_at",
   completedAt: "completed_at",
   createdAt: "created_at",
+  definitionSnapshot: "definition_snapshot",
 });
 const BROADCAST_RUN_DATE_FIELDS = new Set(["nextRunAt", "startedAt", "completedAt", "createdAt"]);
 
@@ -59,12 +61,20 @@ export class BroadcastMysqlAdapter implements BroadcastQueueAdapter {
   private pool: Pool;
   private runsTable: string;
   private nodesTable: string;
+  private definitionsTable: string;
   private ownsPool: boolean;
 
-  private constructor(pool: Pool, runsTable: string, nodesTable: string, ownsPool: boolean) {
+  private constructor(
+    pool: Pool,
+    runsTable: string,
+    nodesTable: string,
+    definitionsTable: string,
+    ownsPool: boolean,
+  ) {
     this.pool = pool;
     this.runsTable = runsTable;
     this.nodesTable = nodesTable;
+    this.definitionsTable = definitionsTable;
     this.ownsPool = ownsPool;
   }
 
@@ -75,6 +85,7 @@ export class BroadcastMysqlAdapter implements BroadcastQueueAdapter {
   static async create(options: BroadcastMysqlAdapterOptions = {}): Promise<BroadcastMysqlAdapter> {
     const runsTable = validateTableName(options.tableName ?? "broadcast_runs");
     const nodesTable = validateTableName(`${runsTable}_nodes`);
+    const definitionsTable = validateTableName(`${runsTable}_definitions`);
 
     let pool: Pool;
     let ownsPool: boolean;
@@ -96,30 +107,40 @@ export class BroadcastMysqlAdapter implements BroadcastQueueAdapter {
     // Create broadcast_runs table
     await pool.execute(`
       CREATE TABLE IF NOT EXISTS ${runsTable} (
-        id              VARCHAR(36) PRIMARY KEY,
-        broadcast_name  VARCHAR(255) NOT NULL,
-        input           TEXT NOT NULL,
-        status          VARCHAR(50) NOT NULL DEFAULT 'pending',
-        failure_policy  VARCHAR(50) NOT NULL DEFAULT 'fail-fast',
-        timeout         INT,
-        \`interval\`    VARCHAR(255),
-        next_run_at     DATETIME(3),
-        started_at      DATETIME(3),
-        completed_at    DATETIME(3),
-        created_at      DATETIME(3) NOT NULL,
-        error           TEXT
+        id                  VARCHAR(36) PRIMARY KEY,
+        broadcast_name      VARCHAR(255) NOT NULL,
+        input               TEXT NOT NULL,
+        status              VARCHAR(50) NOT NULL DEFAULT 'pending',
+        failure_policy      VARCHAR(50) NOT NULL DEFAULT 'fail-fast',
+        timeout             INT,
+        \`interval\`        VARCHAR(255),
+        next_run_at         DATETIME(3),
+        started_at          DATETIME(3),
+        completed_at        DATETIME(3),
+        created_at          DATETIME(3) NOT NULL,
+        error               TEXT,
+        definition_snapshot TEXT
       )
     `);
 
-    await pool.execute(`
-      CREATE INDEX IF NOT EXISTS idx_${runsTable}_status
-        ON ${runsTable} (status, next_run_at)
-    `);
+    // Idempotent migration for pre-existing tables — only swallows the
+    // duplicate-column error, real failures still surface.
+    await runIdempotentDdl(
+      (sql) => pool.execute(sql),
+      `ALTER TABLE ${runsTable} ADD COLUMN definition_snapshot TEXT`,
+    );
 
-    await pool.execute(`
-      CREATE INDEX IF NOT EXISTS idx_${runsTable}_name
-        ON ${runsTable} (broadcast_name)
-    `);
+    // MySQL doesn't accept CREATE INDEX IF NOT EXISTS on most versions; the
+    // helper turns the duplicate-name error into a no-op.
+    await runIdempotentDdl(
+      (sql) => pool.execute(sql),
+      `CREATE INDEX idx_${runsTable}_status ON ${runsTable} (status, next_run_at)`,
+    );
+
+    await runIdempotentDdl(
+      (sql) => pool.execute(sql),
+      `CREATE INDEX idx_${runsTable}_name ON ${runsTable} (broadcast_name)`,
+    );
 
     // Create broadcast_runs_nodes table
     await pool.execute(`
@@ -141,12 +162,28 @@ export class BroadcastMysqlAdapter implements BroadcastQueueAdapter {
       )
     `);
 
+    await runIdempotentDdl(
+      (sql) => pool.execute(sql),
+      `CREATE INDEX idx_${nodesTable}_run_id ON ${nodesTable} (broadcast_run_id)`,
+    );
+
+    // Dynamic broadcast definitions
     await pool.execute(`
-      CREATE INDEX IF NOT EXISTS idx_${nodesTable}_run_id
-        ON ${nodesTable} (broadcast_run_id)
+      CREATE TABLE IF NOT EXISTS ${definitionsTable} (
+        name            VARCHAR(255) NOT NULL,
+        version         INT NOT NULL,
+        spec            TEXT NOT NULL,
+        failure_policy  VARCHAR(50) NOT NULL,
+        timeout         INT,
+        created_at      DATETIME(3) NOT NULL,
+        updated_at      DATETIME(3) NOT NULL,
+        created_by      VARCHAR(255),
+        deleted_at      DATETIME(3),
+        PRIMARY KEY (name, version)
+      )
     `);
 
-    return new BroadcastMysqlAdapter(pool, runsTable, nodesTable, ownsPool);
+    return new BroadcastMysqlAdapter(pool, runsTable, nodesTable, definitionsTable, ownsPool);
   }
 
   // ── Broadcast run methods ──────────────────────────────────────────────
@@ -155,8 +192,8 @@ export class BroadcastMysqlAdapter implements BroadcastQueueAdapter {
     await this.pool.execute(
       `INSERT INTO ${this.runsTable}
         (id, broadcast_name, input, status, failure_policy, timeout, \`interval\`,
-         next_run_at, started_at, completed_at, created_at, error)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         next_run_at, started_at, completed_at, created_at, error, definition_snapshot)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         run.id,
         run.broadcastName,
@@ -170,6 +207,7 @@ export class BroadcastMysqlAdapter implements BroadcastQueueAdapter {
         dateToStr(run.completedAt),
         dateToStr(run.createdAt),
         run.error ?? null,
+        run.definitionSnapshot ?? null,
       ],
     );
   }
@@ -186,7 +224,7 @@ export class BroadcastMysqlAdapter implements BroadcastQueueAdapter {
   /** Allowed BroadcastRunPatch keys — whitelist to prevent injection. */
   private static readonly BROADCAST_RUN_PATCH_KEYS = new Set([
     "input", "status", "failurePolicy", "timeout", "interval", "nextRunAt",
-    "startedAt", "completedAt", "error",
+    "startedAt", "completedAt", "error", "definitionSnapshot",
   ]);
 
   async updateBroadcastRun(id: string, patch: BroadcastRunPatch): Promise<void> {
@@ -337,6 +375,123 @@ export class BroadcastMysqlAdapter implements BroadcastQueueAdapter {
     return rows.map((row) => rowToNodeRun(row as Record<string, unknown>));
   }
 
+  // ── Dynamic broadcast definitions ──────────────────────────────────────
+
+  async saveDefinition(spec: DynamicBroadcastSpec): Promise<DynamicBroadcastSpec> {
+    // Atomic compute + insert via an `INSERT … SELECT` against a one-row
+    // aggregate. `MAX(version)` always returns exactly one row (NULL on no
+    // matches → 0 via COALESCE). On the rare race where two concurrent
+    // inserts compute the same version, the unique PK fires and we retry.
+    const MAX_ATTEMPTS = 5;
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      const now = new Date();
+      const draft: DynamicBroadcastSpec = {
+        ...spec,
+        version: 0,
+        createdAt: spec.createdAt ?? now,
+        updatedAt: now,
+        deletedAt: undefined,
+      };
+      try {
+        const [insertResult] = await this.pool.execute<ResultSetHeader>(
+          `INSERT INTO ${this.definitionsTable}
+            (name, version, spec, failure_policy, timeout, created_at, updated_at, created_by, deleted_at)
+           SELECT ?, COALESCE(MAX(version), 0) + 1, ?, ?, ?, ?, ?, ?, NULL
+           FROM ${this.definitionsTable} WHERE name = ?`,
+          [
+            draft.name,
+            JSON.stringify(draft),
+            draft.failurePolicy,
+            draft.timeout ?? null,
+            dateToStr(draft.createdAt),
+            dateToStr(draft.updatedAt),
+            draft.createdBy ?? null,
+            draft.name,
+          ],
+        );
+        if (insertResult.affectedRows !== 1) {
+          throw new Error("INSERT … SELECT inserted no rows");
+        }
+        // Recover the assigned version. We can't use RETURNING (MySQL
+        // doesn't support it), so SELECT the just-inserted row.
+        const [rows] = await this.pool.execute<RowDataPacket[]>(
+          `SELECT MAX(version) AS v FROM ${this.definitionsTable} WHERE name = ?`,
+          [draft.name],
+        );
+        const version = (rows[0] as { v: number })?.v;
+        const final: DynamicBroadcastSpec = { ...draft, version };
+        await this.pool.execute(
+          `UPDATE ${this.definitionsTable} SET spec = ? WHERE name = ? AND version = ?`,
+          [JSON.stringify(final), final.name, final.version],
+        );
+        return final;
+      } catch (err) {
+        lastErr = err;
+        const code = (err as { code?: string; errno?: number })?.code;
+        const errno = (err as { errno?: number })?.errno;
+        // ER_DUP_ENTRY = 1062 — primary key collision; retry.
+        if (code !== "ER_DUP_ENTRY" && errno !== 1062) throw err;
+      }
+    }
+    throw lastErr;
+  }
+
+  async getDefinition(name: string, version?: number): Promise<DynamicBroadcastSpec | null> {
+    let rows: RowDataPacket[];
+    if (version !== undefined) {
+      [rows] = await this.pool.execute<RowDataPacket[]>(
+        `SELECT spec FROM ${this.definitionsTable} WHERE name = ? AND version = ?`,
+        [name, version],
+      );
+    } else {
+      [rows] = await this.pool.execute<RowDataPacket[]>(
+        `SELECT spec FROM ${this.definitionsTable} WHERE name = ? ORDER BY version DESC LIMIT 1`,
+        [name],
+      );
+    }
+    if (rows.length === 0) return null;
+    return deserializeSpec((rows[0] as { spec: string }).spec);
+  }
+
+  async listDefinitions(): Promise<DynamicBroadcastSpec[]> {
+    const [rows] = await this.pool.execute<RowDataPacket[]>(`
+      SELECT spec FROM ${this.definitionsTable} d1
+      WHERE version = (
+        SELECT MAX(version) FROM ${this.definitionsTable} d2 WHERE d2.name = d1.name
+      )
+      AND deleted_at IS NULL
+      ORDER BY name ASC
+    `);
+    return rows.map((r) => deserializeSpec((r as { spec: string }).spec));
+  }
+
+  async listDefinitionVersions(name: string): Promise<DynamicBroadcastSpec[]> {
+    const [rows] = await this.pool.execute<RowDataPacket[]>(
+      `SELECT spec FROM ${this.definitionsTable} WHERE name = ? ORDER BY version DESC`,
+      [name],
+    );
+    return rows.map((r) => deserializeSpec((r as { spec: string }).spec));
+  }
+
+  async deleteDefinition(name: string): Promise<boolean> {
+    const [rows] = await this.pool.execute<RowDataPacket[]>(
+      `SELECT version, spec FROM ${this.definitionsTable}
+       WHERE name = ? AND deleted_at IS NULL
+       ORDER BY version DESC LIMIT 1`,
+      [name],
+    );
+    if (rows.length === 0) return false;
+    const { version, spec } = rows[0] as { version: number; spec: string };
+    const parsed = deserializeSpec(spec);
+    parsed.deletedAt = new Date();
+    await this.pool.execute(
+      `UPDATE ${this.definitionsTable} SET deleted_at = ?, spec = ? WHERE name = ? AND version = ?`,
+      [dateToStr(parsed.deletedAt), JSON.stringify(parsed), name, version],
+    );
+    return true;
+  }
+
   // ── Utility ────────────────────────────────────────────────────────────
 
   generateId(): string {
@@ -357,4 +512,12 @@ export class BroadcastMysqlAdapter implements BroadcastQueueAdapter {
       await this.pool.end();
     }
   }
+}
+
+function deserializeSpec(json: string): DynamicBroadcastSpec {
+  const obj = JSON.parse(json) as DynamicBroadcastSpec;
+  if (obj.createdAt) obj.createdAt = new Date(obj.createdAt);
+  if (obj.updatedAt) obj.updatedAt = new Date(obj.updatedAt);
+  if (obj.deletedAt) obj.deletedAt = new Date(obj.deletedAt);
+  return obj;
 }

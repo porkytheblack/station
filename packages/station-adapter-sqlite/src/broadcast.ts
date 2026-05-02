@@ -7,6 +7,7 @@ import type {
   BroadcastRunStatus,
   BroadcastNodeRun,
   BroadcastNodeRunPatch,
+  DynamicBroadcastSpec,
 } from "station-broadcast";
 
 import { validateTableName, dateToStr, createColumnMapper, rowToObject } from "./shared.js";
@@ -18,6 +19,7 @@ const { toColumn: toBroadcastRunCol, toField: toBroadcastRunField } = createColu
   startedAt: "started_at",
   completedAt: "completed_at",
   createdAt: "created_at",
+  definitionSnapshot: "definition_snapshot",
 });
 const BROADCAST_RUN_DATE_FIELDS = new Set(["nextRunAt", "startedAt", "completedAt", "createdAt"]);
 
@@ -48,11 +50,13 @@ export class BroadcastSqliteAdapter implements BroadcastQueueAdapter {
   private db: Database.Database;
   private runsTable: string;
   private nodesTable: string;
+  private definitionsTable: string;
 
   constructor(options: BroadcastSqliteAdapterOptions = {}) {
     const dbPath = options.dbPath ?? "station.db";
     this.runsTable = validateTableName(options.tableName ?? "broadcast_runs");
     this.nodesTable = validateTableName(`${this.runsTable}_nodes`);
+    this.definitionsTable = validateTableName(`${this.runsTable}_definitions`);
     this.db = new Database(dbPath);
 
     this.db.pragma("journal_mode = WAL");
@@ -60,20 +64,29 @@ export class BroadcastSqliteAdapter implements BroadcastQueueAdapter {
 
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS ${this.runsTable} (
-        id              TEXT PRIMARY KEY,
-        broadcast_name  TEXT NOT NULL,
-        input           TEXT NOT NULL,
-        status          TEXT NOT NULL DEFAULT 'pending',
-        failure_policy  TEXT NOT NULL DEFAULT 'fail-fast',
-        timeout         INTEGER,
-        interval        TEXT,
-        next_run_at     TEXT,
-        started_at      TEXT,
-        completed_at    TEXT,
-        created_at      TEXT NOT NULL,
-        error           TEXT
+        id                  TEXT PRIMARY KEY,
+        broadcast_name      TEXT NOT NULL,
+        input               TEXT NOT NULL,
+        status              TEXT NOT NULL DEFAULT 'pending',
+        failure_policy      TEXT NOT NULL DEFAULT 'fail-fast',
+        timeout             INTEGER,
+        interval            TEXT,
+        next_run_at         TEXT,
+        started_at          TEXT,
+        completed_at        TEXT,
+        created_at          TEXT NOT NULL,
+        error               TEXT,
+        definition_snapshot TEXT
       )
     `);
+
+    // Idempotent migration: add column if it's missing (DB existed before this version).
+    const existingCols = this.db
+      .prepare(`PRAGMA table_info(${this.runsTable})`)
+      .all() as Array<{ name: string }>;
+    if (!existingCols.some((c) => c.name === "definition_snapshot")) {
+      this.db.exec(`ALTER TABLE ${this.runsTable} ADD COLUMN definition_snapshot TEXT`);
+    }
 
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_${this.runsTable}_status
@@ -106,16 +119,33 @@ export class BroadcastSqliteAdapter implements BroadcastQueueAdapter {
       CREATE INDEX IF NOT EXISTS idx_${this.nodesTable}_run_id
         ON ${this.nodesTable} (broadcast_run_id)
     `);
+
+    // Dynamic broadcast definitions — name + version is the identity, full
+    // history is retained so deleted/older versions remain inspectable.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS ${this.definitionsTable} (
+        name            TEXT NOT NULL,
+        version         INTEGER NOT NULL,
+        spec            TEXT NOT NULL,
+        failure_policy  TEXT NOT NULL,
+        timeout         INTEGER,
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL,
+        created_by      TEXT,
+        deleted_at      TEXT,
+        PRIMARY KEY (name, version)
+      )
+    `);
   }
 
   async addBroadcastRun(run: BroadcastRun): Promise<void> {
     this.db.prepare(`
       INSERT INTO ${this.runsTable}
         (id, broadcast_name, input, status, failure_policy, timeout, interval,
-         next_run_at, started_at, completed_at, created_at, error)
+         next_run_at, started_at, completed_at, created_at, error, definition_snapshot)
       VALUES
         (@id, @broadcast_name, @input, @status, @failure_policy, @timeout, @interval,
-         @next_run_at, @started_at, @completed_at, @created_at, @error)
+         @next_run_at, @started_at, @completed_at, @created_at, @error, @definition_snapshot)
     `).run({
       id: run.id,
       broadcast_name: run.broadcastName,
@@ -129,6 +159,7 @@ export class BroadcastSqliteAdapter implements BroadcastQueueAdapter {
       completed_at: dateToStr(run.completedAt),
       created_at: dateToStr(run.createdAt),
       error: run.error ?? null,
+      definition_snapshot: run.definitionSnapshot ?? null,
     });
   }
 
@@ -139,7 +170,7 @@ export class BroadcastSqliteAdapter implements BroadcastQueueAdapter {
 
   private static readonly BROADCAST_RUN_PATCH_KEYS = new Set([
     "input", "status", "failurePolicy", "timeout", "interval", "nextRunAt",
-    "startedAt", "completedAt", "error",
+    "startedAt", "completedAt", "error", "definitionSnapshot",
   ]);
 
   async updateBroadcastRun(id: string, patch: BroadcastRunPatch): Promise<void> {
@@ -260,6 +291,102 @@ export class BroadcastSqliteAdapter implements BroadcastQueueAdapter {
     return rows.map(rowToNodeRun);
   }
 
+  // ─── Dynamic broadcast definitions ───────────────────────────────
+
+  async saveDefinition(spec: DynamicBroadcastSpec): Promise<DynamicBroadcastSpec> {
+    // better-sqlite3 transactions serialize writers, so the MAX(version) read
+    // + INSERT can't be interleaved with another save — no PK collision is
+    // possible on the same DB. The transaction wrapper handles SAVEPOINTs
+    // for nested calls.
+    const txn = this.db.transaction((spec: DynamicBroadcastSpec): DynamicBroadcastSpec => {
+      const row = this.db
+        .prepare(`SELECT MAX(version) AS v FROM ${this.definitionsTable} WHERE name = ?`)
+        .get(spec.name) as { v: number | null } | undefined;
+      const nextVersion = (row?.v ?? 0) + 1;
+      const now = new Date();
+      const next: DynamicBroadcastSpec = {
+        ...spec,
+        version: nextVersion,
+        createdAt: spec.createdAt ?? now,
+        updatedAt: now,
+        deletedAt: undefined,
+      };
+      this.db
+        .prepare(`
+          INSERT INTO ${this.definitionsTable}
+            (name, version, spec, failure_policy, timeout, created_at, updated_at, created_by, deleted_at)
+          VALUES
+            (@name, @version, @spec, @failure_policy, @timeout, @created_at, @updated_at, @created_by, NULL)
+        `)
+        .run({
+          name: next.name,
+          version: next.version,
+          spec: JSON.stringify(next),
+          failure_policy: next.failurePolicy,
+          timeout: next.timeout ?? null,
+          created_at: dateToStr(next.createdAt),
+          updated_at: dateToStr(next.updatedAt),
+          created_by: next.createdBy ?? null,
+        });
+      return next;
+    });
+    return txn(spec);
+  }
+
+  async getDefinition(name: string, version?: number): Promise<DynamicBroadcastSpec | null> {
+    let row: { spec: string } | undefined;
+    if (version !== undefined) {
+      row = this.db
+        .prepare(`SELECT spec FROM ${this.definitionsTable} WHERE name = ? AND version = ?`)
+        .get(name, version) as { spec: string } | undefined;
+    } else {
+      row = this.db
+        .prepare(`SELECT spec FROM ${this.definitionsTable} WHERE name = ? ORDER BY version DESC LIMIT 1`)
+        .get(name) as { spec: string } | undefined;
+    }
+    return row ? deserializeSpec(row.spec) : null;
+  }
+
+  async listDefinitions(): Promise<DynamicBroadcastSpec[]> {
+    const rows = this.db
+      .prepare(`
+        SELECT spec FROM ${this.definitionsTable} d1
+        WHERE version = (
+          SELECT MAX(version) FROM ${this.definitionsTable} d2 WHERE d2.name = d1.name
+        )
+        AND deleted_at IS NULL
+        ORDER BY name ASC
+      `)
+      .all() as Array<{ spec: string }>;
+    return rows.map((r) => deserializeSpec(r.spec));
+  }
+
+  async listDefinitionVersions(name: string): Promise<DynamicBroadcastSpec[]> {
+    const rows = this.db
+      .prepare(`SELECT spec FROM ${this.definitionsTable} WHERE name = ? ORDER BY version DESC`)
+      .all(name) as Array<{ spec: string }>;
+    return rows.map((r) => deserializeSpec(r.spec));
+  }
+
+  async deleteDefinition(name: string): Promise<boolean> {
+    const row = this.db
+      .prepare(`SELECT MAX(version) AS v FROM ${this.definitionsTable} WHERE name = ? AND deleted_at IS NULL`)
+      .get(name) as { v: number | null } | undefined;
+    if (!row?.v) return false;
+    const now = new Date().toISOString();
+    // Update the spec JSON with the deletion timestamp so consumers see it.
+    const existing = this.db
+      .prepare(`SELECT spec FROM ${this.definitionsTable} WHERE name = ? AND version = ?`)
+      .get(name, row.v) as { spec: string } | undefined;
+    if (!existing) return false;
+    const spec = deserializeSpec(existing.spec);
+    spec.deletedAt = new Date(now);
+    this.db
+      .prepare(`UPDATE ${this.definitionsTable} SET deleted_at = ?, spec = ? WHERE name = ? AND version = ?`)
+      .run(now, JSON.stringify(spec), name, row.v);
+    return true;
+  }
+
   generateId(): string {
     return randomUUID();
   }
@@ -276,4 +403,13 @@ export class BroadcastSqliteAdapter implements BroadcastQueueAdapter {
   async close(): Promise<void> {
     this.db.close();
   }
+}
+
+function deserializeSpec(json: string): DynamicBroadcastSpec {
+  const obj = JSON.parse(json) as DynamicBroadcastSpec;
+  // Revive Date fields
+  if (obj.createdAt) obj.createdAt = new Date(obj.createdAt);
+  if (obj.updatedAt) obj.updatedAt = new Date(obj.updatedAt);
+  if (obj.deletedAt) obj.deletedAt = new Date(obj.deletedAt);
+  return obj;
 }

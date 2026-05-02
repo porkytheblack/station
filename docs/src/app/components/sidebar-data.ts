@@ -5,6 +5,8 @@ export const sections = [
       { href: "/docs/getting-started", label: "Getting started" },
       { href: "/docs/dashboard", label: "Dashboard" },
       { href: "/docs/remote-triggers", label: "Remote triggers" },
+      { href: "/docs/dynamic-broadcasts", label: "Dynamic broadcasts" },
+      { href: "/docs/schedules", label: "Schedules" },
       { href: "/docs/agent-skill", label: "Agent skill" },
       { href: "/docs/tauri-desktop", label: "Tauri desktop" },
     ],
@@ -14,6 +16,7 @@ export const sections = [
     links: [
       { href: "/docs/signals", label: "Signals" },
       { href: "/docs/broadcasts", label: "Broadcasts" },
+      { href: "/docs/expressions", label: "Expressions" },
       { href: "/docs/adapters", label: "Adapters" },
       { href: "/docs/station", label: "Station Kit" },
     ],

@@ -7,6 +7,7 @@ import type {
   BroadcastRunStatus,
   BroadcastNodeRun,
   BroadcastNodeRunPatch,
+  DynamicBroadcastSpec,
 } from "station-broadcast";
 
 import {
@@ -29,6 +30,10 @@ import {
   BROADCAST_RUN_DATE_FIELDS,
   BROADCAST_RUN_NUMBER_FIELDS,
   NODE_RUN_DATE_FIELDS,
+  broadcastDefinitionKey,
+  broadcastDefinitionVersionsKey,
+  broadcastDefinitionNamesKey,
+  broadcastDefinitionCounterKey,
 } from "./shared.js";
 
 export interface BroadcastRedisAdapterOptions {
@@ -295,6 +300,115 @@ export class BroadcastRedisAdapter implements BroadcastQueueAdapter {
   // Utility
   // ---------------------------------------------------------------------------
 
+  // ---------------------------------------------------------------------------
+  // Dynamic broadcast definitions
+  // ---------------------------------------------------------------------------
+
+  async saveDefinition(spec: DynamicBroadcastSpec): Promise<DynamicBroadcastSpec> {
+    const versionsKey = broadcastDefinitionVersionsKey(this.prefix, spec.name);
+    const namesKey = broadcastDefinitionNamesKey(this.prefix);
+    const deletedKey = this.deletedFlagKey();
+    const counterKey = broadcastDefinitionCounterKey(this.prefix, spec.name);
+
+    // Atomic version bump. The Lua script seeds the counter from the existing
+    // zset on first call (so an upgrade from a pre-counter installation
+    // doesn't reuse old versions), then INCRs. Concurrent callers always
+    // observe distinct values.
+    const nextVersion = (await this.redis.eval(
+      BUMP_VERSION_LUA,
+      2,
+      counterKey,
+      versionsKey,
+    )) as number;
+
+    const now = new Date();
+    const next: DynamicBroadcastSpec = {
+      ...spec,
+      version: nextVersion,
+      createdAt: spec.createdAt ?? now,
+      updatedAt: now,
+      deletedAt: undefined,
+    };
+    const pipeline = this.redis.multi();
+    pipeline.set(broadcastDefinitionKey(this.prefix, spec.name, nextVersion), JSON.stringify(next));
+    pipeline.zadd(versionsKey, String(nextVersion), String(nextVersion));
+    pipeline.sadd(namesKey, spec.name);
+    pipeline.hdel(deletedKey, spec.name);
+    await pipeline.exec();
+    return next;
+  }
+
+  async getDefinition(name: string, version?: number): Promise<DynamicBroadcastSpec | null> {
+    if (version !== undefined) {
+      const json = await this.redis.get(broadcastDefinitionKey(this.prefix, name, version));
+      return json ? deserializeSpec(json) : null;
+    }
+    const top = await this.redis.zrevrange(broadcastDefinitionVersionsKey(this.prefix, name), 0, 0);
+    if (top.length === 0) return null;
+    const json = await this.redis.get(broadcastDefinitionKey(this.prefix, name, Number(top[0])));
+    return json ? deserializeSpec(json) : null;
+  }
+
+  async listDefinitions(): Promise<DynamicBroadcastSpec[]> {
+    const names = await this.redis.smembers(broadcastDefinitionNamesKey(this.prefix));
+    if (names.length === 0) return [];
+    const deletedFlags = await this.redis.hmget(this.deletedFlagKey(), ...names);
+    const out: DynamicBroadcastSpec[] = [];
+    for (let i = 0; i < names.length; i++) {
+      if (deletedFlags[i] === "1") continue;
+      const latest = await this.getDefinition(names[i]);
+      if (latest) out.push(latest);
+    }
+    out.sort((a, b) => a.name.localeCompare(b.name));
+    return out;
+  }
+
+  async listDefinitionVersions(name: string): Promise<DynamicBroadcastSpec[]> {
+    const versions = await this.redis.zrevrange(
+      broadcastDefinitionVersionsKey(this.prefix, name),
+      0,
+      -1,
+    );
+    if (versions.length === 0) return [];
+    const pipeline = this.redis.pipeline();
+    for (const v of versions) {
+      pipeline.get(broadcastDefinitionKey(this.prefix, name, Number(v)));
+    }
+    const results = await pipeline.exec();
+    if (!results) return [];
+    const specs: DynamicBroadcastSpec[] = [];
+    for (const [err, json] of results) {
+      if (err || typeof json !== "string") continue;
+      specs.push(deserializeSpec(json));
+    }
+    return specs;
+  }
+
+  async deleteDefinition(name: string): Promise<boolean> {
+    const top = await this.redis.zrevrange(broadcastDefinitionVersionsKey(this.prefix, name), 0, 0);
+    if (top.length === 0) return false;
+    const isDeleted = await this.redis.hget(this.deletedFlagKey(), name);
+    if (isDeleted === "1") return false;
+    // Update the latest version's spec with deletedAt for inspection,
+    // then mark the name as deleted so listDefinitions filters it out.
+    const version = Number(top[0]);
+    const latestKey = broadcastDefinitionKey(this.prefix, name, version);
+    const json = await this.redis.get(latestKey);
+    if (!json) return false;
+    const spec = deserializeSpec(json);
+    spec.deletedAt = new Date();
+    const pipeline = this.redis.multi();
+    pipeline.set(latestKey, JSON.stringify(spec));
+    pipeline.hset(this.deletedFlagKey(), name, "1");
+    await pipeline.exec();
+    return true;
+  }
+
+  /** Single hash storing soft-delete flags by definition name. */
+  private deletedFlagKey(): string {
+    return `${this.prefix}:broadcast-defs:deleted`;
+  }
+
   generateId(): string {
     return randomUUID();
   }
@@ -378,3 +492,25 @@ export class BroadcastRedisAdapter implements BroadcastQueueAdapter {
     await pipeline.exec();
   }
 }
+
+function deserializeSpec(json: string): DynamicBroadcastSpec {
+  const obj = JSON.parse(json) as DynamicBroadcastSpec;
+  if (obj.createdAt) obj.createdAt = new Date(obj.createdAt);
+  if (obj.updatedAt) obj.updatedAt = new Date(obj.updatedAt);
+  if (obj.deletedAt) obj.deletedAt = new Date(obj.deletedAt);
+  return obj;
+}
+
+const BUMP_VERSION_LUA = `
+local counterKey = KEYS[1]
+local versionsKey = KEYS[2]
+local exists = redis.call('EXISTS', counterKey)
+if exists == 0 then
+  local top = redis.call('ZREVRANGE', versionsKey, 0, 0, 'WITHSCORES')
+  local seed = 0
+  if #top == 2 then seed = tonumber(top[2]) end
+  redis.call('SET', counterKey, seed)
+end
+return redis.call('INCR', counterKey)
+`;
+

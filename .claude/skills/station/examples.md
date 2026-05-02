@@ -1374,6 +1374,541 @@ The API key is auto-provisioned on first run and saved to `{STATION_DATA_DIR}/.s
 
 ---
 
+## 20. Dynamic Broadcasts (runtime-editable)
+
+A dynamic broadcast is a `DynamicBroadcastSpec` persisted via the v1 API. The `input` and `when` fields are `ExprNode`s — see §22 for the expression language.
+
+### 20.1 Create a dynamic broadcast (curl)
+
+Assumes signals `score-order` and `notify-vip` are already loaded.
+
+```sh
+curl -X POST http://localhost:4400/api/v1/broadcast-definitions \
+  -H "Authorization: Bearer $STATION_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "high-value-order",
+    "failurePolicy": "skip-downstream",
+    "timeout": 60000,
+    "nodes": [
+      {
+        "name": "score",
+        "signalName": "score-order",
+        "dependsOn": []
+      },
+      {
+        "name": "notify",
+        "signalName": "notify-vip",
+        "dependsOn": ["score"],
+        "when": {
+          "kind": "op",
+          "op": ">",
+          "args": [
+            { "kind": "ref", "path": ["score", "score"] },
+            { "kind": "lit", "value": 0.8 }
+          ]
+        },
+        "input": {
+          "kind": "obj",
+          "entries": {
+            "orderId": { "kind": "ref", "path": ["input", "orderId"] },
+            "score":   { "kind": "ref", "path": ["score", "score"] }
+          }
+        }
+      }
+    ]
+  }'
+```
+
+Response (201):
+
+```json
+{
+  "data": {
+    "name": "high-value-order",
+    "version": 1,
+    "failurePolicy": "skip-downstream",
+    "timeout": 60000,
+    "nodes": [...],
+    "createdAt": "2026-05-02T12:00:00.000Z",
+    "updatedAt": "2026-05-02T12:00:00.000Z",
+    "createdBy": "key_abc123"
+  }
+}
+```
+
+### 20.2 Same thing in TypeScript
+
+```ts
+// scripts/upsert-broadcast.ts
+const ENDPOINT = process.env.STATION_ENDPOINT ?? "http://localhost:4400";
+const API_KEY = process.env.STATION_API_KEY!;
+
+const spec = {
+  name: "high-value-order",
+  failurePolicy: "skip-downstream" as const,
+  nodes: [
+    { name: "score", signalName: "score-order", dependsOn: [] },
+    {
+      name: "notify",
+      signalName: "notify-vip",
+      dependsOn: ["score"],
+      when: {
+        kind: "op", op: ">", args: [
+          { kind: "ref", path: ["score", "score"] },
+          { kind: "lit", value: 0.8 },
+        ],
+      },
+      input: {
+        kind: "obj", entries: {
+          orderId: { kind: "ref", path: ["input", "orderId"] },
+          score:   { kind: "ref", path: ["score", "score"] },
+        },
+      },
+    },
+  ],
+};
+
+// 1. Validate first (read scope) — useful in CI / form submission
+const validateRes = await fetch(`${ENDPOINT}/api/v1/broadcast-definitions/validate`, {
+  method: "POST",
+  headers: { Authorization: `Bearer ${API_KEY}`, "Content-Type": "application/json" },
+  body: JSON.stringify(spec),
+});
+const validation = await validateRes.json();
+if (!validation.data.ok) {
+  console.error("Validation errors:", validation.data.errors);
+  process.exit(1);
+}
+
+// 2. Save (admin scope)
+const saveRes = await fetch(`${ENDPOINT}/api/v1/broadcast-definitions`, {
+  method: "POST",
+  headers: { Authorization: `Bearer ${API_KEY}`, "Content-Type": "application/json" },
+  body: JSON.stringify(spec),
+});
+const { data } = await saveRes.json();
+console.log(`Saved ${data.name} v${data.version}`);
+```
+
+### 20.3 Trigger a dynamic broadcast
+
+```sh
+curl -X POST http://localhost:4400/api/v1/trigger-dynamic-broadcast \
+  -H "Authorization: Bearer $STATION_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "broadcastName": "high-value-order", "input": { "orderId": "ord_42" } }'
+```
+
+The response contains the broadcast run id; the runner snapshots the current spec into `BroadcastRun.definitionSnapshot` so subsequent edits don't touch this run.
+
+### 20.4 Inspect version history & deep-link to a specific version
+
+```sh
+# Full history, newest first (includes soft-deleted versions)
+curl -H "Authorization: Bearer $STATION_API_KEY" \
+  http://localhost:4400/api/v1/broadcast-definitions/high-value-order/versions
+
+# Pin to a specific version for replay / diff
+curl -H "Authorization: Bearer $STATION_API_KEY" \
+  http://localhost:4400/api/v1/broadcast-definitions/high-value-order/versions/3
+```
+
+### 20.5 Versioning gotcha
+
+`DELETE /broadcast-definitions/:name` is a soft-delete. If you `POST` the same name again, it continues at the next version:
+
+```
+POST .../broadcast-definitions          → v1
+POST .../broadcast-definitions          → v2
+DELETE .../broadcast-definitions/foo    → v2 marked deletedAt
+POST .../broadcast-definitions (foo)    → v3   (NOT v1)
+```
+
+Existing `BroadcastRun`s keep their snapshot — they advance against whichever spec was current when they were triggered.
+
+---
+
+## 21. Schedules (runtime)
+
+`station-schedules` lets you create / edit / disable schedules at runtime, separately from `.every()` in code.
+
+### 21.1 Wire the schedule adapter into station-kit
+
+```ts
+// station.config.ts
+import { defineConfig } from "station-kit";
+import { SqliteAdapter } from "station-adapter-sqlite";
+import { BroadcastSqliteAdapter } from "station-adapter-sqlite/broadcast";
+import { ScheduleSqliteAdapter } from "station-adapter-sqlite/schedules";
+
+export default defineConfig({
+  adapter: new SqliteAdapter({ dbPath: "./station.db" }),
+  broadcastAdapter: new BroadcastSqliteAdapter({ dbPath: "./station.db" }),
+  scheduleAdapter: new ScheduleSqliteAdapter({ dbPath: "./station.db" }),
+  auth: { username: "admin", password: process.env.PW! },
+});
+```
+
+station-kit constructs a `ScheduleReconciler` for each runner automatically. For Postgres / MySQL / Redis, swap the import path:
+
+```ts
+import { ScheduleRedisAdapter } from "station-adapter-redis/schedules";
+```
+
+### 21.2 Schedule a signal every 5 minutes
+
+```sh
+curl -X POST http://localhost:4400/api/v1/schedules \
+  -H "Authorization: Bearer $STATION_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "kind": "signal",
+    "target": "ping-monitor",
+    "interval": "5m",
+    "input": { "url": "https://api.example.com/health" },
+    "enabled": true
+  }'
+```
+
+Response (201):
+
+```json
+{
+  "data": {
+    "id": "sch_01H...",
+    "kind": "signal",
+    "target": "ping-monitor",
+    "interval": "5m",
+    "input": { "url": "https://api.example.com/health" },
+    "enabled": true,
+    "nextRunAt": "2026-05-02T12:05:00.000Z",
+    "createdAt": "2026-05-02T12:00:00.000Z",
+    "updatedAt": "2026-05-02T12:00:00.000Z",
+    "createdBy": "key_abc123"
+  }
+}
+```
+
+### 21.3 Schedule a dynamic broadcast nightly
+
+```sh
+curl -X POST http://localhost:4400/api/v1/schedules \
+  -H "Authorization: Bearer $STATION_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "kind": "broadcast-dynamic",
+    "target": "high-value-order",
+    "interval": "1d",
+    "input": { "since": "yesterday" }
+  }'
+```
+
+Use `"kind": "broadcast-static"` to schedule a file-defined broadcast.
+
+### 21.4 Edit a schedule (PATCH)
+
+```sh
+# Slow it down + change input
+curl -X PATCH http://localhost:4400/api/v1/schedules/sch_01H... \
+  -H "Authorization: Bearer $STATION_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "interval": "15m",
+    "input": { "url": "https://api.example.com/v2/health" }
+  }'
+
+# Pause without deleting
+curl -X PATCH http://localhost:4400/api/v1/schedules/sch_01H... \
+  -H "Authorization: Bearer $STATION_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "enabled": false }'
+```
+
+### 21.5 Preview next fire times
+
+```sh
+curl -X POST http://localhost:4400/api/v1/schedules/sch_01H.../preview \
+  -H "Authorization: Bearer $STATION_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "count": 5 }'
+# → { "data": { "fires": ["2026-05-02T12:15:00.000Z", ...] } }
+```
+
+Useful for confirming a CRON-like cadence before flipping `enabled = true`.
+
+### 21.6 Multi-runner safety
+
+If two Station processes share the schedule store, ensure your adapter implements `claimDue` (all four persistent adapters do). The in-memory `ScheduleMemoryAdapter` is single-process only — use it for tests, not production.
+
+---
+
+## 22. Expressions
+
+The expression language used by `DynamicNodeSpec.input` and `.when`. Pure, deterministic, JSON-serializable.
+
+### 22.1 Build an `input` mapping with `obj` / `ref` / `op`
+
+Suppose `score-order` outputs `{ score: number, factors: string[] }` and we want `notify-vip`'s input to be `{ orderId, scaledScore }` where `scaledScore = score * 100`.
+
+```ts
+import type { ExprNode } from "station-expressions";
+
+const inputMapping: ExprNode = {
+  kind: "obj",
+  entries: {
+    orderId: { kind: "ref", path: ["input", "orderId"] },
+    scaledScore: {
+      kind: "op",
+      op: "*",
+      args: [
+        { kind: "ref", path: ["score", "score"] },   // shorthand for upstream.score.score
+        { kind: "lit", value: 100 },
+      ],
+    },
+  },
+};
+```
+
+Embedded in a node spec:
+
+```ts
+{
+  name: "notify",
+  signalName: "notify-vip",
+  dependsOn: ["score"],
+  input: inputMapping,
+}
+```
+
+### 22.2 A `when` guard with comparison + logical ops
+
+Run the node only for premium users with score above 0.8:
+
+```ts
+const guard: ExprNode = {
+  kind: "op",
+  op: "&&",
+  args: [
+    {
+      kind: "op", op: ">", args: [
+        { kind: "ref", path: ["score", "score"] },
+        { kind: "lit", value: 0.8 },
+      ],
+    },
+    {
+      kind: "op", op: "==", args: [
+        { kind: "ref", path: ["input", "user", "tier"] },
+        { kind: "lit", value: "premium" },
+      ],
+    },
+  ],
+};
+```
+
+### 22.3 Author from string syntax via the parser
+
+The same guard, written as a string and compiled to an AST:
+
+```ts
+import { parse, stringify } from "station-expressions";
+
+const node = parse(`upstream.score.score > 0.8 && input.user.tier == "premium"`);
+// → { kind: "op", op: "&&", args: [...] }
+
+stringify(node);
+// → '((upstream.score.score > 0.8) && (input.user.tier == "premium"))'
+```
+
+The parser is the canonical way to take user input from a UI / playground and persist it as AST. The AST is what's stored — `parse` is one-way at save time.
+
+### 22.4 Validate before saving (server-side)
+
+```ts
+const res = await fetch(`${ENDPOINT}/api/v1/expressions/validate`, {
+  method: "POST",
+  headers: { Authorization: `Bearer ${API_KEY}`, "Content-Type": "application/json" },
+  body: JSON.stringify({
+    node,
+    schemaContext: {
+      inputSchema: {
+        type: "object",
+        properties: {
+          orderId: { type: "string" },
+          user: { type: "object", properties: { tier: { type: "string" } } },
+        },
+      },
+      upstreamSchemas: {
+        score: { type: "object", properties: { score: { type: "number" } } },
+      },
+      expectedSchema: { type: "boolean" },
+    },
+  }),
+});
+const { data } = await res.json();
+// data: { ok: true, errors: [] }
+```
+
+### 22.5 Escape hatch
+
+If your logic outgrows the expression language (async lookups, complex string templating, business rules), write a code-defined signal in TypeScript and wire it into the broadcast as a node — expressions just connect it to its upstream nodes' outputs. Don't try to bend `tmpl` into an unbounded language; the bounded surface is the point.
+
+---
+
+## 23. Custom API Key Storage
+
+`KeyStore` accepts a pluggable `ApiKeyStorageAdapter`. Default is SQLite. Implement the interface against any backend.
+
+### 23.1 Skeleton: Postgres-backed key storage
+
+This sketches the shape — wire it up to the `pg` client of your choice.
+
+```ts
+// auth/postgres-key-storage.ts
+import type pg from "pg";
+import type {
+  ApiKey,
+  ApiKeyPublic,
+  ApiKeyStorageAdapter,
+} from "station-kit/server/auth/keys";
+
+export class PostgresKeyStorage implements ApiKeyStorageAdapter {
+  constructor(private pool: pg.Pool, private table = "api_keys") {}
+
+  async init(): Promise<void> {
+    await this.pool.query(`
+      CREATE TABLE IF NOT EXISTS ${this.table} (
+        id          TEXT PRIMARY KEY,
+        name        TEXT NOT NULL,
+        key_hash    TEXT NOT NULL UNIQUE,
+        key_prefix  TEXT NOT NULL,
+        scopes      JSONB NOT NULL DEFAULT '[]'::jsonb,
+        created_at  TIMESTAMPTZ NOT NULL,
+        last_used   TIMESTAMPTZ,
+        expires_at  TIMESTAMPTZ,
+        revoked     BOOLEAN NOT NULL DEFAULT FALSE
+      )
+    `);
+  }
+
+  async insert(record: ApiKey): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO ${this.table}
+         (id, name, key_hash, key_prefix, scopes, created_at, last_used, expires_at, revoked)
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9)`,
+      [
+        record.id, record.name, record.keyHash, record.keyPrefix,
+        JSON.stringify(record.scopes),
+        record.createdAt, record.lastUsed, record.expiresAt, record.revoked,
+      ],
+    );
+  }
+
+  async findByHash(keyHash: string): Promise<ApiKey | null> {
+    const { rows } = await this.pool.query(
+      `SELECT * FROM ${this.table} WHERE key_hash = $1`,
+      [keyHash],
+    );
+    return rows[0] ? rowToApiKey(rows[0]) : null;
+  }
+
+  async list(): Promise<ApiKeyPublic[]> {
+    const { rows } = await this.pool.query(
+      `SELECT id, name, key_prefix, scopes, created_at, last_used, expires_at, revoked
+         FROM ${this.table} ORDER BY created_at DESC`,
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      keyPrefix: r.key_prefix,
+      scopes: r.scopes,
+      createdAt: r.created_at.toISOString(),
+      lastUsed: r.last_used ? r.last_used.toISOString() : null,
+      expiresAt: r.expires_at ? r.expires_at.toISOString() : null,
+      revoked: r.revoked,
+    }));
+  }
+
+  async touch(id: string, lastUsedIso: string): Promise<void> {
+    await this.pool.query(
+      `UPDATE ${this.table} SET last_used = $1 WHERE id = $2`,
+      [lastUsedIso, id],
+    );
+  }
+
+  async revoke(id: string): Promise<boolean> {
+    const result = await this.pool.query(
+      `UPDATE ${this.table} SET revoked = TRUE WHERE id = $1`,
+      [id],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async close(): Promise<void> {
+    await this.pool.end();
+  }
+}
+
+function rowToApiKey(r: Record<string, unknown>): ApiKey {
+  return {
+    id: r.id as string,
+    name: r.name as string,
+    keyHash: r.key_hash as string,
+    keyPrefix: r.key_prefix as string,
+    scopes: r.scopes as string[],
+    createdAt: (r.created_at as Date).toISOString(),
+    lastUsed: r.last_used ? (r.last_used as Date).toISOString() : null,
+    expiresAt: r.expires_at ? (r.expires_at as Date).toISOString() : null,
+    revoked: Boolean(r.revoked),
+  };
+}
+```
+
+### 23.2 Wire it into station-kit
+
+```ts
+// station.config.ts
+import pg from "pg";
+import { defineConfig } from "station-kit";
+import { PostgresKeyStorage } from "./auth/postgres-key-storage.js";
+
+const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+const keyStorage = new PostgresKeyStorage(pool);
+await keyStorage.init();
+
+export default defineConfig({
+  // ... adapter / broadcastAdapter ...
+  auth: {
+    username: "admin",
+    password: process.env.STATION_PW!,
+    keyStorage,
+  },
+});
+```
+
+### 23.3 Calling KeyStore directly (now async)
+
+If you instantiate a `KeyStore` outside the server (scripts, custom tooling), every method is async:
+
+```ts
+import { KeyStore, SqliteKeyStorage } from "station-kit/server/auth/keys";
+
+const store = new KeyStore(new SqliteKeyStorage({ dbPath: "./keys.db" }));
+// String overload still works for backwards compat:
+// const store = new KeyStore("./keys.db");
+
+const { key, record } = await store.create("ci-deploy", ["trigger"]);
+console.log("Issued", record.id, "→", key);  // "key" is shown only here
+
+const verified = await store.verify(key);
+console.log(verified?.name);                  // "ci-deploy"
+
+await store.revoke(record.id);
+await store.close();
+```
+
+---
+
 ## Quick Reference
 
 | Concept | Syntax |
@@ -1411,6 +1946,29 @@ import { MysqlAdapter } from "station-adapter-mysql";
 import { BroadcastMysqlAdapter } from "station-adapter-mysql/broadcast";
 import { defineConfig } from "station-kit";
 import { createTauriStation } from "station-tauri";
+
+// Runtime schedules
+import { ScheduleReconciler, ScheduleMemoryAdapter } from "station-schedules";
+import { ScheduleSqliteAdapter } from "station-adapter-sqlite/schedules";
+import { SchedulePostgresAdapter } from "station-adapter-postgres/schedules";
+import { ScheduleMysqlAdapter } from "station-adapter-mysql/schedules";
+import { ScheduleRedisAdapter } from "station-adapter-redis/schedules";
+
+// Expressions (used in DynamicNodeSpec.input / .when)
+import { evaluate, validate, parse, stringify } from "station-expressions";
+import type { ExprNode, SchemaField } from "station-expressions";
+
+// Dynamic broadcast types
+import type { DynamicBroadcastSpec, DynamicNodeSpec } from "station-broadcast";
+import { validateDynamicSpec } from "station-broadcast";
+
+// Custom API key storage
+import {
+  KeyStore,
+  SqliteKeyStorage,
+  MemoryKeyStorage,
+  type ApiKeyStorageAdapter,
+} from "station-kit/server/auth/keys";
 ```
 
 ### Shutdown order

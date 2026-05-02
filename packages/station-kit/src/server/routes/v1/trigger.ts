@@ -185,6 +185,33 @@ export function v1TriggerRoutes(deps: V1TriggerDeps) {
     }
   });
 
+  app.post("/trigger-dynamic-broadcast", async (c) => {
+    if (!deps.broadcastRunner) {
+      return c.json({ error: "unavailable", message: "Broadcast runner not configured." }, 503);
+    }
+    const body = await c.req.json().catch(() => null);
+    if (!body?.broadcastName) {
+      return c.json({ error: "bad_request", message: "Missing broadcastName." }, 400);
+    }
+    const { broadcastName, input } = body;
+    if (!deps.broadcastRunner.hasDynamicBroadcast(broadcastName)) {
+      return c.json(
+        { error: "not_found", message: `Dynamic broadcast "${broadcastName}" not registered.` },
+        404,
+      );
+    }
+    try {
+      const id = await deps.broadcastRunner.triggerDynamic(broadcastName, input ?? {});
+      return c.json(
+        { data: { id, broadcastName, status: "pending", createdAt: new Date().toISOString() } },
+        201,
+      );
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: "trigger_failed", message }, 400);
+    }
+  });
+
   app.post("/broadcast-runs/:id/rerun", async (c) => {
     if (!deps.broadcastRunner || !deps.broadcastAdapter) {
       return c.json({ error: "unavailable", message: "Broadcast runner not configured." }, 503);

@@ -14,12 +14,16 @@
   "files": ["dist", "src"],
   "scripts": {
     "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts"
   },
   "type": "module",
   "engines": { "node": ">=18" },
   "peerDependencies": {
     "station-signal": "workspace:*"
+  },
+  "dependencies": {
+    "station-expressions": "workspace:*"
   },
   "devDependencies": {
     "station-signal": "workspace:*",

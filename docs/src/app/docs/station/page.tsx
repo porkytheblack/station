@@ -254,6 +254,91 @@ export default defineConfig({
 
       <hr className="divider" />
 
+      {/* ── Configuring auth storage ── */}
+
+      <h3>Configuring auth storage</h3>
+      <p>
+        Station&apos;s API key store is pluggable. The default backend is
+        SQLite, but any storage that implements the{" "}
+        <code>ApiKeyStorageAdapter</code> interface (Postgres, MySQL, Redis,
+        an in-memory store for tests, …) can be wired in via{" "}
+        <code>auth.keyStorage</code> on <code>defineConfig</code>.
+      </p>
+      <Code>{`import { defineConfig, SqliteKeyStorage } from "station-kit";
+import { SqliteAdapter } from "station-adapter-sqlite";
+
+export default defineConfig({
+  adapter: new SqliteAdapter({ dbPath: "./jobs.db" }),
+  auth: {
+    keyStorage: new SqliteKeyStorage({ dbPath: "./station-keys.db" }),
+  },
+});`}</Code>
+      <p>
+        Without an explicit <code>keyStorage</code>, Station constructs a{" "}
+        <code>SqliteKeyStorage</code> at a default path. For production
+        deployments using Postgres or another backend, implement the adapter
+        and pass an instance:
+      </p>
+      <Code>{`// keys-postgres.ts
+import type { ApiKeyStorageAdapter, ApiKey, ApiKeyPublic } from "station-kit";
+
+export class PostgresKeyStorage implements ApiKeyStorageAdapter {
+  constructor(private pool: Pool) {}
+
+  async insert(record: ApiKey): Promise<void> {
+    await this.pool.query("INSERT INTO api_keys (...) VALUES (...)", [...]);
+  }
+
+  async findByHash(keyHash: string): Promise<ApiKey | null> {
+    const { rows } = await this.pool.query(
+      "SELECT * FROM api_keys WHERE key_hash = $1",
+      [keyHash],
+    );
+    return rows[0] ? rowToApiKey(rows[0]) : null;
+  }
+
+  async list(): Promise<ApiKeyPublic[]> { /* ... */ }
+  async touch(id: string, lastUsedIso: string): Promise<void> { /* ... */ }
+  async revoke(id: string): Promise<boolean> { /* ... */ }
+  async close(): Promise<void> { await this.pool.end(); }
+}`}</Code>
+      <Code>{`// station.config.ts
+import { defineConfig } from "station-kit";
+import { PostgresKeyStorage } from "./keys-postgres.js";
+
+export default defineConfig({
+  auth: {
+    keyStorage: new PostgresKeyStorage(pool),
+  },
+});`}</Code>
+
+      <h4>The interface</h4>
+      <Code>{`interface ApiKeyStorageAdapter {
+  insert(record: ApiKey): Promise<void> | void;
+  findByHash(keyHash: string): Promise<ApiKey | null> | ApiKey | null;
+  list(): Promise<ApiKeyPublic[]> | ApiKeyPublic[];
+  touch(id: string, lastUsedIso: string): Promise<void> | void;
+  revoke(id: string): Promise<boolean> | boolean;
+  close?(): Promise<void> | void;
+}`}</Code>
+      <p>
+        Adapters can be sync or async — the <code>KeyStore</code> awaits all
+        results either way. <code>MemoryKeyStorage</code> ships in{" "}
+        <code>station-kit</code> for tests and ephemeral deployments.
+      </p>
+
+      <div className="warn-box">
+        <strong>Breaking change:</strong> <code>KeyStore</code> methods are now
+        async. Any code that calls <code>keyStore.create()</code>,{" "}
+        <code>keyStore.verify()</code>, <code>keyStore.list()</code>, or{" "}
+        <code>keyStore.revoke()</code> directly must <code>await</code> them.
+        Calls inside Station&apos;s own request handlers were updated as part
+        of the same change; integrations and scripts that touch{" "}
+        <code>KeyStore</code> directly need a one-line fix.
+      </div>
+
+      <hr className="divider" />
+
       {/* ── Running Station ── */}
 
       <h3>Running Station</h3>
