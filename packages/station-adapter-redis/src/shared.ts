@@ -37,6 +37,21 @@ export const completedAtBroadcastRunsKey = (prefix: string) => key(prefix, "broa
 export const nodeRunHashKey = (prefix: string, id: string) => key(prefix, "node-run", id);
 export const broadcastRunNodesKey = (prefix: string, broadcastRunId: string) => key(prefix, "broadcast-run-nodes", broadcastRunId);
 
+// Dynamic broadcast definition keys (one hash per version, plus a sorted-set
+// per name so we can list and find the latest, plus a global set of names).
+export const broadcastDefinitionKey = (prefix: string, name: string, version: number) =>
+  key(prefix, "broadcast-def", name, String(version));
+export const broadcastDefinitionVersionsKey = (prefix: string, name: string) =>
+  key(prefix, "broadcast-def-versions", name);
+export const broadcastDefinitionNamesKey = (prefix: string) =>
+  key(prefix, "broadcast-defs", "names");
+
+// Schedule keys
+export const scheduleHashKey = (prefix: string, id: string) => key(prefix, "schedule", id);
+export const scheduleDueKey = (prefix: string) => key(prefix, "schedules", "due");
+export const scheduleAllKey = (prefix: string) => key(prefix, "schedules", "all");
+export const scheduleByKindKey = (prefix: string, kind: string) => key(prefix, "schedules", "by-kind", kind);
+
 // ---------------------------------------------------------------------------
 // Date / number serialization
 // ---------------------------------------------------------------------------
@@ -245,7 +260,7 @@ export const STEP_PATCH_KEYS = new Set([
 /** Allowed keys for BroadcastRun patches. */
 export const BROADCAST_RUN_PATCH_KEYS = new Set([
   "input", "status", "failurePolicy", "timeout", "interval", "nextRunAt",
-  "startedAt", "completedAt", "error",
+  "startedAt", "completedAt", "error", "definitionSnapshot",
 ]);
 
 /** Allowed keys for BroadcastNodeRun patches. */

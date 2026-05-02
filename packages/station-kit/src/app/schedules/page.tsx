@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useApi, type Schedule } from "../hooks/use-api";
 import { useBreadcrumb } from "../hooks/use-breadcrumb";
+import { ApiPanel } from "../components/api-panel";
 
 const KIND_LABEL: Record<Schedule["kind"], string> = {
   signal: "Signal",
@@ -106,6 +107,20 @@ export default function SchedulesPage() {
           </tbody>
         </table>
       )}
+
+      <ApiPanel
+        title="List & manage schedules"
+        snippets={[
+          { label: "List all", method: "GET", path: "/api/v1/schedules" },
+          { label: "List by kind", method: "GET", path: "/api/v1/schedules", query: { kind: "signal" } },
+          {
+            label: "Create",
+            method: "POST",
+            path: "/api/v1/schedules",
+            body: { kind: "signal", target: "<signalName>", interval: "5m", enabled: true, input: {} },
+          },
+        ]}
+      />
     </div>
   );
 }

@@ -7,6 +7,7 @@ import type {
   BroadcastRunStatus,
   BroadcastNodeRun,
   BroadcastNodeRunPatch,
+  DynamicBroadcastSpec,
 } from "station-broadcast";
 
 import { validateTableName, createColumnMapper, rowToObject } from "./shared.js";
@@ -18,6 +19,7 @@ const { toColumn: toBroadcastRunCol, toField: toBroadcastRunField } = createColu
   startedAt: "started_at",
   completedAt: "completed_at",
   createdAt: "created_at",
+  definitionSnapshot: "definition_snapshot",
 });
 const BROADCAST_RUN_DATE_FIELDS = new Set(["nextRunAt", "startedAt", "completedAt", "createdAt"]);
 
@@ -53,11 +55,13 @@ export class BroadcastPostgresAdapter implements BroadcastQueueAdapter {
   private ownsPool: boolean;
   private runsTable: string;
   private nodesTable: string;
+  private definitionsTable: string;
   private initialized: Promise<void>;
 
   constructor(options: BroadcastPostgresAdapterOptions = {}) {
     this.runsTable = validateTableName(options.tableName ?? "broadcast_runs");
     this.nodesTable = validateTableName(`${this.runsTable}_nodes`);
+    this.definitionsTable = validateTableName(`${this.runsTable}_definitions`);
 
     if (options.pool) {
       this.pool = options.pool;
@@ -75,19 +79,25 @@ export class BroadcastPostgresAdapter implements BroadcastQueueAdapter {
   private async ensureSchema(): Promise<void> {
     await this.pool.query(`
       CREATE TABLE IF NOT EXISTS ${this.runsTable} (
-        id              TEXT PRIMARY KEY,
-        broadcast_name  TEXT NOT NULL,
-        input           TEXT NOT NULL,
-        status          TEXT NOT NULL DEFAULT 'pending',
-        failure_policy  TEXT NOT NULL DEFAULT 'fail-fast',
-        timeout         INTEGER,
-        interval        TEXT,
-        next_run_at     TIMESTAMPTZ,
-        started_at      TIMESTAMPTZ,
-        completed_at    TIMESTAMPTZ,
-        created_at      TIMESTAMPTZ NOT NULL,
-        error           TEXT
+        id                  TEXT PRIMARY KEY,
+        broadcast_name      TEXT NOT NULL,
+        input               TEXT NOT NULL,
+        status              TEXT NOT NULL DEFAULT 'pending',
+        failure_policy      TEXT NOT NULL DEFAULT 'fail-fast',
+        timeout             INTEGER,
+        interval            TEXT,
+        next_run_at         TIMESTAMPTZ,
+        started_at          TIMESTAMPTZ,
+        completed_at        TIMESTAMPTZ,
+        created_at          TIMESTAMPTZ NOT NULL,
+        error               TEXT,
+        definition_snapshot TEXT
       )
+    `);
+
+    // Idempotent migration for existing databases predating dynamic broadcasts.
+    await this.pool.query(`
+      ALTER TABLE ${this.runsTable} ADD COLUMN IF NOT EXISTS definition_snapshot TEXT
     `);
 
     await this.pool.query(`
@@ -121,6 +131,21 @@ export class BroadcastPostgresAdapter implements BroadcastQueueAdapter {
       CREATE INDEX IF NOT EXISTS idx_${this.nodesTable}_run_id
         ON ${this.nodesTable} (broadcast_run_id)
     `);
+
+    await this.pool.query(`
+      CREATE TABLE IF NOT EXISTS ${this.definitionsTable} (
+        name            TEXT NOT NULL,
+        version         INTEGER NOT NULL,
+        spec            TEXT NOT NULL,
+        failure_policy  TEXT NOT NULL,
+        timeout         INTEGER,
+        created_at      TIMESTAMPTZ NOT NULL,
+        updated_at      TIMESTAMPTZ NOT NULL,
+        created_by      TEXT,
+        deleted_at      TIMESTAMPTZ,
+        PRIMARY KEY (name, version)
+      )
+    `);
   }
 
   private async ready(): Promise<void> {
@@ -132,9 +157,9 @@ export class BroadcastPostgresAdapter implements BroadcastQueueAdapter {
     await this.pool.query(
       `INSERT INTO ${this.runsTable}
         (id, broadcast_name, input, status, failure_policy, timeout, interval,
-         next_run_at, started_at, completed_at, created_at, error)
+         next_run_at, started_at, completed_at, created_at, error, definition_snapshot)
        VALUES
-        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
       [
         run.id,
         run.broadcastName,
@@ -148,6 +173,7 @@ export class BroadcastPostgresAdapter implements BroadcastQueueAdapter {
         run.completedAt ?? null,
         run.createdAt,
         run.error ?? null,
+        run.definitionSnapshot ?? null,
       ],
     );
   }
@@ -163,7 +189,7 @@ export class BroadcastPostgresAdapter implements BroadcastQueueAdapter {
 
   private static readonly BROADCAST_RUN_PATCH_KEYS = new Set([
     "input", "status", "failurePolicy", "timeout", "interval", "nextRunAt",
-    "startedAt", "completedAt", "error",
+    "startedAt", "completedAt", "error", "definitionSnapshot",
   ]);
 
   async updateBroadcastRun(id: string, patch: BroadcastRunPatch): Promise<void> {
@@ -320,6 +346,100 @@ export class BroadcastPostgresAdapter implements BroadcastQueueAdapter {
     return result.rows.map(rowToNodeRun);
   }
 
+  // ─── Dynamic broadcast definitions ───────────────────────────────
+
+  async saveDefinition(spec: DynamicBroadcastSpec): Promise<DynamicBroadcastSpec> {
+    await this.ready();
+    const result = await this.pool.query(
+      `SELECT COALESCE(MAX(version), 0) AS v FROM ${this.definitionsTable} WHERE name = $1`,
+      [spec.name],
+    );
+    const nextVersion = (result.rows[0]?.v ?? 0) + 1;
+    const now = new Date();
+    const next: DynamicBroadcastSpec = {
+      ...spec,
+      version: nextVersion,
+      createdAt: spec.createdAt ?? now,
+      updatedAt: now,
+      deletedAt: undefined,
+    };
+
+    await this.pool.query(
+      `INSERT INTO ${this.definitionsTable}
+        (name, version, spec, failure_policy, timeout, created_at, updated_at, created_by, deleted_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL)`,
+      [
+        next.name,
+        next.version,
+        JSON.stringify(next),
+        next.failurePolicy,
+        next.timeout ?? null,
+        next.createdAt,
+        next.updatedAt,
+        next.createdBy ?? null,
+      ],
+    );
+    return next;
+  }
+
+  async getDefinition(name: string, version?: number): Promise<DynamicBroadcastSpec | null> {
+    await this.ready();
+    let result;
+    if (version !== undefined) {
+      result = await this.pool.query(
+        `SELECT spec FROM ${this.definitionsTable} WHERE name = $1 AND version = $2`,
+        [name, version],
+      );
+    } else {
+      result = await this.pool.query(
+        `SELECT spec FROM ${this.definitionsTable} WHERE name = $1 ORDER BY version DESC LIMIT 1`,
+        [name],
+      );
+    }
+    return result.rows.length > 0 ? deserializeSpec(result.rows[0].spec) : null;
+  }
+
+  async listDefinitions(): Promise<DynamicBroadcastSpec[]> {
+    await this.ready();
+    const result = await this.pool.query(`
+      SELECT spec FROM ${this.definitionsTable} d1
+      WHERE version = (
+        SELECT MAX(version) FROM ${this.definitionsTable} d2 WHERE d2.name = d1.name
+      )
+      AND deleted_at IS NULL
+      ORDER BY name ASC
+    `);
+    return result.rows.map((r: { spec: string }) => deserializeSpec(r.spec));
+  }
+
+  async listDefinitionVersions(name: string): Promise<DynamicBroadcastSpec[]> {
+    await this.ready();
+    const result = await this.pool.query(
+      `SELECT spec FROM ${this.definitionsTable} WHERE name = $1 ORDER BY version DESC`,
+      [name],
+    );
+    return result.rows.map((r: { spec: string }) => deserializeSpec(r.spec));
+  }
+
+  async deleteDefinition(name: string): Promise<boolean> {
+    await this.ready();
+    const result = await this.pool.query(
+      `SELECT version, spec FROM ${this.definitionsTable}
+       WHERE name = $1 AND deleted_at IS NULL
+       ORDER BY version DESC LIMIT 1`,
+      [name],
+    );
+    if (result.rows.length === 0) return false;
+    const { version, spec } = result.rows[0];
+    const parsed = deserializeSpec(spec);
+    parsed.deletedAt = new Date();
+    await this.pool.query(
+      `UPDATE ${this.definitionsTable} SET deleted_at = $1, spec = $2 WHERE name = $3 AND version = $4`,
+      [parsed.deletedAt, JSON.stringify(parsed), name, version],
+    );
+    return true;
+  }
+
   generateId(): string {
     return randomUUID();
   }
@@ -338,4 +458,12 @@ export class BroadcastPostgresAdapter implements BroadcastQueueAdapter {
       await this.pool.end();
     }
   }
+}
+
+function deserializeSpec(json: string): DynamicBroadcastSpec {
+  const obj = JSON.parse(json) as DynamicBroadcastSpec;
+  if (obj.createdAt) obj.createdAt = new Date(obj.createdAt);
+  if (obj.updatedAt) obj.updatedAt = new Date(obj.updatedAt);
+  if (obj.deletedAt) obj.deletedAt = new Date(obj.deletedAt);
+  return obj;
 }

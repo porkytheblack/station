@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useApi, type BroadcastMeta, type DynamicBroadcastSpec } from "../hooks/use-api";
 import { useBreadcrumb } from "../hooks/use-breadcrumb";
 import { SchemaForm } from "../components/schema-form";
+import { ApiPanel } from "../components/api-panel";
 
 function formatMs(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
@@ -217,6 +218,26 @@ export default function BroadcastsPage() {
           </tbody>
         </table>
       )}
+
+      <ApiPanel
+        title="List & trigger broadcasts"
+        snippets={[
+          { label: "List file-defined broadcasts", method: "GET", path: "/api/v1/broadcasts" },
+          { label: "List dynamic broadcasts", method: "GET", path: "/api/v1/broadcast-definitions" },
+          {
+            label: "Trigger a static broadcast",
+            method: "POST",
+            path: "/api/v1/trigger-broadcast",
+            body: { broadcastName: "<name>", input: {} },
+          },
+          {
+            label: "Trigger a dynamic broadcast",
+            method: "POST",
+            path: "/api/v1/trigger-dynamic-broadcast",
+            body: { broadcastName: "<name>", input: {} },
+          },
+        ]}
+      />
     </div>
   );
 }

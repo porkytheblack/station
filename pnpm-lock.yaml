@@ -269,6 +269,9 @@ importers:
       station-broadcast:
         specifier: workspace:*
         version: link:../station-broadcast
+      station-schedules:
+        specifier: workspace:*
+        version: link:../station-schedules
       station-signal:
         specifier: workspace:*
         version: link:../station-signal
@@ -281,6 +284,9 @@ importers:
       station-broadcast:
         specifier: workspace:*
         version: link:../station-broadcast
+      station-schedules:
+        specifier: workspace:*
+        version: link:../station-schedules
       station-signal:
         specifier: workspace:*
         version: link:../station-signal
@@ -297,6 +303,9 @@ importers:
       station-broadcast:
         specifier: workspace:*
         version: link:../station-broadcast
+      station-schedules:
+        specifier: workspace:*
+        version: link:../station-schedules
       station-signal:
         specifier: workspace:*
         version: link:../station-signal

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useApi } from "../../hooks/use-api";
 import { useBreadcrumb } from "../../hooks/use-breadcrumb";
+import { ApiPanel } from "../../components/api-panel";
 
 const STARTER_SOURCE = `input.amount > 100 && input.user.tier == "premium"`;
 const STARTER_CONTEXT = JSON.stringify(
@@ -144,6 +145,55 @@ export default function ExpressionPlaygroundPage() {
           <pre className="mono" style={resultStyle}>{JSON.stringify(evalResult, null, 2)}</pre>
         )}
       </section>
+
+      <section style={{ marginTop: "1.5rem" }}>
+        <Label>Reference</Label>
+        <div style={{ ...resultStyle, color: "var(--muted)" }}>
+          <p style={{ margin: "0 0 0.5rem 0", fontSize: "0.8125rem", lineHeight: 1.6 }}>
+            <strong>Operators:</strong> <span className="mono">==</span>, <span className="mono">!=</span>, <span className="mono">&lt;</span>, <span className="mono">&gt;</span>, <span className="mono">&lt;=</span>, <span className="mono">&gt;=</span>, <span className="mono">&amp;&amp;</span>, <span className="mono">||</span>, <span className="mono">!</span>, <span className="mono">+</span>, <span className="mono">-</span>, <span className="mono">*</span>, <span className="mono">/</span>
+          </p>
+          <p style={{ margin: "0 0 0.5rem 0", fontSize: "0.8125rem", lineHeight: 1.6 }}>
+            <strong>Refs:</strong> <span className="mono">input.x</span>, <span className="mono">upstream.nodeName.x</span>, <span className="mono">nodeName.x</span> (shorthand)
+          </p>
+          <p style={{ margin: "0 0 0.5rem 0", fontSize: "0.8125rem", lineHeight: 1.6 }}>
+            <strong>Literals:</strong> numbers, <span className="mono">&quot;strings&quot;</span>, <span className="mono">true</span> / <span className="mono">false</span> / <span className="mono">null</span>
+          </p>
+          <p style={{ margin: "0.75rem 0 0 0", fontSize: "0.8125rem", lineHeight: 1.6, paddingTop: "0.5rem", borderTop: "1px dashed var(--border)" }}>
+            <strong>Escape hatch:</strong> the language is intentionally minimal — no loops, no user-defined functions, no I/O. If you can&apos;t express something here, write a code-defined signal that does the logic in TypeScript and reference it from the broadcast graph. The signal is the unit of arbitrary code; the expression layer is for connecting them.
+          </p>
+        </div>
+      </section>
+
+      <ApiPanel
+        title="Use these endpoints from your code"
+        snippets={[
+          {
+            label: "Parse string → AST",
+            method: "POST",
+            path: "/api/v1/expressions/parse",
+            body: { source: "input.amount > 100" },
+          },
+          {
+            label: "Evaluate AST against context",
+            method: "POST",
+            path: "/api/v1/expressions/evaluate",
+            body: { node: { kind: "ref", path: ["input", "x"] }, context: { input: { x: 42 } } },
+          },
+          {
+            label: "Validate AST against schemas",
+            method: "POST",
+            path: "/api/v1/expressions/validate",
+            body: {
+              node: { kind: "ref", path: ["input", "x"] },
+              schemaContext: {
+                inputSchema: { type: "object", properties: { x: { type: "number" } } },
+                upstreamSchemas: {},
+                expectedSchema: { type: "number" },
+              },
+            },
+          },
+        ]}
+      />
     </div>
   );
 }

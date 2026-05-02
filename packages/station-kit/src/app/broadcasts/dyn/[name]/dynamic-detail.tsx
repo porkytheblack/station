@@ -214,7 +214,11 @@ export function DynamicBroadcastDetail({ name }: { name: string }) {
             </thead>
             <tbody>
               {versions.map((v) => (
-                <tr key={v.version}>
+                <tr
+                  key={v.version}
+                  className="clickable-row"
+                  onClick={() => router.push(`/broadcasts/dyn/${encodeURIComponent(name)}/v/${v.version}`)}
+                >
                   <td className="mono">v{v.version}</td>
                   <td className="mono" style={{ fontSize: "0.75rem", color: "var(--muted)" }}>
                     {new Date(v.updatedAt).toLocaleString()}

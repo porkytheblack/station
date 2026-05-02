@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useApi, type Schedule } from "../../hooks/use-api";
 import { useBreadcrumb } from "../../hooks/use-breadcrumb";
 import { ScheduleForm, type ScheduleFormValue } from "../components/schedule-form";
+import { ApiPanel } from "../../components/api-panel";
 
 export function ScheduleEditor({ id }: { id: string }) {
   const api = useApi();
@@ -170,6 +171,25 @@ export function ScheduleEditor({ id }: { id: string }) {
           </div>
         </aside>
       </div>
+
+      <ApiPanel
+        title="Manage this schedule"
+        snippets={[
+          { label: "Get", method: "GET", path: `/api/v1/schedules/${id}` },
+          {
+            label: "Update",
+            method: "PATCH",
+            path: `/api/v1/schedules/${id}`,
+            body: { interval: value.interval, enabled: value.enabled, input: tryParse(value.input) },
+          },
+          { label: "Preview next 5 fires", method: "POST", path: `/api/v1/schedules/${id}/preview`, body: { count: 5 } },
+          { label: "Delete", method: "DELETE", path: `/api/v1/schedules/${id}` },
+        ]}
+      />
     </div>
   );
+}
+
+function tryParse(s: string): unknown {
+  try { return JSON.parse(s); } catch { return s; }
 }
