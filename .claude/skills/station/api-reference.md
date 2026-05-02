@@ -1399,7 +1399,7 @@ import {
   type ApiKeyStorageAdapter,
   type ApiKey,
   type ApiKeyPublic,
-} from "station-kit/server/auth/keys";  // internal path; mirrors server bundle
+} from "station-kit/server";
 ```
 
 #### ApiKeyStorageAdapter

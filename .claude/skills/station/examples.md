@@ -1770,7 +1770,7 @@ import type {
   ApiKey,
   ApiKeyPublic,
   ApiKeyStorageAdapter,
-} from "station-kit/server/auth/keys";
+} from "station-kit/server";
 
 export class PostgresKeyStorage implements ApiKeyStorageAdapter {
   constructor(private pool: pg.Pool, private table = "api_keys") {}
@@ -1891,7 +1891,7 @@ export default defineConfig({
 If you instantiate a `KeyStore` outside the server (scripts, custom tooling), every method is async:
 
 ```ts
-import { KeyStore, SqliteKeyStorage } from "station-kit/server/auth/keys";
+import { KeyStore, SqliteKeyStorage } from "station-kit/server";
 
 const store = new KeyStore(new SqliteKeyStorage({ dbPath: "./keys.db" }));
 // String overload still works for backwards compat:
@@ -1968,7 +1968,7 @@ import {
   SqliteKeyStorage,
   MemoryKeyStorage,
   type ApiKeyStorageAdapter,
-} from "station-kit/server/auth/keys";
+} from "station-kit/server";
 ```
 
 ### Shutdown order
