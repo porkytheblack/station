@@ -18,13 +18,13 @@ import { ensureStationDir } from "../station-dir.js";
 import { WebSocketHub } from "./ws.js";
 import { SSEHub } from "./sse.js";
 import { LogBuffer } from "./log-buffer.js";
-import { LogStore } from "./log-store.js";
+import { LogStore, FileLogStorage } from "./log-store.js";
 import { StationSignalSubscriber, StationBroadcastSubscriber } from "./subscriber.js";
 import { healthRoutes } from "./routes/health.js";
 import { signalRoutes } from "./routes/signals.js";
 import { runRoutes } from "./routes/runs.js";
 import { broadcastRoutes } from "./routes/broadcasts.js";
-import { KeyStore, SqliteKeyStorage } from "./auth/keys.js";
+import { KeyStore, FileKeyStorage } from "./auth/keys.js";
 import { verifySessionToken, verifyCredentials, createSessionToken, type SessionConfig } from "./auth/session.js";
 import { authResolver } from "./middleware/auth.js";
 import { requireScope } from "./middleware/scope-guard.js";
@@ -43,6 +43,7 @@ import { v1ExpressionRoutes } from "./routes/v1/expressions.js";
 
 export {
   KeyStore,
+  FileKeyStorage,
   SqliteKeyStorage,
   MemoryKeyStorage,
 } from "./auth/keys.js";
@@ -50,8 +51,19 @@ export type {
   ApiKey,
   ApiKeyPublic,
   ApiKeyStorageAdapter,
+  FileKeyStorageOptions,
   SqliteKeyStorageOptions,
 } from "./auth/keys.js";
+export {
+  LogStore,
+  FileLogStorage,
+  MemoryLogStorage,
+} from "./log-store.js";
+export type {
+  LogStorageAdapter,
+  FileLogStorageOptions,
+} from "./log-store.js";
+export type { LogEntry } from "./log-buffer.js";
 
 export interface StationInstance {
   start(): Promise<void>;
@@ -69,10 +81,17 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
 
   const { dataDir } = ensureStationDir(cwd, config.stationDir);
 
+  warnIfLegacySqliteFiles(dataDir);
+
   const wsHub = new WebSocketHub();
   const sseHub = new SSEHub();
   const logBuffer = new LogBuffer();
-  const logStore = new LogStore(resolve(dataDir, "station-logs.db"));
+  const logStore = new LogStore(
+    config.logStorage ?? new FileLogStorage({
+      filePath: resolve(dataDir, "station-logs.jsonl"),
+      onError: (err) => console.error("[station] log write failed:", err),
+    }),
+  );
 
   // Auth: create KeyStore and SessionConfig if auth is configured
   let keyStore: KeyStore | undefined;
@@ -80,7 +99,7 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
 
   if (config.auth) {
     const storage = config.auth.keyStorage
-      ?? new SqliteKeyStorage({ dbPath: resolve(dataDir, "station-keys.db") });
+      ?? new FileKeyStorage({ filePath: resolve(dataDir, "station-keys.json") });
     keyStore = new KeyStore(storage);
     sessionConfig = {
       username: config.auth.username,
@@ -401,11 +420,35 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
       }
       wsHub.close();
       sseHub.close();
-      logStore.close();
+      await logStore.close();
       await keyStore?.close();
       if (httpServer) {
         httpServer.close();
       }
     },
   };
+}
+
+// Existing deployments that ran older Station versions persisted keys
+// to `station-keys.db` (SQLite) and run logs to `station-logs.db`. The
+// new defaults are `station-keys.json` and `station-logs.jsonl`; the
+// legacy files are NOT auto-migrated. Emit a one-time warning so an
+// upgrade doesn't silently appear to wipe a user's API keys.
+function warnIfLegacySqliteFiles(dataDir: string): void {
+  const legacy: { file: string; replacement: string }[] = [
+    { file: "station-keys.db", replacement: "station-keys.json" },
+    { file: "station-logs.db", replacement: "station-logs.jsonl" },
+  ];
+  for (const { file, replacement } of legacy) {
+    const legacyPath = resolve(dataDir, file);
+    if (!existsSync(legacyPath)) continue;
+    const replacementPath = resolve(dataDir, replacement);
+    if (existsSync(replacementPath)) continue;
+    console.warn(
+      `[station] Legacy ${file} detected at ${legacyPath} but no ${replacement} found. ` +
+      `Station no longer reads SQLite-backed defaults; data in ${file} will not be loaded. ` +
+      `If you need the contents, export them with the better-sqlite3 CLI before upgrading. ` +
+      `To suppress this warning, delete or rename ${file}.`,
+    );
+  }
 }

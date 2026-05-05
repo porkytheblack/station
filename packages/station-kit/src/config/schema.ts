@@ -2,15 +2,17 @@ import type { SignalQueueAdapter } from "station-signal";
 import type { BroadcastQueueAdapter } from "station-broadcast";
 import type { ScheduleAdapter } from "station-schedules";
 import type { ApiKeyStorageAdapter } from "../server/auth/keys.js";
+import type { LogStorageAdapter } from "../server/log-store.js";
 
 export interface AuthConfig {
   username: string;
   password: string;
   sessionTtlMs?: number;
   /**
-   * Pluggable storage backend for API keys. Defaults to a SQLite store at
-   * `<dataDir>/station-keys.db`. Provide a custom adapter to host keys in
-   * Postgres, MySQL, Redis, etc.
+   * Pluggable storage backend for API keys. Defaults to a JSON file at
+   * `<dataDir>/station-keys.json` (no native dependencies required).
+   * Provide a custom adapter to host keys in SQLite, Postgres, MySQL,
+   * Redis, etc.
    */
   keyStorage?: ApiKeyStorageAdapter;
 }
@@ -40,6 +42,14 @@ export interface StationConfig {
    * schedules are persisted here and reconciled by both runners.
    */
   scheduleAdapter?: ScheduleAdapter;
+  /**
+   * Pluggable storage backend for run logs. Defaults to a `FileLogStorage`
+   * (append-only JSONL file at `<dataDir>/station-logs.jsonl`, no native
+   * dependencies). The default is single-process only — for multi-process
+   * deployments or guaranteed durability, implement `LogStorageAdapter`
+   * against Postgres, MySQL, Redis, S3, etc., and pass it here.
+   */
+  logStorage?: LogStorageAdapter;
   signalsDir?: string;
   broadcastsDir?: string;
   stationDir: string;
@@ -99,6 +109,7 @@ export function resolveConfig(input: StationUserConfig): StationConfig {
     adapter: input.adapter,
     broadcastAdapter: input.broadcastAdapter,
     scheduleAdapter: input.scheduleAdapter,
+    logStorage: input.logStorage,
     signalsDir: input.signalsDir,
     broadcastsDir: input.broadcastsDir,
     stationDir: input.stationDir ?? DEFAULTS.stationDir,

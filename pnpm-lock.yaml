@@ -362,9 +362,6 @@ importers:
       '@hono/node-server':
         specifier: ^1
         version: 1.19.9(hono@4.12.3)
-      better-sqlite3:
-        specifier: ^11.9.1
-        version: 11.10.0
       esbuild:
         specifier: ^0.25.12
         version: 0.25.12
@@ -393,9 +390,6 @@ importers:
         specifier: ^8
         version: 8.19.0
     devDependencies:
-      '@types/better-sqlite3':
-        specifier: ^7.6.13
-        version: 7.6.13
       '@types/node':
         specifier: ^25.3.0
         version: 25.3.0
@@ -408,6 +402,9 @@ importers:
       '@types/ws':
         specifier: ^8
         version: 8.18.1
+      better-sqlite3:
+        specifier: ^11.9.1
+        version: 11.10.0
       station-adapter-sqlite:
         specifier: workspace:*
         version: link:../station-adapter-sqlite

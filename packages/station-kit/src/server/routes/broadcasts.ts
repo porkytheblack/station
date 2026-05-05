@@ -123,7 +123,9 @@ export function broadcastRoutes(deps: BroadcastDeps) {
     const allLogs: Array<{ runId: string; signalName: string; level: string; message: string; timestamp: string; nodeName: string }> = [];
     for (const nr of nodes) {
       if (nr.signalRunId) {
-        const logs = deps.logStore?.get(nr.signalRunId) ?? deps.logBuffer?.get(nr.signalRunId) ?? [];
+        const logs = deps.logStore
+          ? await deps.logStore.get(nr.signalRunId)
+          : deps.logBuffer?.get(nr.signalRunId) ?? [];
         for (const log of logs) {
           allLogs.push({ ...log, nodeName: nr.nodeName });
         }

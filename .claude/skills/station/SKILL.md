@@ -28,7 +28,7 @@ Triggers include:
 6. **Broadcast adapters use subpath imports** - Import from `station-adapter-sqlite/broadcast`, `station-adapter-postgres/broadcast`, `station-adapter-mysql/broadcast`, or `station-adapter-redis/broadcast`.
 7. **Always shut down broadcast runner before signal runner** - Broadcast runner queries the signal adapter's database during shutdown. Stopping signal first closes the DB connection.
 8. **`.retries(n)` sets retry count, not total attempts** - `.retries(2)` means 3 total attempts (1 initial + 2 retries). Internally stored as `maxAttempts = n + 1`.
-11. **pnpm 10+ requires `onlyBuiltDependencies` for SQLite** - `better-sqlite3` needs a native build step that pnpm 10 blocks by default. Add `"pnpm": { "onlyBuiltDependencies": ["better-sqlite3"] }` to the consumer's `package.json`, then reinstall.
+11. **pnpm 10+ requires `onlyBuiltDependencies` for SQLite — only when you opt into it** - station-kit no longer pulls in `better-sqlite3` as a hard dependency (default key + log storage are pure-JS file backends). You only need `"pnpm": { "onlyBuiltDependencies": ["better-sqlite3"] }` in the consumer's `package.json` if you explicitly install `better-sqlite3` (e.g. to use `SqliteKeyStorage` or `station-adapter-sqlite`).
 9. **`.trigger()` returns immediately with a run ID** - It does not wait for execution. Use `runner.waitForRun(id)` to block until completion.
 10. **Zod v4 gotcha: never use `.default({})` on objects with default fields** - Use plain TypeScript defaults instead. Zod v4 internals: `schema._zod.def.type` (not `_def.typeName`).
 12. **`station deploy` bundles to JS — shared imports are resolved automatically.** Signals/broadcasts can import from `../lib/`, `../shared/`, etc. These are bundled into shared chunks by esbuild. No need to configure includes for imported code — only use `deploy.include` for non-JS assets.
@@ -36,7 +36,9 @@ Triggers include:
 14. **Dynamic broadcasts and file-defined broadcasts live in separate registries** — names can collide harmlessly. The runner snapshots a dynamic spec into `BroadcastRun.definitionSnapshot` on trigger; spec edits never mutate in-flight runs. Versions are monotonic across delete + recreate (a recreated definition continues at the next version, not v1).
 15. **Runtime schedules are additive** — `.every()` in signal/broadcast files keeps working. The `Schedule` adapter is a separate import path (`station-adapter-{sqlite,postgres,mysql,redis}/schedules`). Multi-runner deployments require an adapter that implements `claimDue` for at-most-once firing.
 16. **Expressions are pure and JSON-serializable** — used by `DynamicNodeSpec.input` / `.when`. No I/O, no time, no randomness. If you can't express something, write a code-defined signal in TypeScript and reference it from the dynamic broadcast graph — the signal is the unit of arbitrary code, expressions just connect them.
-17. **`KeyStore` methods are now async** — `create`, `verify`, `list`, `revoke`, `close` all return Promises. Anyone calling them directly must `await`. The `new KeyStore("path/to/db")` string constructor still works (constructs a `SqliteKeyStorage`), but the methods are async regardless.
+17. **`KeyStore` methods are async** — `create`, `verify`, `list`, `revoke`, `close` all return Promises. Anyone calling them directly must `await`. The `new KeyStore("path/to/file")` string constructor still works but now constructs a `FileKeyStorage` (JSON file, no native deps). A `.db` extension is silently rewritten to `.json`; old SQLite-backed `station-keys.db` files are NOT auto-migrated — see the legacy-files startup warning emitted by `createStation`.
+
+18. **`LogStore` is adapter-based** — `LogStorageAdapter` (`add`, `get`, optional `close`) wraps any backend. Default in `createStation` is `FileLogStorage` (append-only JSONL at `<dataDir>/station-logs.jsonl`, single-process only). Pass `logStorage` in `StationConfig` for Postgres / MySQL / Redis / S3 in production. `LogStore.get(runId)` returns `Promise<LogEntry[]>` — callers must await.
 
 ## Signal Pattern
 
@@ -435,7 +437,7 @@ evaluate(node, { input: { amount: 250 }, upstream: { score: { value: 0.9 } } });
 
 ## API Key Storage (pluggable)
 
-API keys live behind `ApiKeyStorageAdapter`. Default is `SqliteKeyStorage`. Pass a custom adapter via `auth.keyStorage` to host keys in any backend.
+API keys live behind `ApiKeyStorageAdapter`. Default is `FileKeyStorage` — a JSON file at `<dataDir>/station-keys.json` written via fsync'd tmp + rename, with `0o600`/`0o700` perms. No native dependencies. Other built-ins: `MemoryKeyStorage` (tests), `SqliteKeyStorage` (opt-in; lazy-loads the optional `better-sqlite3` package, helpful error if missing). Pass a custom adapter via `auth.keyStorage` for Postgres / MySQL / Redis / etc.
 
 ```ts
 import { defineConfig } from "station-kit";
@@ -449,7 +451,28 @@ export default defineConfig({
 });
 ```
 
-The `ApiKeyStorageAdapter` interface is `{ insert, findByHash, list, touch, revoke, close? }`. Methods may be sync or async — `KeyStore` awaits them either way. **Breaking change**: all `KeyStore` methods (`create`, `verify`, `list`, `revoke`, `close`) are now async; callers must `await`. The `new KeyStore("path/to/keys.db")` string overload still works for backwards compatibility (constructs a `SqliteKeyStorage`). See `api-reference.md` §7.5 for the interface and `examples.md` §23 for a custom adapter skeleton.
+The `ApiKeyStorageAdapter` interface is `{ insert, findByHash, list, touch, revoke, close? }`. Methods may be sync or async — `KeyStore` awaits them either way. All `KeyStore` methods (`create`, `verify`, `list`, `revoke`, `close`) are async; callers must `await`. The `new KeyStore("path/to/keys.json")` string overload constructs a `FileKeyStorage`; a `.db` path is silently rewritten to `.json` for backwards compatibility, but old SQLite-backed `station-keys.db` files are NOT auto-migrated (a startup warning is emitted if one is detected). See `api-reference.md` §7.5 for the interface and `examples.md` §23 for a custom adapter skeleton.
+
+## Run Log Storage (pluggable)
+
+Run logs live behind `LogStorageAdapter` (`add`, `get`, optional `close`). Default in `createStation` is `FileLogStorage` — append-only JSONL at `<dataDir>/station-logs.jsonl` with an `onError` hook wired to `console.error`. The default is **single-process only**; running two `createStation` instances against the same data dir will interleave bytes once individual log lines exceed 4 KB. `LogStore.get(runId)` is async (returns `Promise<LogEntry[]>`).
+
+For multi-process / multi-replica / distributed deployments, implement `LogStorageAdapter` against a real backend and pass it via `logStorage`:
+
+```ts
+import { defineConfig, type LogStorageAdapter, type LogEntry } from "station-kit";
+
+class PostgresLogStorage implements LogStorageAdapter {
+  async add(entry: LogEntry) { /* INSERT INTO logs ... */ }
+  async get(runId: string) { /* SELECT ... ORDER BY id */ return []; }
+}
+
+export default defineConfig({
+  logStorage: new PostgresLogStorage(/* pool */),
+});
+```
+
+Built-ins: `FileLogStorage` (default), `MemoryLogStorage` (tests). The legacy SQLite-backed log store has been removed; an old `station-logs.db` triggers the same startup warning as `station-keys.db`.
 
 ## Tauri Sidecar (station-tauri)
 
