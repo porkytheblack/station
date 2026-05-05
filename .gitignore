@@ -13,4 +13,4 @@ coverage/
 dist
 .next
 out
-.station/data/
+.station/
