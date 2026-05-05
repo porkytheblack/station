@@ -9,9 +9,27 @@ import type { LogEntry } from "./log-buffer.js";
  * lives in `LogBuffer`. May be sync or async; the LogStore wrapper
  * normalizes both.
  *
- * `add` is treated as fire-and-forget at the LogStore boundary so signal
- * runners never block on log writes. Adapters that need durability
- * guarantees (queues, retries, batching) should implement that internally.
+ * Contract for implementers:
+ *
+ * - **`add(entry)`** is treated as fire-and-forget at the LogStore
+ *   boundary. Signal runners never block on log writes. Adapters that
+ *   need durability guarantees (queues, retries, batching) should
+ *   implement that internally; thrown errors and rejected promises are
+ *   caught and surfaced via the LogStore's `onError` hook (if set) but
+ *   never rethrown to the caller.
+ * - **`get(runId)`** must return entries for that run in append order
+ *   (oldest first). Routes that aggregate across runs may re-sort by
+ *   timestamp, but per-run ordering is the adapter's responsibility.
+ * - **`close?()`** is called once on graceful shutdown. Use it to flush
+ *   any in-flight buffers. It is NOT called on `SIGKILL` / OOM kill —
+ *   adapters that must guarantee durability per write should not rely
+ *   on it.
+ *
+ * Single-process semantics: the built-in `FileLogStorage` is safe for a
+ * single Node process. Running multiple processes against the same file
+ * path WILL produce interleaved bytes and lost entries — use a real
+ * database adapter (Postgres, MySQL, Redis, etc.) for multi-process or
+ * distributed deployments.
  */
 export interface LogStorageAdapter {
   add(entry: LogEntry): Promise<void> | void;
@@ -19,35 +37,56 @@ export interface LogStorageAdapter {
   close?(): Promise<void> | void;
 }
 
-// ─── JSONL file default ─────────────────────────────────────────────
+// ─── File-backed default ────────────────────────────────────────────
 
-export interface JsonlLogStorageOptions {
+export interface FileLogStorageOptions {
   filePath: string;
+  /**
+   * Called when a background write to the underlying file fails. Use
+   * this to surface persistence problems (disk full, permission denied,
+   * etc.) to your monitoring system. If unset, write failures are
+   * silently dropped — acceptable for local dev, NOT for production.
+   */
+  onError?: (err: unknown) => void;
 }
 
 /**
- * Append-only JSONL log storage. Each line is a JSON-serialized LogEntry.
- * Existing entries are loaded into memory on construction; appends are
- * serialized through an async write queue so concurrent writers can't
- * interleave bytes.
+ * File-backed log storage using append-only JSONL framing. Each line is
+ * a JSON-serialized `LogEntry`; existing entries are loaded into memory
+ * on construction; appends are serialized through an async write queue
+ * so concurrent writers can't interleave bytes within one process.
  *
- * No native dependencies — works on any Node 18+ install. Suitable for
- * single-process deployments and local development. For multi-process
- * or distributed setups, implement `LogStorageAdapter` against
- * Postgres / MySQL / Redis / S3 / etc.
+ * No native dependencies — works on any Node 18+ install.
+ *
+ * **Production caveats** (in order of severity):
+ *
+ * 1. **Single-process only.** Two Node processes appending to the same
+ *    file WILL interleave bytes once individual JSON lines exceed the
+ *    OS pipe buffer (4 KB on Linux), corrupting the file.
+ * 2. **Best-effort durability.** Writes are queued and flushed via
+ *    `fs.appendFile`; on `SIGKILL` / OOM kill, in-flight writes are lost.
+ *    Set `onError` to surface fs failures.
+ * 3. **Unbounded memory on replay.** The whole file is loaded into a
+ *    Map on startup. For high-volume deployments (gigabytes of logs)
+ *    use a database-backed adapter instead.
+ *
+ * For multi-process, distributed, or high-durability deployments,
+ * implement `LogStorageAdapter` against Postgres / MySQL / Redis / S3.
  */
-export class JsonlLogStorage implements LogStorageAdapter {
+export class FileLogStorage implements LogStorageAdapter {
   private path: string;
   private byRunId = new Map<string, LogEntry[]>();
   private writeQueue: Promise<void> = Promise.resolve();
+  private onError: (err: unknown) => void;
 
-  constructor(options: JsonlLogStorageOptions) {
+  constructor(options: FileLogStorageOptions) {
     // Backwards compat: callers used to pass `.db` paths for the sqlite store.
     // Transparently swap to `.jsonl` so existing config files keep working.
     this.path = options.filePath.endsWith(".db")
       ? options.filePath.replace(/\.db$/, ".jsonl")
       : options.filePath;
-    mkdirSync(dirname(this.path), { recursive: true });
+    this.onError = options.onError ?? (() => {});
+    mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
     this.replay();
   }
 
@@ -56,7 +95,8 @@ export class JsonlLogStorage implements LogStorageAdapter {
     let content: string;
     try {
       content = readFileSync(this.path, "utf8");
-    } catch {
+    } catch (err) {
+      this.onError(err);
       return;
     }
     const lines = content.split("\n");
@@ -84,7 +124,9 @@ export class JsonlLogStorage implements LogStorageAdapter {
     this.indexEntry(entry);
     const line = JSON.stringify(entry) + "\n";
     this.writeQueue = this.writeQueue.then(
-      () => appendFile(this.path, line).catch(() => {}),
+      () => appendFile(this.path, line, { mode: 0o600 }).catch((err) => {
+        this.onError(err);
+      }),
     );
   }
 
@@ -133,12 +175,12 @@ export class LogStore {
 
   /**
    * Pass a `LogStorageAdapter` for any backend. The string overload is
-   * a shortcut for `new JsonlLogStorage({ filePath })` — useful for
+   * a shortcut for `new FileLogStorage({ filePath })` — useful for
    * local dev and the default Station data directory.
    */
   constructor(storageOrPath: LogStorageAdapter | string) {
     if (typeof storageOrPath === "string") {
-      this.storage = new JsonlLogStorage({ filePath: storageOrPath });
+      this.storage = new FileLogStorage({ filePath: storageOrPath });
     } else {
       this.storage = storageOrPath;
     }

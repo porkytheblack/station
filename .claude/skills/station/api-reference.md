@@ -1246,8 +1246,9 @@ interface AuthConfig {
   password: string;
   sessionTtlMs?: number;   // default: 86400000 (24h)
   /**
-   * Pluggable storage backend for API keys. Defaults to a SqliteKeyStorage at
-   * `<dataDir>/station-keys.db`. Provide a custom `ApiKeyStorageAdapter` to
+   * Pluggable storage backend for API keys. Defaults to a `FileKeyStorage`
+   * (JSON file at `<dataDir>/station-keys.json`, no native deps, fsync'd
+   * tmp+rename, 0o600 perms). Provide a custom `ApiKeyStorageAdapter` to
    * host keys in Postgres, MySQL, Redis, etc. (See §7.5 below.)
    */
   keyStorage?: ApiKeyStorageAdapter;
@@ -1278,6 +1279,14 @@ interface StationConfig {
    * persisted here and reconciled by both runners. (See §10.)
    */
   scheduleAdapter?: ScheduleAdapter;
+  /**
+   * Pluggable storage backend for run logs. Defaults to a `FileLogStorage`
+   * (append-only JSONL at `<dataDir>/station-logs.jsonl`, no native deps,
+   * single-process only). Provide a custom `LogStorageAdapter` for
+   * Postgres / MySQL / Redis / S3 in multi-process or high-durability
+   * deployments. (See §7.6 below.)
+   */
+  logStorage?: LogStorageAdapter;
   signalsDir?: string;                   // auto-detects "./signals" if exists
   broadcastsDir?: string;                // auto-detects "./broadcasts" if exists
   runner: RunnerConfig;
@@ -1394,8 +1403,9 @@ API keys live behind a pluggable `ApiKeyStorageAdapter`. The `KeyStore` class ow
 ```ts
 import {
   KeyStore,
-  SqliteKeyStorage,
+  FileKeyStorage,
   MemoryKeyStorage,
+  SqliteKeyStorage, // optional — requires the `better-sqlite3` package
   type ApiKeyStorageAdapter,
   type ApiKey,
   type ApiKeyPublic,
@@ -1436,10 +1446,13 @@ Methods may return synchronously or as promises — `KeyStore` awaits results ei
 ```ts
 class KeyStore {
   /**
-   * Pass an ApiKeyStorageAdapter for any backend, or a string path to fall back
-   * to a SqliteKeyStorage at that path (backwards compatible).
+   * Pass an ApiKeyStorageAdapter for any backend, or a string path to
+   * construct a FileKeyStorage at that path. A `.db` extension is silently
+   * rewritten to `.json` for backwards compatibility — old SQLite-backed
+   * `station-keys.db` files are NOT auto-migrated; createStation logs a
+   * warning if it detects one.
    */
-  constructor(storageOrDbPath: ApiKeyStorageAdapter | string);
+  constructor(storageOrPath: ApiKeyStorageAdapter | string);
 
   create(name: string, scopes?: string[]): Promise<{ key: string; record: ApiKey }>;
   verify(rawKey: string): Promise<ApiKey | null>;
@@ -1449,21 +1462,98 @@ class KeyStore {
 }
 ```
 
-**Breaking change:** all `KeyStore` methods are async. Direct callers must `await` (the dashboard / Tauri sidecar already do).
+All `KeyStore` methods are async. Direct callers must `await` (the dashboard / Tauri sidecar already do).
 
 #### Built-in implementations
 
 ```ts
-class SqliteKeyStorage implements ApiKeyStorageAdapter {
-  constructor(options: { dbPath: string; tableName?: string });
+class FileKeyStorage implements ApiKeyStorageAdapter {
+  constructor(options: { filePath: string });
 }
 
 class MemoryKeyStorage implements ApiKeyStorageAdapter {
   constructor();
 }
+
+// Optional — requires the `better-sqlite3` package to be installed.
+// Lazy-loaded via createRequire; throws a helpful "npm install better-sqlite3"
+// error if used without the package.
+class SqliteKeyStorage implements ApiKeyStorageAdapter {
+  constructor(options: { dbPath: string; tableName?: string });
+}
 ```
 
-`SqliteKeyStorage` is the default when station-kit boots without a `keyStorage` configured. `MemoryKeyStorage` is intended for tests and ephemeral deployments — keys do not survive process restart.
+`FileKeyStorage` is the default when station-kit boots without a `keyStorage` configured (JSON file, fsync'd tmp+rename, `0o600`/`0o700` perms, no native deps). Single-process only — for multi-process or high-throughput deployments, implement your own `ApiKeyStorageAdapter`. `MemoryKeyStorage` is intended for tests and ephemeral deployments — keys do not survive process restart. `SqliteKeyStorage` remains as an opt-in adapter for users who want SQLite specifically.
+
+### 7.6 LogStore (run log storage)
+
+Run logs live behind a pluggable `LogStorageAdapter`. The `LogStore` class is a thin wrapper that:
+- Treats `add()` as fire-and-forget — adapter throws and rejections are caught at the boundary so a slow or failing log backend can never crash a signal runner.
+- Exposes `get(runId): Promise<LogEntry[]>` — callers must `await`.
+- Awaits `adapter.close?()` once on graceful shutdown (NOT on `SIGKILL`).
+
+```ts
+import {
+  LogStore,
+  FileLogStorage,
+  MemoryLogStorage,
+  type LogStorageAdapter,
+  type LogEntry,
+} from "station-kit/server";
+
+interface LogStorageAdapter {
+  add(entry: LogEntry): Promise<void> | void;
+  get(runId: string): Promise<LogEntry[]> | LogEntry[];
+  close?(): Promise<void> | void;
+}
+```
+
+**Contract:** `get(runId)` must return entries for that run in append order. Routes that aggregate across runs may re-sort by timestamp. Adapters needing durability guarantees (queues, retries, batching) implement that internally.
+
+#### Built-in implementations
+
+```ts
+class FileLogStorage implements LogStorageAdapter {
+  constructor(options: {
+    filePath: string;
+    onError?: (err: unknown) => void;  // surfaces background write failures
+  });
+}
+
+class MemoryLogStorage implements LogStorageAdapter {
+  constructor();
+}
+```
+
+`FileLogStorage` is the default — append-only JSONL at `<dataDir>/station-logs.jsonl`, single-process only. The default `onError` (when wired through `createStation`) routes failures to `console.error`. `MemoryLogStorage` is for tests; logs do not survive restart. The legacy SQLite-backed log store has been removed; an old `station-logs.db` triggers a startup warning from `createStation`.
+
+#### Configuring custom storage
+
+```ts
+import { defineConfig, type LogStorageAdapter, type LogEntry } from "station-kit";
+
+class PostgresLogStorage implements LogStorageAdapter {
+  constructor(private pool: Pool) {}
+  async add(entry: LogEntry) {
+    await this.pool.query(
+      "INSERT INTO run_logs (run_id, signal_name, level, message, ts) VALUES ($1,$2,$3,$4,$5)",
+      [entry.runId, entry.signalName, entry.level, entry.message, entry.timestamp],
+    );
+  }
+  async get(runId: string) {
+    const { rows } = await this.pool.query(
+      "SELECT run_id AS \"runId\", signal_name AS \"signalName\", level, message, ts AS timestamp FROM run_logs WHERE run_id = $1 ORDER BY id",
+      [runId],
+    );
+    return rows;
+  }
+}
+
+export default defineConfig({
+  logStorage: new PostgresLogStorage(pool),
+  // ...
+});
+```
 
 #### Configuring custom storage
 

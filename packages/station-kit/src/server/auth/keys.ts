@@ -1,5 +1,15 @@
 import crypto from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+  writeSync,
+} from "node:fs";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
 
@@ -42,8 +52,15 @@ export interface FileKeyStorageOptions {
  * server when no `keyStorage` is configured. Has no native dependencies —
  * works on any Node 18+ install without compiling bindings.
  *
- * For high-volume deployments, implement `ApiKeyStorageAdapter` against
- * Postgres / MySQL / Redis and pass it to `KeyStore` directly.
+ * Crash-safety: writes go through a fsync'd tmp-file + rename, with a
+ * second fsync on the parent directory so the rename itself survives
+ * power loss. The keys file is created with `0o600` and the parent dir
+ * with `0o700` so a default umask doesn't expose key metadata.
+ *
+ * Single-process only: do not point two `createStation` instances at
+ * the same file or last-rename-wins will silently clobber writes. For
+ * multi-process or high-volume deployments, implement
+ * `ApiKeyStorageAdapter` against Postgres / MySQL / Redis.
  */
 export class FileKeyStorage implements ApiKeyStorageAdapter {
   private filePath: string;
@@ -51,7 +68,7 @@ export class FileKeyStorage implements ApiKeyStorageAdapter {
 
   constructor(options: FileKeyStorageOptions) {
     this.filePath = options.filePath;
-    mkdirSync(dirname(this.filePath), { recursive: true });
+    mkdirSync(dirname(this.filePath), { recursive: true, mode: 0o700 });
     this.load();
   }
 
@@ -70,11 +87,30 @@ export class FileKeyStorage implements ApiKeyStorageAdapter {
 
   private flush(): void {
     const tmp = `${this.filePath}.tmp`;
-    writeFileSync(
-      tmp,
-      JSON.stringify(Array.from(this.records.values()), null, 2),
-    );
+    const body = JSON.stringify(Array.from(this.records.values()), null, 2);
+    // Write tmp file with fsync so its bytes are durable before rename.
+    const fd = openSync(tmp, "w", 0o600);
+    try {
+      writeSync(fd, body);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
     renameSync(tmp, this.filePath);
+    // fsync the parent directory so the rename's directory entry survives
+    // a crash. Best-effort: opening a directory for fsync isn't supported
+    // on every platform (notably Windows), so swallow errors.
+    try {
+      const dirFd = openSync(dirname(this.filePath), "r");
+      try {
+        fsyncSync(dirFd);
+      } finally {
+        closeSync(dirFd);
+      }
+    } catch {
+      // Platform doesn't support directory fsync; rename + tmp fsync
+      // already give us most of the durability we can offer.
+    }
   }
 
   insert(record: ApiKey): void {

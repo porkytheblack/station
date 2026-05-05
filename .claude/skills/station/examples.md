@@ -1891,11 +1891,16 @@ export default defineConfig({
 If you instantiate a `KeyStore` outside the server (scripts, custom tooling), every method is async:
 
 ```ts
-import { KeyStore, SqliteKeyStorage } from "station-kit/server";
+import { KeyStore, FileKeyStorage } from "station-kit/server";
 
-const store = new KeyStore(new SqliteKeyStorage({ dbPath: "./keys.db" }));
-// String overload still works for backwards compat:
-// const store = new KeyStore("./keys.db");
+const store = new KeyStore(new FileKeyStorage({ filePath: "./keys.json" }));
+// String overload also works (defaults to FileKeyStorage; .db is silently
+// rewritten to .json for backwards compat):
+// const store = new KeyStore("./keys.json");
+//
+// For SQLite, install `better-sqlite3` separately and use:
+// import { SqliteKeyStorage } from "station-kit/server";
+// const store = new KeyStore(new SqliteKeyStorage({ dbPath: "./keys.db" }));
 
 const { key, record } = await store.create("ci-deploy", ["trigger"]);
 console.log("Issued", record.id, "→", key);  // "key" is shown only here
@@ -1965,9 +1970,19 @@ import { validateDynamicSpec } from "station-broadcast";
 // Custom API key storage
 import {
   KeyStore,
-  SqliteKeyStorage,
-  MemoryKeyStorage,
+  FileKeyStorage,        // default — JSON file, no native deps
+  MemoryKeyStorage,      // tests / ephemeral
+  SqliteKeyStorage,      // optional — requires `better-sqlite3` to be installed
   type ApiKeyStorageAdapter,
+} from "station-kit/server";
+
+// Custom run log storage
+import {
+  LogStore,
+  FileLogStorage,        // default — append-only JSONL, single-process only
+  MemoryLogStorage,      // tests / ephemeral
+  type LogStorageAdapter,
+  type LogEntry,
 } from "station-kit/server";
 ```
 

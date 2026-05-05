@@ -1,11 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { platform } from "node:os";
 import {
   LogStore,
-  JsonlLogStorage,
+  FileLogStorage,
   MemoryLogStorage,
   type LogStorageAdapter,
 } from "../../src/server/log-store.js";
@@ -21,10 +22,10 @@ function entry(runId: string, message: string): LogEntry {
   };
 }
 
-function freshJsonl() {
+function freshFile() {
   const dir = mkdtempSync(join(tmpdir(), "station-logs-"));
   const filePath = join(dir, "logs.jsonl");
-  const storage = new JsonlLogStorage({ filePath });
+  const storage = new FileLogStorage({ filePath });
   return {
     storage,
     filePath,
@@ -44,7 +45,7 @@ const backends: {
   };
 }[] = [
   { name: "memory", make: () => ({ storage: new MemoryLogStorage(), cleanup: () => {} }) },
-  { name: "jsonl", make: freshJsonl },
+  { name: "file", make: freshFile },
 ];
 
 for (const { name, make } of backends) {
@@ -80,16 +81,16 @@ for (const { name, make } of backends) {
   });
 }
 
-test("JsonlLogStorage persists across instances", async () => {
+test("FileLogStorage persists across instances", async () => {
   const dir = mkdtempSync(join(tmpdir(), "station-logs-"));
   const filePath = join(dir, "logs.jsonl");
   try {
-    const a = new LogStore(new JsonlLogStorage({ filePath }));
+    const a = new LogStore(new FileLogStorage({ filePath }));
     a.add(entry("r1", "first"));
     a.add(entry("r1", "second"));
     await a.close();
 
-    const b = new LogStore(new JsonlLogStorage({ filePath }));
+    const b = new LogStore(new FileLogStorage({ filePath }));
     const logs = await b.get("r1");
     assert.equal(logs.length, 2);
     assert.deepEqual(logs.map((e) => e.message), ["first", "second"]);
@@ -99,11 +100,11 @@ test("JsonlLogStorage persists across instances", async () => {
   }
 });
 
-test("JsonlLogStorage swaps .db path to .jsonl for backwards compat", async () => {
+test("FileLogStorage swaps .db path to .jsonl for backwards compat", async () => {
   const dir = mkdtempSync(join(tmpdir(), "station-logs-"));
   const dbPath = join(dir, "logs.db");
   try {
-    const store = new LogStore(new JsonlLogStorage({ filePath: dbPath }));
+    const store = new LogStore(new FileLogStorage({ filePath: dbPath }));
     store.add(entry("r1", "compat"));
     await store.close();
 
@@ -115,7 +116,7 @@ test("JsonlLogStorage swaps .db path to .jsonl for backwards compat", async () =
   }
 });
 
-test("LogStore(string) constructs a JsonlLogStorage", async () => {
+test("LogStore(string) constructs a FileLogStorage", async () => {
   const dir = mkdtempSync(join(tmpdir(), "station-logs-"));
   const filePath = join(dir, "logs.jsonl");
   try {
@@ -186,4 +187,45 @@ test("LogStore.close awaits adapter close", async () => {
   const store = new LogStore(adapter);
   await store.close();
   assert.equal(closed, true);
+});
+
+test("FileLogStorage.onError fires on background write failure", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "station-logs-"));
+  const filePath = join(dir, "logs.jsonl");
+  const errors: unknown[] = [];
+  try {
+    const storage = new FileLogStorage({
+      filePath,
+      onError: (err) => errors.push(err),
+    });
+    // Force an EISDIR by removing the file and putting a directory in its
+    // place after construction has already created the parent dir.
+    rmSync(dir, { recursive: true, force: true });
+    storage.add(entry("r1", "will-fail"));
+    await storage.close();
+    assert.ok(errors.length >= 1, `expected at least one error, got ${errors.length}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("FileLogStorage creates dir/file with restrictive modes (POSIX only)", async () => {
+  if (platform() === "win32") return; // POSIX file modes don't apply.
+  const dir = mkdtempSync(join(tmpdir(), "station-logs-"));
+  const subdir = join(dir, "nested");
+  const filePath = join(subdir, "logs.jsonl");
+  try {
+    const storage = new FileLogStorage({ filePath });
+    storage.add(entry("r1", "perm-test"));
+    await storage.close();
+
+    const dirMode = statSync(subdir).mode & 0o777;
+    const fileMode = statSync(filePath).mode & 0o777;
+    // Allow the umask to subtract bits but ensure we never created a
+    // world-readable or group-readable artifact.
+    assert.equal(dirMode & 0o077, 0, `dir mode ${dirMode.toString(8)} leaks group/other access`);
+    assert.equal(fileMode & 0o077, 0, `file mode ${fileMode.toString(8)} leaks group/other access`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

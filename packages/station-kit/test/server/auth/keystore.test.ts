@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { tmpdir, platform } from "node:os";
 import { join } from "node:path";
 import {
   KeyStore,
@@ -143,6 +143,24 @@ test("backwards-compat: KeyStore(string) with .db path swaps to .json", async ()
     const verified = await ks.verify(key);
     assert.ok(verified);
     await ks.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("FileKeyStorage creates dir/file with restrictive modes (POSIX only)", async () => {
+  if (platform() === "win32") return;
+  const dir = mkdtempSync(join(tmpdir(), "station-keys-"));
+  const subdir = join(dir, "nested");
+  const filePath = join(subdir, "keys.json");
+  try {
+    const ks = new KeyStore(new FileKeyStorage({ filePath }));
+    await ks.create("perm-test");
+
+    const dirMode = statSync(subdir).mode & 0o777;
+    const fileMode = statSync(filePath).mode & 0o777;
+    assert.equal(dirMode & 0o077, 0, `dir mode ${dirMode.toString(8)} leaks group/other access`);
+    assert.equal(fileMode & 0o077, 0, `file mode ${fileMode.toString(8)} leaks group/other access`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

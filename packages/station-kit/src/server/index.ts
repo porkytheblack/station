@@ -18,7 +18,7 @@ import { ensureStationDir } from "../station-dir.js";
 import { WebSocketHub } from "./ws.js";
 import { SSEHub } from "./sse.js";
 import { LogBuffer } from "./log-buffer.js";
-import { LogStore, JsonlLogStorage } from "./log-store.js";
+import { LogStore, FileLogStorage } from "./log-store.js";
 import { StationSignalSubscriber, StationBroadcastSubscriber } from "./subscriber.js";
 import { healthRoutes } from "./routes/health.js";
 import { signalRoutes } from "./routes/signals.js";
@@ -56,13 +56,14 @@ export type {
 } from "./auth/keys.js";
 export {
   LogStore,
-  JsonlLogStorage,
+  FileLogStorage,
   MemoryLogStorage,
 } from "./log-store.js";
 export type {
   LogStorageAdapter,
-  JsonlLogStorageOptions,
+  FileLogStorageOptions,
 } from "./log-store.js";
+export type { LogEntry } from "./log-buffer.js";
 
 export interface StationInstance {
   start(): Promise<void>;
@@ -80,11 +81,16 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
 
   const { dataDir } = ensureStationDir(cwd, config.stationDir);
 
+  warnIfLegacySqliteFiles(dataDir);
+
   const wsHub = new WebSocketHub();
   const sseHub = new SSEHub();
   const logBuffer = new LogBuffer();
   const logStore = new LogStore(
-    config.logStorage ?? new JsonlLogStorage({ filePath: resolve(dataDir, "station-logs.jsonl") }),
+    config.logStorage ?? new FileLogStorage({
+      filePath: resolve(dataDir, "station-logs.jsonl"),
+      onError: (err) => console.error("[station] log write failed:", err),
+    }),
   );
 
   // Auth: create KeyStore and SessionConfig if auth is configured
@@ -421,4 +427,28 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
       }
     },
   };
+}
+
+// Existing deployments that ran older Station versions persisted keys
+// to `station-keys.db` (SQLite) and run logs to `station-logs.db`. The
+// new defaults are `station-keys.json` and `station-logs.jsonl`; the
+// legacy files are NOT auto-migrated. Emit a one-time warning so an
+// upgrade doesn't silently appear to wipe a user's API keys.
+function warnIfLegacySqliteFiles(dataDir: string): void {
+  const legacy: { file: string; replacement: string }[] = [
+    { file: "station-keys.db", replacement: "station-keys.json" },
+    { file: "station-logs.db", replacement: "station-logs.jsonl" },
+  ];
+  for (const { file, replacement } of legacy) {
+    const legacyPath = resolve(dataDir, file);
+    if (!existsSync(legacyPath)) continue;
+    const replacementPath = resolve(dataDir, replacement);
+    if (existsSync(replacementPath)) continue;
+    console.warn(
+      `[station] Legacy ${file} detected at ${legacyPath} but no ${replacement} found. ` +
+      `Station no longer reads SQLite-backed defaults; data in ${file} will not be loaded. ` +
+      `If you need the contents, export them with the better-sqlite3 CLI before upgrading. ` +
+      `To suppress this warning, delete or rename ${file}.`,
+    );
+  }
 }

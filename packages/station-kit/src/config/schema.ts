@@ -43,11 +43,11 @@ export interface StationConfig {
    */
   scheduleAdapter?: ScheduleAdapter;
   /**
-   * Pluggable storage backend for run logs. Defaults to an append-only
-   * JSONL file at `<dataDir>/station-logs.jsonl` (no native dependencies).
-   * Provide a custom adapter to persist logs in Postgres, MySQL, Redis,
-   * S3, or any other backend — required for multi-process / distributed
-   * deployments where the JSONL file isn't shared across replicas.
+   * Pluggable storage backend for run logs. Defaults to a `FileLogStorage`
+   * (append-only JSONL file at `<dataDir>/station-logs.jsonl`, no native
+   * dependencies). The default is single-process only — for multi-process
+   * deployments or guaranteed durability, implement `LogStorageAdapter`
+   * against Postgres, MySQL, Redis, S3, etc., and pass it here.
    */
   logStorage?: LogStorageAdapter;
   signalsDir?: string;

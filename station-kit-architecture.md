@@ -1061,7 +1061,7 @@ interface AdapterConnection {
 }
 ```
 
-Alternatively (and simpler): station-kit creates its own database connection for auth tables using the same connection config. This avoids adding a `getConnection()` method to the adapter interface. Station-kit already depends on `better-sqlite3` directly for its log store -- it would similarly depend on `pg` or `mysql2` when using those adapters.
+Alternatively (and simpler): station-kit creates its own database connection for auth tables using the same connection config. This avoids adding a `getConnection()` method to the adapter interface. Note that station-kit no longer depends on `better-sqlite3` for its log or key stores — both default to pure-JS file-backed adapters (`FileLogStorage`, `FileKeyStorage`); production deployments wanting durable, multi-process key/log storage pass a custom `ApiKeyStorageAdapter` / `LogStorageAdapter` (e.g. backed by `pg` or `mysql2`) via `auth.keyStorage` / `logStorage` in the station config.
 
 Recommendation: Keep auth tables managed by station-kit using its own connection. The adapter interface stays clean.
 
