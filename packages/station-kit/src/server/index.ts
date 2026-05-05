@@ -18,7 +18,7 @@ import { ensureStationDir } from "../station-dir.js";
 import { WebSocketHub } from "./ws.js";
 import { SSEHub } from "./sse.js";
 import { LogBuffer } from "./log-buffer.js";
-import { LogStore } from "./log-store.js";
+import { LogStore, JsonlLogStorage } from "./log-store.js";
 import { StationSignalSubscriber, StationBroadcastSubscriber } from "./subscriber.js";
 import { healthRoutes } from "./routes/health.js";
 import { signalRoutes } from "./routes/signals.js";
@@ -54,6 +54,15 @@ export type {
   FileKeyStorageOptions,
   SqliteKeyStorageOptions,
 } from "./auth/keys.js";
+export {
+  LogStore,
+  JsonlLogStorage,
+  MemoryLogStorage,
+} from "./log-store.js";
+export type {
+  LogStorageAdapter,
+  JsonlLogStorageOptions,
+} from "./log-store.js";
 
 export interface StationInstance {
   start(): Promise<void>;
@@ -74,7 +83,9 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
   const wsHub = new WebSocketHub();
   const sseHub = new SSEHub();
   const logBuffer = new LogBuffer();
-  const logStore = new LogStore(resolve(dataDir, "station-logs.jsonl"));
+  const logStore = new LogStore(
+    config.logStorage ?? new JsonlLogStorage({ filePath: resolve(dataDir, "station-logs.jsonl") }),
+  );
 
   // Auth: create KeyStore and SessionConfig if auth is configured
   let keyStore: KeyStore | undefined;

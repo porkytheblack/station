@@ -33,7 +33,7 @@
     "build": "tsc && next build && cp -r .next/static .next/standalone/packages/station-kit/.next/static",
     "dev": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test test/**/*.test.ts"
+    "test": "node --import tsx --test \"test/**/*.test.ts\""
   },
   "peerDependencies": {
     "station-broadcast": "workspace:*",

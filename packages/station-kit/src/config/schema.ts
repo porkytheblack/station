@@ -2,6 +2,7 @@ import type { SignalQueueAdapter } from "station-signal";
 import type { BroadcastQueueAdapter } from "station-broadcast";
 import type { ScheduleAdapter } from "station-schedules";
 import type { ApiKeyStorageAdapter } from "../server/auth/keys.js";
+import type { LogStorageAdapter } from "../server/log-store.js";
 
 export interface AuthConfig {
   username: string;
@@ -41,6 +42,14 @@ export interface StationConfig {
    * schedules are persisted here and reconciled by both runners.
    */
   scheduleAdapter?: ScheduleAdapter;
+  /**
+   * Pluggable storage backend for run logs. Defaults to an append-only
+   * JSONL file at `<dataDir>/station-logs.jsonl` (no native dependencies).
+   * Provide a custom adapter to persist logs in Postgres, MySQL, Redis,
+   * S3, or any other backend — required for multi-process / distributed
+   * deployments where the JSONL file isn't shared across replicas.
+   */
+  logStorage?: LogStorageAdapter;
   signalsDir?: string;
   broadcastsDir?: string;
   stationDir: string;
@@ -100,6 +109,7 @@ export function resolveConfig(input: StationUserConfig): StationConfig {
     adapter: input.adapter,
     broadcastAdapter: input.broadcastAdapter,
     scheduleAdapter: input.scheduleAdapter,
+    logStorage: input.logStorage,
     signalsDir: input.signalsDir,
     broadcastsDir: input.broadcastsDir,
     stationDir: input.stationDir ?? DEFAULTS.stationDir,

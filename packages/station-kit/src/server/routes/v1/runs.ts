@@ -78,7 +78,7 @@ export function v1RunRoutes(deps: V1RunDeps) {
 
   app.get("/runs/:id/logs", async (c) => {
     const id = c.req.param("id");
-    const logs = deps.logStore?.get(id) ?? deps.logBuffer.get(id);
+    const logs = deps.logStore ? await deps.logStore.get(id) : deps.logBuffer.get(id);
     return c.json({ data: logs });
   });
 
