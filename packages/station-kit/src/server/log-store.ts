@@ -1,56 +1,72 @@
-import Database from "better-sqlite3";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import type { LogEntry } from "./log-buffer.js";
 
+/**
+ * Append-only JSONL log store. Each line is a JSON-serialized LogEntry.
+ * Existing entries are loaded into memory on construction; appends are
+ * serialized through an async write queue so concurrent writers can't
+ * interleave bytes.
+ *
+ * No native dependencies — works with any Node 18+ install without
+ * needing to compile native bindings at install time.
+ */
 export class LogStore {
-  private db: Database.Database;
-  private insertStmt: Database.Statement;
-  private selectStmt: Database.Statement;
+  private path: string;
+  private byRunId = new Map<string, LogEntry[]>();
+  private writeQueue: Promise<void> = Promise.resolve();
 
-  constructor(dbPath: string) {
-    this.db = new Database(dbPath);
-    this.db.pragma("journal_mode = WAL");
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        run_id TEXT NOT NULL,
-        signal_name TEXT NOT NULL,
-        level TEXT NOT NULL,
-        message TEXT NOT NULL,
-        timestamp TEXT NOT NULL
-      )
-    `);
-    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_logs_run_id ON logs(run_id)`);
+  constructor(path: string) {
+    // Backwards compat: callers used to pass `.db` paths for the sqlite store.
+    // Transparently swap to `.jsonl` so existing config files keep working.
+    this.path = path.endsWith(".db") ? path.replace(/\.db$/, ".jsonl") : path;
+    mkdirSync(dirname(this.path), { recursive: true });
+    this.replay();
+  }
 
-    this.insertStmt = this.db.prepare(
-      `INSERT INTO logs (run_id, signal_name, level, message, timestamp) VALUES (?, ?, ?, ?, ?)`,
-    );
-    this.selectStmt = this.db.prepare(
-      `SELECT run_id, signal_name, level, message, timestamp FROM logs WHERE run_id = ? ORDER BY id`,
-    );
+  private replay(): void {
+    if (!existsSync(this.path)) return;
+    let content: string;
+    try {
+      content = readFileSync(this.path, "utf8");
+    } catch {
+      return;
+    }
+    const lines = content.split("\n");
+    for (const line of lines) {
+      if (!line) continue;
+      try {
+        const entry = JSON.parse(line) as LogEntry;
+        this.indexEntry(entry);
+      } catch {
+        // Skip malformed line; a partial write may have left a truncated tail.
+      }
+    }
+  }
+
+  private indexEntry(entry: LogEntry): void {
+    let entries = this.byRunId.get(entry.runId);
+    if (!entries) {
+      entries = [];
+      this.byRunId.set(entry.runId, entries);
+    }
+    entries.push(entry);
   }
 
   add(entry: LogEntry): void {
-    this.insertStmt.run(entry.runId, entry.signalName, entry.level, entry.message, entry.timestamp);
+    this.indexEntry(entry);
+    const line = JSON.stringify(entry) + "\n";
+    this.writeQueue = this.writeQueue.then(
+      () => appendFile(this.path, line).catch(() => {}),
+    );
   }
 
   get(runId: string): LogEntry[] {
-    const rows = this.selectStmt.all(runId) as Array<{
-      run_id: string;
-      signal_name: string;
-      level: string;
-      message: string;
-      timestamp: string;
-    }>;
-    return rows.map((row) => ({
-      runId: row.run_id,
-      signalName: row.signal_name,
-      level: row.level as "stdout" | "stderr",
-      message: row.message,
-      timestamp: row.timestamp,
-    }));
+    return this.byRunId.get(runId) ?? [];
   }
 
-  close(): void {
-    this.db.close();
+  async close(): Promise<void> {
+    await this.writeQueue;
   }
 }

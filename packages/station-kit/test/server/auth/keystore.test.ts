@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   KeyStore,
+  FileKeyStorage,
   MemoryKeyStorage,
   SqliteKeyStorage,
   type ApiKeyStorageAdapter,
@@ -23,8 +24,21 @@ function freshSqlite() {
   };
 }
 
+function freshFile() {
+  const dir = mkdtempSync(join(tmpdir(), "station-keys-"));
+  const filePath = join(dir, "keys.json");
+  const storage = new FileKeyStorage({ filePath });
+  return {
+    storage,
+    cleanup: () => {
+      rmSync(dir, { recursive: true, force: true });
+    },
+  };
+}
+
 const backends: { name: string; make: () => { storage: ApiKeyStorageAdapter; cleanup: () => void } }[] = [
   { name: "memory", make: () => ({ storage: new MemoryKeyStorage(), cleanup: () => {} }) },
+  { name: "file", make: freshFile },
   { name: "sqlite", make: freshSqlite },
 ];
 
@@ -90,12 +104,42 @@ for (const { name, make } of backends) {
   });
 }
 
-test("backwards-compat: KeyStore(string) constructs a SqliteKeyStorage", async () => {
+test("FileKeyStorage persists across instances", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "station-keys-"));
+  const filePath = join(dir, "keys.json");
+  try {
+    const ks1 = new KeyStore(new FileKeyStorage({ filePath }));
+    const { key } = await ks1.create("persisted");
+
+    const ks2 = new KeyStore(new FileKeyStorage({ filePath }));
+    const verified = await ks2.verify(key);
+    assert.ok(verified);
+    assert.equal(verified.name, "persisted");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("backwards-compat: KeyStore(string) constructs a FileKeyStorage", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "station-keys-"));
+  const filePath = join(dir, "keys.json");
+  try {
+    const ks = new KeyStore(filePath);
+    const { key } = await ks.create("compat");
+    const verified = await ks.verify(key);
+    assert.ok(verified);
+    await ks.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("backwards-compat: KeyStore(string) with .db path swaps to .json", async () => {
   const dir = mkdtempSync(join(tmpdir(), "station-keys-"));
   const dbPath = join(dir, "keys.db");
   try {
     const ks = new KeyStore(dbPath);
-    const { key } = await ks.create("compat");
+    const { key } = await ks.create("compat-db");
     const verified = await ks.verify(key);
     assert.ok(verified);
     await ks.close();

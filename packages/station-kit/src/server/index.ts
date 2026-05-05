@@ -24,7 +24,7 @@ import { healthRoutes } from "./routes/health.js";
 import { signalRoutes } from "./routes/signals.js";
 import { runRoutes } from "./routes/runs.js";
 import { broadcastRoutes } from "./routes/broadcasts.js";
-import { KeyStore, SqliteKeyStorage } from "./auth/keys.js";
+import { KeyStore, FileKeyStorage } from "./auth/keys.js";
 import { verifySessionToken, verifyCredentials, createSessionToken, type SessionConfig } from "./auth/session.js";
 import { authResolver } from "./middleware/auth.js";
 import { requireScope } from "./middleware/scope-guard.js";
@@ -43,6 +43,7 @@ import { v1ExpressionRoutes } from "./routes/v1/expressions.js";
 
 export {
   KeyStore,
+  FileKeyStorage,
   SqliteKeyStorage,
   MemoryKeyStorage,
 } from "./auth/keys.js";
@@ -50,6 +51,7 @@ export type {
   ApiKey,
   ApiKeyPublic,
   ApiKeyStorageAdapter,
+  FileKeyStorageOptions,
   SqliteKeyStorageOptions,
 } from "./auth/keys.js";
 
@@ -72,7 +74,7 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
   const wsHub = new WebSocketHub();
   const sseHub = new SSEHub();
   const logBuffer = new LogBuffer();
-  const logStore = new LogStore(resolve(dataDir, "station-logs.db"));
+  const logStore = new LogStore(resolve(dataDir, "station-logs.jsonl"));
 
   // Auth: create KeyStore and SessionConfig if auth is configured
   let keyStore: KeyStore | undefined;
@@ -80,7 +82,7 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
 
   if (config.auth) {
     const storage = config.auth.keyStorage
-      ?? new SqliteKeyStorage({ dbPath: resolve(dataDir, "station-keys.db") });
+      ?? new FileKeyStorage({ filePath: resolve(dataDir, "station-keys.json") });
     keyStore = new KeyStore(storage);
     sessionConfig = {
       username: config.auth.username,
@@ -401,7 +403,7 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
       }
       wsHub.close();
       sseHub.close();
-      logStore.close();
+      await logStore.close();
       await keyStore?.close();
       if (httpServer) {
         httpServer.close();

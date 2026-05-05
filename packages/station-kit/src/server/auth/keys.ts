@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
-import Database from "better-sqlite3";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname } from "node:path";
 
 export interface ApiKey {
   id: string;
@@ -29,7 +31,90 @@ export interface ApiKeyStorageAdapter {
   close?(): Promise<void> | void;
 }
 
-// ─── SQLite default ─────────────────────────────────────────────────
+// ─── JSON file default ──────────────────────────────────────────────
+
+export interface FileKeyStorageOptions {
+  filePath: string;
+}
+
+/**
+ * Default ApiKeyStorageAdapter backed by a JSON file. Used by the Station
+ * server when no `keyStorage` is configured. Has no native dependencies —
+ * works on any Node 18+ install without compiling bindings.
+ *
+ * For high-volume deployments, implement `ApiKeyStorageAdapter` against
+ * Postgres / MySQL / Redis and pass it to `KeyStore` directly.
+ */
+export class FileKeyStorage implements ApiKeyStorageAdapter {
+  private filePath: string;
+  private records = new Map<string, ApiKey>();
+
+  constructor(options: FileKeyStorageOptions) {
+    this.filePath = options.filePath;
+    mkdirSync(dirname(this.filePath), { recursive: true });
+    this.load();
+  }
+
+  private load(): void {
+    if (!existsSync(this.filePath)) return;
+    try {
+      const raw = readFileSync(this.filePath, "utf8");
+      const data = JSON.parse(raw) as ApiKey[];
+      if (Array.isArray(data)) {
+        for (const r of data) this.records.set(r.id, r);
+      }
+    } catch {
+      // Corrupt or unreadable file — start fresh rather than throwing.
+    }
+  }
+
+  private flush(): void {
+    const tmp = `${this.filePath}.tmp`;
+    writeFileSync(
+      tmp,
+      JSON.stringify(Array.from(this.records.values()), null, 2),
+    );
+    renameSync(tmp, this.filePath);
+  }
+
+  insert(record: ApiKey): void {
+    this.records.set(record.id, { ...record });
+    this.flush();
+  }
+
+  findByHash(keyHash: string): ApiKey | null {
+    for (const r of this.records.values()) {
+      if (r.keyHash === keyHash) return { ...r };
+    }
+    return null;
+  }
+
+  list(): ApiKeyPublic[] {
+    return Array.from(this.records.values())
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .map((r) => {
+        const { keyHash: _h, ...rest } = r;
+        return rest;
+      });
+  }
+
+  touch(id: string, lastUsedIso: string): void {
+    const r = this.records.get(id);
+    if (!r) return;
+    r.lastUsed = lastUsedIso;
+    this.flush();
+  }
+
+  revoke(id: string): boolean {
+    const r = this.records.get(id);
+    if (!r) return false;
+    r.revoked = true;
+    this.flush();
+    return true;
+  }
+}
+
+// ─── SQLite (optional) ──────────────────────────────────────────────
 
 export interface SqliteKeyStorageOptions {
   dbPath: string;
@@ -37,13 +122,42 @@ export interface SqliteKeyStorageOptions {
   tableName?: string;
 }
 
+// Loaded lazily from `better-sqlite3` so the package isn't required at
+// install time. Users who don't construct SqliteKeyStorage never pay for it.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type BetterSqlite3Module = any;
+let cachedBetterSqlite3: BetterSqlite3Module | null = null;
+
+function loadBetterSqlite3(): BetterSqlite3Module {
+  if (cachedBetterSqlite3) return cachedBetterSqlite3;
+  try {
+    const requireFn = createRequire(import.meta.url);
+    cachedBetterSqlite3 = requireFn("better-sqlite3");
+    return cachedBetterSqlite3;
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `SqliteKeyStorage requires the optional 'better-sqlite3' package, ` +
+        `which isn't installed. Install it with:\n` +
+        `  npm install better-sqlite3\n` +
+        `Or use FileKeyStorage (default) / MemoryKeyStorage instead.\n` +
+        `Underlying error: ${reason}`,
+    );
+  }
+}
+
 /**
- * Default ApiKeyStorageAdapter backed by better-sqlite3. Used by the Station
- * server when no `keyStorage` is configured. For Postgres / MySQL / Redis,
- * implement `ApiKeyStorageAdapter` and pass it to `KeyStore` directly.
+ * Optional ApiKeyStorageAdapter backed by better-sqlite3. Requires the
+ * `better-sqlite3` package to be installed separately — Station Kit no
+ * longer ships it as a hard dependency.
+ *
+ * Prefer `FileKeyStorage` (the default) unless you specifically need
+ * sqlite features (concurrent reads from multiple processes, large
+ * key catalogs, etc.).
  */
 export class SqliteKeyStorage implements ApiKeyStorageAdapter {
-  private db: Database.Database;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private db: any;
   private table: string;
 
   constructor(options: SqliteKeyStorageOptions) {
@@ -52,6 +166,7 @@ export class SqliteKeyStorage implements ApiKeyStorageAdapter {
       throw new Error(`Invalid table name "${tableName}"`);
     }
     this.table = tableName;
+    const Database = loadBetterSqlite3();
     this.db = new Database(options.dbPath);
     this.db.pragma("journal_mode = WAL");
     this.db.exec(`
@@ -186,14 +301,18 @@ export class KeyStore {
 
   /**
    * Pass an `ApiKeyStorageAdapter` for any backend. The string overload is
-   * retained for backwards compatibility — it constructs a SqliteKeyStorage
-   * at the given path.
+   * retained for backwards compatibility — it constructs a FileKeyStorage
+   * at the given path. (Previously this returned a SqliteKeyStorage; SQLite
+   * is now opt-in to avoid native build dependencies.)
    */
-  constructor(storageOrDbPath: ApiKeyStorageAdapter | string) {
-    if (typeof storageOrDbPath === "string") {
-      this.storage = new SqliteKeyStorage({ dbPath: storageOrDbPath });
+  constructor(storageOrPath: ApiKeyStorageAdapter | string) {
+    if (typeof storageOrPath === "string") {
+      const filePath = storageOrPath.endsWith(".db")
+        ? storageOrPath.replace(/\.db$/, ".json")
+        : storageOrPath;
+      this.storage = new FileKeyStorage({ filePath });
     } else {
-      this.storage = storageOrDbPath;
+      this.storage = storageOrPath;
     }
   }
 

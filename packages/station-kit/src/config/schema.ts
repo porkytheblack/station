@@ -8,9 +8,10 @@ export interface AuthConfig {
   password: string;
   sessionTtlMs?: number;
   /**
-   * Pluggable storage backend for API keys. Defaults to a SQLite store at
-   * `<dataDir>/station-keys.db`. Provide a custom adapter to host keys in
-   * Postgres, MySQL, Redis, etc.
+   * Pluggable storage backend for API keys. Defaults to a JSON file at
+   * `<dataDir>/station-keys.json` (no native dependencies required).
+   * Provide a custom adapter to host keys in SQLite, Postgres, MySQL,
+   * Redis, etc.
    */
   keyStorage?: ApiKeyStorageAdapter;
 }
