@@ -6,6 +6,7 @@ Type-safe background jobs, recurring tasks, and DAG workflows for TypeScript.
 
 - **Signals** — Define jobs with Zod schemas, trigger them from anywhere, execute in isolated child processes with timeout enforcement and automatic retries
 - **Broadcasts** — DAG workflow orchestration with conditional branching, fan-out/fan-in, and failure policies
+- **Beacons** — Long-running, supervised processes (servers, pollers, clients) with restart policies, exponential backoff, heartbeat stall detection, and graceful shutdown
 - **Recurring jobs** — Simple interval syntax (`"every 5m"`, `"every 1h"`)
 - **Four adapter backends** — SQLite, PostgreSQL, MySQL, Redis (or bring your own)
 - **Dashboard** — Real-time monitoring UI with auth, WebSocket updates, and a REST API
@@ -66,6 +67,7 @@ await sendEmail.trigger({
 |---|---|
 | [`station-signal`](./packages/station-signal) | Core framework — signals, runner, queue, adapters |
 | [`station-broadcast`](./packages/station-broadcast) | DAG workflow orchestration for signals |
+| [`station-beacon`](./packages/station-beacon) | Long-running supervised processes — servers, pollers, clients |
 | [`station-adapter-sqlite`](./packages/station-adapter-sqlite) | SQLite adapter (better-sqlite3) |
 | [`station-adapter-postgres`](./packages/station-adapter-postgres) | PostgreSQL adapter (pg) |
 | [`station-adapter-mysql`](./packages/station-adapter-mysql) | MySQL adapter (mysql2) |

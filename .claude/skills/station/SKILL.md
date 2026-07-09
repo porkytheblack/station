@@ -13,6 +13,7 @@ You are an expert Station developer specializing in building type-safe backgroun
 Triggers include:
 
 - Defining or triggering signals / file-defined broadcasts.
+- "Run a server / poller / long-running client", "keep something alive", "supervise a process", "restart on crash", "daemon", "beacon" — the long-running primitive. See **Beacon Pattern** below and `examples/15-beacon`.
 - "Create a dynamic broadcast" / "edit a broadcast at runtime" / "validate a broadcast spec" — runtime-editable broadcasts persisted via the v1 API. See **Dynamic broadcasts** below and `api-reference.md` §9, `examples.md` §20.
 - "Schedule a signal", "schedule a broadcast", "edit a schedule", "preview next fire times" — runtime schedules, distinct from `.every()` in code. See **Schedules** below and `api-reference.md` §10, `examples.md` §21.
 - "Write an expression", "validate this expression", "what does `input.foo` mean" — Station's expression language used inside dynamic broadcasts. See **Expressions** below and `api-reference.md` §11, `examples.md` §22.
@@ -39,6 +40,8 @@ Triggers include:
 17. **`KeyStore` methods are async** — `create`, `verify`, `list`, `revoke`, `close` all return Promises. Anyone calling them directly must `await`. The `new KeyStore("path/to/file")` string constructor still works but now constructs a `FileKeyStorage` (JSON file, no native deps). A `.db` extension is silently rewritten to `.json`; old SQLite-backed `station-keys.db` files are NOT auto-migrated — see the legacy-files startup warning emitted by `createStation`.
 
 18. **`LogStore` is adapter-based** — `LogStorageAdapter` (`add`, `get`, optional `close`) wraps any backend. Default in `createStation` is `FileLogStorage` (append-only JSONL at `<dataDir>/station-logs.jsonl`, single-process only). Pass `logStorage` in `StationConfig` for Postgres / MySQL / Redis / S3 in production. `LogStore.get(runId)` returns `Promise<LogEntry[]>` — callers must await.
+
+19. **Beacons are the long-running primitive — import `beacon`/`z` from `station-beacon`.** A beacon is a supervised process (server/poller/client), not a job: it isn't triggered, it's started/stopped/restarted by the `BeaconRunner`, which keeps it alive per a restart policy. Use `.run(handler)` for a general long-running handler or `.poll(interval, fn)` for an interval loop — never both. One beacon per file, exported for auto-discovery. Long-running `.run()` handlers should watch `ctx.signal` and end with `await ctx.untilStopped()` (or their own loop); returning early is treated as a clean completion. `station-beacon` has `station-signal` as a peer dependency.
 
 ## Signal Pattern
 
@@ -168,6 +171,79 @@ export const pipeline = broadcast("etl-pipeline")
   })
   .onFailure("skip-downstream")
   .build();
+```
+
+## Beacon Pattern (long-running primitive)
+
+A **beacon** is a long-running, supervised process — a server, a poller, or a
+client to something. Where a signal runs to completion and exits, a beacon stays
+up. The `BeaconRunner` supervises each beacon in its own child process: restart
+policy, exponential backoff, heartbeat stall detection, and graceful shutdown.
+Import `beacon` and `z` from `station-beacon`.
+
+Two terminals: `.run(handler)` for a general long-running handler, and
+`.poll(interval, fn)` for a framework-managed interval loop.
+
+```ts
+import { beacon, z } from "station-beacon";
+import { createServer } from "node:http";
+
+// SERVER — stays alive until asked to stop
+export const webhookServer = beacon("webhook-server")
+  .config(z.object({ port: z.number().default(8080) }))
+  .restart("always")
+  .run(async (ctx) => {
+    const server = createServer(handler).listen(ctx.config.port);
+    ctx.ready();
+    ctx.onStop(() => server.close());
+    await ctx.untilStopped();
+  });
+
+// POLLER — fn runs every interval; can trigger signals
+export const priceWatcher = beacon("price-watcher")
+  .poll("30s", async (ctx) => {
+    const price = await fetchPrice({ signal: ctx.signal });
+    if (price > 100) await priceAlert.trigger({ price });
+  });
+
+// CLIENT — reconnects on failure with backoff + heartbeat stall detection
+export const streamConsumer = beacon("stream-consumer")
+  .restart("on-failure")
+  .backoff("1s", { max: "30s" })
+  .heartbeat("10s")
+  .run(async (ctx) => {
+    const conn = await connect();
+    ctx.ready();
+    for await (const msg of conn.stream({ signal: ctx.signal })) {
+      ctx.heartbeat();
+      await ingest.trigger(msg);
+    }
+  });
+```
+
+The handler `ctx`: `config`, `name`, `incarnation`, `signal` (AbortSignal that
+fires on stop), `ready()`, `heartbeat()`, `log(msg)`, `onStop(fn)`,
+`untilStopped()`.
+
+### Beacon Runner Setup
+
+```ts
+import path from "node:path";
+import { BeaconRunner, ConsoleBeaconSubscriber } from "station-beacon";
+
+const beaconRunner = new BeaconRunner({
+  beaconsDir: path.join(import.meta.dirname, "beacons"),
+  subscribers: [new ConsoleBeaconSubscriber()],
+  signalRunner, // optional: lets beacons trigger signals into the shared queue
+});
+
+await beaconRunner.start();
+
+// Runtime control — the supervisor reconciles toward desired state
+await beaconRunner.startBeacon("stream-consumer");   // or { config }
+await beaconRunner.stopBeacon("stream-consumer");
+await beaconRunner.restartBeacon("stream-consumer");
+const instance = await beaconRunner.getInstance("stream-consumer");
 ```
 
 ## Runner Setup
@@ -351,6 +427,22 @@ docker run -p 4400:4400 \
 | `.withInput(data)` | Default recurring input |
 | `.build()` | Finalize broadcast definition |
 
+## Beacon Builder Methods
+
+| Method | Description |
+|--------|-------------|
+| `.config(schema)` | Zod schema for config (validated before each start) |
+| `.withConfig(data)` | Default config when started without an override |
+| `.restart(policy)` | `"always"`, `"on-failure"` (default), `"never"` |
+| `.backoff(base, opts?)` | Exponential restart backoff; `opts`: `{ factor, max, resetAfter }` |
+| `.heartbeat(interval, opts?)` | Stall detection — restart if no `ctx.heartbeat()` within `opts.timeout` (default 3× interval) |
+| `.stopTimeout(ms)` | Grace period before force-kill on stop (default `10s`) |
+| `.manualStart()` | Don't auto-start on discovery |
+| `.run(handler)` | Finalize with a long-running handler |
+| `.poll(interval, fn)` | Finalize as a poller — `fn` runs every `interval` |
+
+Beacon runner controls: `startBeacon(name, { config? })`, `stopBeacon(name)`, `restartBeacon(name)`, `getInstance(name)`, `listInstances()`, `register(beacon, filePath)`.
+
 ## Subscriber Interfaces
 
 Signal subscribers implement any subset of:
@@ -358,6 +450,9 @@ Signal subscribers implement any subset of:
 
 Broadcast subscribers implement any subset of:
 `onBroadcastDiscovered`, `onBroadcastQueued`, `onBroadcastStarted`, `onBroadcastCompleted`, `onBroadcastFailed`, `onBroadcastCancelled`, `onNodeTriggered`, `onNodeCompleted`, `onNodeFailed`, `onNodeSkipped`
+
+Beacon subscribers implement any subset of:
+`onBeaconDiscovered`, `onBeaconStarting`, `onBeaconStarted`, `onBeaconReady`, `onBeaconHeartbeat`, `onBeaconExited`, `onBeaconRestartScheduled`, `onBeaconStopped`, `onBeaconErrored`, `onBeaconStalled`, `onBeaconLog`
 
 ## Dynamic Broadcasts
 

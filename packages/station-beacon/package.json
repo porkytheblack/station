@@ -1,0 +1,42 @@
+{
+  "name": "station-beacon",
+  "version": "1.0.0",
+  "description": "Long-running, supervised process primitive for station-signal — servers, pollers, and clients",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "src"],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts"
+  },
+  "keywords": [
+    "background-jobs",
+    "daemon",
+    "supervisor",
+    "long-running",
+    "worker",
+    "typescript",
+    "beacon"
+  ],
+  "author": "",
+  "license": "MIT",
+  "type": "module",
+  "engines": { "node": ">=18" },
+  "peerDependencies": {
+    "station-signal": "workspace:*"
+  },
+  "devDependencies": {
+    "station-signal": "workspace:*",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "@types/node": "^25.3.0"
+  }
+}

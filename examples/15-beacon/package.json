@@ -1,0 +1,15 @@
+{
+  "name": "simple-example-15-beacon",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx runner.ts"
+  },
+  "dependencies": {
+    "station-beacon": "workspace:*",
+    "station-signal": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0"
+  }
+}
