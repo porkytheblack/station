@@ -16,6 +16,7 @@ export const sections = [
     links: [
       { href: "/docs/signals", label: "Signals" },
       { href: "/docs/broadcasts", label: "Broadcasts" },
+      { href: "/docs/beacons", label: "Beacons" },
       { href: "/docs/expressions", label: "Expressions" },
       { href: "/docs/adapters", label: "Adapters" },
       { href: "/docs/station", label: "Station Kit" },
@@ -35,6 +36,7 @@ export const sections = [
       { href: "/docs/examples/etl-pipeline", label: "ETL Pipeline" },
       { href: "/docs/examples/ci-pipeline", label: "CI Pipeline" },
       { href: "/docs/examples/fleet-monitor", label: "Fleet Monitor" },
+      { href: "/docs/examples/beacon", label: "Beacon" },
     ],
   },
 ];

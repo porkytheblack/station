@@ -9,6 +9,7 @@ import { crashBeacon } from "./fixtures/crash-beacon.js";
 import { quickBeacon } from "./fixtures/quick-beacon.js";
 import { stallBeacon } from "./fixtures/stall-beacon.js";
 import { manualBeacon } from "./fixtures/manual-beacon.js";
+import { badConfigBeacon } from "./fixtures/bad-config-beacon.js";
 
 const fx = (name: string) => fileURLToPath(new URL(`./fixtures/${name}.ts`, import.meta.url));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -204,6 +205,28 @@ test("restartBeacon relaunches with a fresh incarnation", async () => {
     const after = await runner.getInstance("ready-b");
     assert.ok((after?.incarnation ?? 0) >= 2, "incarnation advanced");
     assert.equal(after?.status, "running");
+  } finally {
+    await runner.stop({ graceful: true, timeoutMs: 3_000 });
+  }
+});
+
+test("a fatal config error goes to errored and does not restart-loop", async () => {
+  const rec = makeRecorder();
+  const runner = new BeaconRunner({
+    adapter: new BeaconMemoryAdapter(),
+    pollIntervalMs: 25,
+    subscribers: [rec.sub],
+  });
+  runner.register(badConfigBeacon, fx("bad-config-beacon"));
+  runner.start().catch(() => {});
+  try {
+    await rec.waitFor((es) => es.some((e) => e.type === "errored" && e.name === "bad-config-b"), "bad-config-b errored");
+    const inst = await runner.getInstance("bad-config-b");
+    assert.equal(inst?.status, "errored");
+    // Even under restart("always"), a fatal config error must not loop.
+    await sleep(400);
+    assert.equal(rec.count("starting", "bad-config-b"), 1, "did not restart-loop");
+    assert.equal(rec.count("restart-scheduled", "bad-config-b"), 0);
   } finally {
     await runner.stop({ graceful: true, timeoutMs: 3_000 });
   }

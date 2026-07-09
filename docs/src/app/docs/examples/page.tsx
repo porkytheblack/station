@@ -66,6 +66,12 @@ const examples = [
     desc: "Six parallel health checks converging into an aggregate report.",
     tags: ["broadcast", "recurring", "continue", "sqlite"],
   },
+  {
+    href: "/docs/examples/beacon",
+    title: "11 — Beacon",
+    desc: "A supervised server, poller, and reconnecting client with restart + backoff.",
+    tags: ["beacon", "server", "poll", "backoff"],
+  },
 ];
 
 export default function ExamplesPage() {
@@ -74,8 +80,8 @@ export default function ExamplesPage() {
       <div className="eyebrow">Showcase</div>
       <h2 style={{ marginTop: 0 }}>Examples</h2>
       <p>
-        Ten working examples from a single signal to full production workflows.
-        Each one runs standalone with <code>pnpm start</code>.
+        Eleven working examples from a single signal to full production
+        workflows. Each one runs standalone with <code>pnpm start</code>.
       </p>
 
       <div className="examples-grid">

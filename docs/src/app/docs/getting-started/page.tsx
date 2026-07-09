@@ -525,6 +525,10 @@ const runner = new SignalRunner({
             <td>Chain signals into DAG workflows with fan-out and fan-in.</td>
           </tr>
           <tr>
+            <td><Link href="/docs/beacons">Beacons</Link></td>
+            <td>Long-running supervised processes &mdash; servers, pollers, clients.</td>
+          </tr>
+          <tr>
             <td><Link href="/docs/adapters">Adapters</Link></td>
             <td>SQLite adapter details and custom adapter interface.</td>
           </tr>

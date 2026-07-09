@@ -16,6 +16,7 @@ import {
   type BeaconInstance,
   type BeaconInstancePatch,
   type ExitReason,
+  FATAL_EXIT_CODE,
 } from "./types.js";
 import { isBeacon } from "./util.js";
 
@@ -418,6 +419,16 @@ export class BeaconRunner {
     if (!inst) return;
     const sup = this.supervised.get(beacon.name)!;
 
+    // Enforce desired=stopped: stop any live child that shouldn't be running.
+    // This is the reconcile safety net that closes the window where a
+    // stopBeacon() races an in-flight spawn (the child is spawned after
+    // stopBeacon already saw no child), and guarantees the supervisor always
+    // converges to the desired state.
+    if (inst.desiredState === "stopped") {
+      if (sup.child && !sup.stopRequested) this.initiateStop(beacon.name);
+      return;
+    }
+
     // Heartbeat stall detection — only once the handler has actually started,
     // so process boot time never counts against the heartbeat deadline.
     if (
@@ -629,13 +640,17 @@ export class BeaconRunner {
     }
 
     // Fatal error (bad config / missing beacon) → terminal, never restart.
-    if (sup.fatal) {
-      await this.patch(beacon.name, { status: "errored" });
+    // The sentinel exit code is authoritative because the `fatal` IPC flag can
+    // race (or be lost to) the child's exit.
+    const fatal = sup.fatal || code === FATAL_EXIT_CODE;
+    if (fatal) {
+      const error = inst.lastError ?? "fatal error (invalid config or beacon not found)";
+      await this.patch(beacon.name, { status: "errored", lastError: error });
       this.emit("onBeaconErrored", {
         instance: { ...this.instances.get(beacon.name)! },
-        error: inst.lastError,
+        error,
       });
-      await this.addEvent(beacon.name, inst.incarnation, "errored", inst.lastError);
+      await this.addEvent(beacon.name, inst.incarnation, "errored", error);
       return;
     }
 

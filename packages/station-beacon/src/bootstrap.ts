@@ -14,6 +14,7 @@
  */
 
 import type { BeaconContext } from "./context.js";
+import { FATAL_EXIT_CODE } from "./types.js";
 import { isBeacon } from "./util.js";
 
 const beaconName = process.env.STATION_BEACON_NAME;
@@ -161,8 +162,10 @@ try {
 
   if (!target || !isBeacon(target)) {
     console.error(`[station-beacon] Beacon "${beaconName}" not found in ${beaconFile}`);
+    // Exit with the fatal code so the supervisor won't restart-loop. The IPC
+    // message is best-effort observability and may race the exit.
     sendIPC("beacon:error", { error: `Beacon "${beaconName}" not found`, fatal: true });
-    process.exit(1);
+    process.exit(FATAL_EXIT_CODE);
   }
 
   const parsedConfig: unknown = rawConfig ? JSON.parse(rawConfig) : {};
@@ -172,7 +175,7 @@ try {
     console.error(`[station-beacon] Invalid config for "${beaconName}": ${msg}`);
     // Config errors are fatal — restarting with the same config won't help.
     sendIPC("beacon:error", { error: msg, fatal: true });
-    process.exit(1);
+    process.exit(FATAL_EXIT_CODE);
   }
 
   const ctx = buildContext(result.data);

@@ -74,6 +74,15 @@ export const DEFAULT_BACKOFF: BackoffConfig = {
 export const DEFAULT_STOP_TIMEOUT_MS = 10_000;
 
 /**
+ * Exit code a beacon child uses to signal a non-restartable (fatal) failure —
+ * invalid config, or the beacon not being found in its file. Carried reliably
+ * by the process `exit` event, unlike an IPC message which can race the exit
+ * (or be dropped by `process.exit`). The supervisor treats this code as
+ * terminal and does not restart. 78 = `EX_CONFIG` from sysexits.h.
+ */
+export const FATAL_EXIT_CODE = 78;
+
+/**
  * The supervised record for a beacon. Exactly one exists per beacon name; the
  * supervisor updates it as incarnations start, become ready, and exit.
  */
