@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { Context } from "hono";
 import {
   EnvStore,
   EnvValidationError,
@@ -9,6 +10,18 @@ import {
 
 export interface V1EnvDeps {
   envStore?: EnvStore;
+}
+
+/**
+ * Parse the request body and return it only if it's a JSON object. Returns
+ * null for a parse error or a non-object body (e.g. `null`, a string, a
+ * number) so callers can respond 400 instead of throwing a 500 on
+ * `"key" in body`.
+ */
+async function readJsonObject(c: Context): Promise<Record<string, unknown> | null> {
+  const raw = await c.req.json().catch(() => undefined);
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  return raw as Record<string, unknown>;
 }
 
 /** Read-scope routes: list / get. Secret values are redacted. */
@@ -37,7 +50,8 @@ export function v1EnvRoutes(deps: V1EnvDeps) {
 
   app.post("/env", async (c) => {
     if (!deps.envStore) return c.json({ error: "unavailable" }, 503);
-    const body = await c.req.json().catch(() => ({}));
+    const body = await readJsonObject(c);
+    if (!body) return c.json({ error: "bad_request", message: "body must be a JSON object" }, 400);
     const { key, value, secret, targets } = body as {
       key?: unknown;
       value?: unknown;
@@ -76,7 +90,8 @@ export function v1EnvRoutes(deps: V1EnvDeps) {
     const existing = await deps.envStore.get(id);
     if (!existing) return c.json({ error: "not_found" }, 404);
 
-    const body = await c.req.json().catch(() => ({}));
+    const body = await readJsonObject(c);
+    if (!body) return c.json({ error: "bad_request", message: "body must be a JSON object" }, 400);
     const patch: { value?: string; secret?: boolean; targets?: EnvTarget[] } = {};
     if ("value" in body) {
       if (typeof body.value !== "string") {

@@ -7,6 +7,7 @@ export const sections = [
       { href: "/docs/remote-triggers", label: "Remote triggers" },
       { href: "/docs/dynamic-broadcasts", label: "Dynamic broadcasts" },
       { href: "/docs/schedules", label: "Schedules" },
+      { href: "/docs/environment", label: "Environment variables" },
       { href: "/docs/agent-skill", label: "Agent skill" },
       { href: "/docs/tauri-desktop", label: "Tauri desktop" },
     ],

@@ -96,12 +96,14 @@ export class EnvSqliteAdapter implements EnvStorageAdapter {
     for (const [key, value] of Object.entries(patch)) {
       const col = map[key];
       if (!col) continue;
+      // Treat an explicit `undefined` as "leave unchanged" — EnvStore.update
+      // sends every field, so writing NULL here would violate the NOT NULL
+      // secret/targets columns and clobber a value-only edit.
+      if (value === undefined) continue;
       touched = true;
       const param = `p_${col}`;
       setClauses.push(`${col} = @${param}`);
-      if (value === undefined) {
-        values[param] = null;
-      } else if (key === "secret") {
+      if (key === "secret") {
         values[param] = value ? 1 : 0;
       } else if (key === "targets") {
         values[param] = JSON.stringify(value);

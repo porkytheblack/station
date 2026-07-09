@@ -105,10 +105,13 @@ export class EnvPostgresAdapter implements EnvStorageAdapter {
     for (const [key, value] of Object.entries(patch)) {
       const col = map[key];
       if (!col) continue;
+      // Treat an explicit `undefined` as "leave unchanged" — EnvStore.update
+      // sends every field, so writing NULL here would violate the NOT NULL
+      // secret/targets columns and clobber a value-only edit.
+      if (value === undefined) continue;
       touched = true;
       setClauses.push(`${col} = $${i++}`);
-      if (value === undefined) values.push(null);
-      else if (key === "targets") values.push(JSON.stringify(value));
+      if (key === "targets") values.push(JSON.stringify(value));
       else values.push(value);
     }
     if (touched && !("updatedAt" in patch)) {

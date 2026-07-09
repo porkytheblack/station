@@ -629,10 +629,12 @@ export class SignalRunner {
       // Resolve store-managed env vars and enforce `.env()` requirements
       // before spending a child process on a run that cannot succeed.
       let injectedEnv: Record<string, string> | undefined;
+      let envProviderErrored = false;
       if (this.envProvider) {
         try {
           injectedEnv = await this.envProvider.resolveFor({ kind: "signal", name: run.signalName });
         } catch (err) {
+          envProviderErrored = true;
           console.error(`[station-signal] Env provider failed for "${run.signalName}":`, err);
         }
       }
@@ -642,6 +644,17 @@ export class SignalRunner {
           (key) => !(injectedEnv && key in injectedEnv) && process.env[key] === undefined,
         );
         if (missing.length > 0) {
+          if (envProviderErrored) {
+            // The env store was unreachable, so we can't tell whether these
+            // keys are actually undefined or just temporarily unresolvable.
+            // Leave the run pending and retry on a later tick instead of
+            // failing it with a misleading "not defined" error.
+            this.emit("onRunSkipped", {
+              run,
+              reason: `Env store unreachable while resolving required vars for "${run.signalName}" — will retry`,
+            });
+            continue;
+          }
           const error =
             `Missing required environment variable${missing.length > 1 ? "s" : ""} for "${run.signalName}": ` +
             `${missing.join(", ")}. Define ${missing.length > 1 ? "them" : "it"} in the Station env store or the host environment.`;

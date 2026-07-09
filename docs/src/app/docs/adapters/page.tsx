@@ -781,6 +781,50 @@ registerAdapter("my-adapter", (options) => {
 
       <hr className="divider" />
 
+      {/* ── Env adapters ── */}
+
+      <h3>Env adapters</h3>
+      <p>
+        <Link href="/docs/environment">Environment variables</Link> are stored
+        through an <code>EnvStorageAdapter</code>, again in a sub-path of each
+        adapter package. The default (a JSON file) needs no adapter at all;
+        reach for a durable backend when you run more than one Station process
+        against shared state:
+      </p>
+      <table className="api-table">
+        <thead>
+          <tr>
+            <th>Import</th>
+            <th>Backend</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>station-adapter-sqlite/env</code></td>
+            <td>SQLite (<code>EnvSqliteAdapter</code>).</td>
+          </tr>
+          <tr>
+            <td><code>station-adapter-postgres/env</code></td>
+            <td>Postgres (<code>EnvPostgresAdapter</code>).</td>
+          </tr>
+          <tr>
+            <td><code>station-adapter-mysql/env</code></td>
+            <td>MySQL (<code>EnvMysqlAdapter.create()</code>, async factory).</td>
+          </tr>
+          <tr>
+            <td><code>station-adapter-redis/env</code></td>
+            <td>Redis (<code>EnvRedisAdapter</code>).</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>
+        Pass one via <code>envStorage</code> in <code>defineConfig</code>. The
+        default <code>FileEnvStorage</code> (and <code>MemoryEnvStorage</code>{" "}
+        for tests) ship in <code>station-env</code> itself.
+      </p>
+
+      <hr className="divider" />
+
       {/* ── Dynamic broadcast methods ── */}
 
       <h3>Dynamic broadcast methods</h3>

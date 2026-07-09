@@ -193,8 +193,16 @@ try {
   // Apply store-managed env vars before the beacon file is imported, so both
   // module-level code and the handler read them via process.env as usual.
   // Delivered over IPC (not the spawn env) to keep secrets out of /proc.
+  // Defense-in-depth: re-check each key at the trust boundary so a var that
+  // entered storage by another route can't inject a process-control variable
+  // (PATH / NODE_OPTIONS / LD_PRELOAD / …) into the child.
   if (job.env) {
+    const { isReservedEnvKey } = await import("station-signal");
     for (const [key, value] of Object.entries(job.env)) {
+      if (isReservedEnvKey(key)) {
+        console.warn(`[station-beacon] Ignoring reserved injected env key "${key}"`);
+        continue;
+      }
       process.env[key] = value;
     }
   }

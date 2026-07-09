@@ -543,10 +543,12 @@ export class BeaconRunner {
     // errored (terminal) instead of entering a restart loop. startBeacon()
     // clears the error, so the operator can retry after defining the var.
     let injectedEnv: Record<string, string> | undefined;
+    let envProviderErrored = false;
     if (this.envProvider) {
       try {
         injectedEnv = await this.envProvider.resolveFor({ kind: "beacon", name: beacon.name });
       } catch (err) {
+        envProviderErrored = true;
         console.error(`[station-beacon] Env provider failed for "${beacon.name}":`, err);
       }
     }
@@ -555,6 +557,23 @@ export class BeaconRunner {
         (key) => !(injectedEnv && key in injectedEnv) && process.env[key] === undefined,
       );
       if (missing.length > 0) {
+        if (envProviderErrored) {
+          // The env store was unreachable — this is transient, not a
+          // misconfiguration, so reschedule a backoff retry rather than going
+          // terminally errored (which would keep the beacon down until an
+          // operator manually restarted it after the store recovered).
+          const delayMs = beacon.backoff.baseMs;
+          const nextRestartAt = new Date(Date.now() + delayMs);
+          const reason = `Env store unreachable while resolving required vars for "${beacon.name}" — will retry`;
+          await this.patch(beacon.name, { status: "backoff", nextRestartAt, lastError: reason });
+          this.emit("onBeaconRestartScheduled", {
+            instance: { ...this.instances.get(beacon.name)! },
+            delayMs,
+            nextRestartAt,
+          });
+          await this.addEvent(beacon.name, inst.incarnation, "restart-scheduled", reason);
+          return;
+        }
         const error =
           `Missing required environment variable${missing.length > 1 ? "s" : ""} for "${beacon.name}": ` +
           `${missing.join(", ")}. Define ${missing.length > 1 ? "them" : "it"} in the Station env store or the host environment.`;

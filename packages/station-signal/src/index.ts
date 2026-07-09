@@ -33,6 +33,6 @@ export {
 export type { TriggerAdapter } from "./adapters/trigger.js";
 export { HttpTriggerAdapter, type HttpTriggerOptions } from "./adapters/http-trigger.js";
 
-export { isSignal, SIGNAL_BRAND } from "./util.js";
+export { isSignal, isReservedEnvKey, SIGNAL_BRAND } from "./util.js";
 
 export { z } from "zod";

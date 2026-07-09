@@ -87,6 +87,29 @@ test("DELETE /env/:id removes the var", async () => {
   assert.equal(missing.status, 404);
 });
 
+test("POST /env with a non-object body is a 400, not a 500", async () => {
+  const { app } = makeApp();
+  // Body is valid JSON but not an object — must not crash on `"key" in body`.
+  const res = await app.request("http://localhost/api/v1/env", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "null",
+  });
+  assert.equal(res.status, 400);
+});
+
+test("PATCH /env/:id with a non-object body is a 400, not a 500", async () => {
+  const { app } = makeApp();
+  const create = await jsonRequest(app, "POST", "/api/v1/env", { key: "K", value: "1" });
+  const id = (create.data as { data: { id: string } }).data.id;
+  const res = await app.request(`http://localhost/api/v1/env/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: "null",
+  });
+  assert.equal(res.status, 400);
+});
+
 test("scoped var round-trips its targets", async () => {
   const { app } = makeApp();
   const create = await jsonRequest(app, "POST", "/api/v1/env", {

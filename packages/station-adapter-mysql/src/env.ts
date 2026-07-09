@@ -110,10 +110,14 @@ export class EnvMysqlAdapter implements EnvStorageAdapter {
     for (const [key, value] of Object.entries(patch)) {
       const col = map[key];
       if (!col) continue;
+      // Treat an explicit `undefined` as "leave unchanged" — EnvStore.update
+      // sends every field, so writing NULL here would violate the NOT NULL
+      // secret/targets columns (and, on non-strict MySQL, silently coerce
+      // secret to 0, exposing a value that was written write-only).
+      if (value === undefined) continue;
       touched = true;
       setClauses.push(`${col} = ?`);
-      if (value === undefined) values.push(null);
-      else if (key === "secret") values.push(value ? 1 : 0);
+      if (key === "secret") values.push(value ? 1 : 0);
       else if (key === "targets") values.push(JSON.stringify(value));
       else if (key === "updatedAt") values.push(dateToStr(value));
       else values.push(value as string | number);

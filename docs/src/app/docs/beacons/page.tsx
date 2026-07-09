@@ -220,6 +220,22 @@ export const webhookServer = beacon("webhook-server")
       </p>
 
       <h4>
+        <code>.env(...keys)</code>
+      </h4>
+      <p>
+        Declares <Link href="/docs/environment">environment variables</Link> the
+        beacon requires. Before each launch the supervisor checks each key
+        against the env store and the host <code>process.env</code>; if any is
+        missing it marks the beacon <code>errored</code> instead of spawning a
+        process that can&apos;t come up. Provided values are injected into the
+        child&apos;s <code>process.env</code>.
+      </p>
+      <Code>{`beacon("price-feed")
+  .env("EXCHANGE_API_KEY")   // errored (not spawned) if unset
+  .restart("always")
+  .run(async (ctx) => { /* ... */ });`}</Code>
+
+      <h4>
         <code>.run(handler)</code>
       </h4>
       <p>

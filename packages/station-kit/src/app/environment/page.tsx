@@ -160,6 +160,15 @@ export default function EnvironmentPage() {
   }
 
   async function handleSaveEdit(id: string) {
+    const target = vars.find((x) => x.id === id);
+    // A secret's value is redacted, so the edit field starts blank. Saving it
+    // blank would overwrite the stored secret with an empty string — treat a
+    // blank secret edit as "no change" and just close the editor.
+    if (target?.secret && editValue === "") {
+      setEditingId(null);
+      setEditValue("");
+      return;
+    }
     try {
       await api.updateEnvVar(id, { value: editValue });
       setEditingId(null);
@@ -218,14 +227,17 @@ export default function EnvironmentPage() {
           background: "var(--concrete)",
           marginBottom: "1.25rem",
         }}>
-          <div className="detail-section-label" style={{ color: "var(--rust)" }}>Missing required variables</div>
+          <div className="detail-section-label" style={{ color: "var(--rust)" }}>Required variables not in the env store</div>
           {missingRequirements.map((m) => (
             <div key={m.target} style={{ fontSize: "0.8125rem", marginTop: "0.375rem" }}>
               <span className="mono">{m.target}</span>
-              {" needs "}
+              {" requires "}
               {m.keys.map((k) => <span key={k} className="mono" style={{ color: "var(--rust)" }}>{k} </span>)}
             </div>
           ))}
+          <div style={{ fontSize: "0.75rem", color: "var(--muted)", marginTop: "0.5rem" }}>
+            These aren&apos;t defined here. A value set in the Station host environment also satisfies the requirement — this list can&apos;t see host env, so it only reflects the store.
+          </div>
         </div>
       )}
 
@@ -354,6 +366,7 @@ export default function EnvironmentPage() {
                       type={v.secret ? "password" : "text"}
                       value={editValue}
                       onChange={(e) => setEditValue(e.target.value)}
+                      placeholder={v.secret ? "Enter new value to replace" : ""}
                       className="mono"
                       style={{ ...inputStyle, padding: "0.25rem 0.5rem" }}
                       autoFocus

@@ -81,7 +81,10 @@ export class EnvRedisAdapter implements EnvStorageAdapter {
       } else if (key === "secret") {
         if (value !== undefined) setArgs.secret = value ? "1" : "0";
       } else if (key === "targets") {
-        setArgs.targets = JSON.stringify(value ?? []);
+        // Treat an explicit `undefined` as "leave unchanged" — EnvStore.update
+        // sends targets on every call, so writing "[]" here would silently
+        // reset a scoped variable to global (a secret scope escalation).
+        if (value !== undefined) setArgs.targets = JSON.stringify(value);
       } else if (key === "updatedAt") {
         if (value instanceof Date) setArgs.updatedAt = value.toISOString();
       } else if (key === "createdBy") {

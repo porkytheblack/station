@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EnvSqliteAdapter } from "../src/env.js";
+import { EnvStore } from "station-env";
 import type { EnvVar } from "station-env";
 
 function freshDb() {
@@ -74,6 +75,52 @@ test("update changes value and targets", async () => {
     const got = await adapter.get("e1");
     assert.equal(got?.value, "new");
     assert.deepEqual(got?.targets, [{ kind: "signal", name: "x" }]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a value-only update (explicit undefined secret/targets) preserves them", async () => {
+  // Reproduces the durable-adapter bug: EnvStore.update always sends
+  // { value, secret: undefined, targets: undefined }. Writing NULL for the
+  // undefined fields would violate the NOT NULL columns / wipe the scope.
+  const { adapter, cleanup } = freshDb();
+  try {
+    await adapter.add(fixture({ secret: true, targets: [{ kind: "signal", name: "keep" }] }));
+    await adapter.update("e1", { value: "rotated", secret: undefined, targets: undefined });
+    const got = await adapter.get("e1");
+    assert.equal(got?.value, "rotated");
+    assert.equal(got?.secret, true, "secret must be preserved");
+    assert.deepEqual(got?.targets, [{ kind: "signal", name: "keep" }], "targets must be preserved");
+  } finally {
+    cleanup();
+  }
+});
+
+test("EnvStore value rotation over SQLite keeps a scoped secret scoped", async () => {
+  // End-to-end path the dashboard/API exercises: rotate a secret's value with
+  // a value-only PATCH and confirm it stays secret + scoped (no crash, no
+  // scope escalation).
+  const { adapter, cleanup } = freshDb();
+  try {
+    const store = new EnvStore(adapter, { cacheTtlMs: 0 });
+    const v = await store.create({
+      key: "STRIPE_KEY",
+      value: "sk_old",
+      secret: true,
+      targets: [{ kind: "signal", name: "charge" }],
+    });
+    await store.update(v.id, { value: "sk_new" });
+
+    const forCharge = await store.resolveFor({ kind: "signal", name: "charge" });
+    const forOther = await store.resolveFor({ kind: "signal", name: "other" });
+    assert.equal(forCharge.STRIPE_KEY, "sk_new", "value rotated for the scoped target");
+    assert.equal(forOther.STRIPE_KEY, undefined, "still not injected into other signals");
+
+    const pub = await store.getPublic(v.id);
+    assert.equal(pub?.secret, true);
+    assert.equal(pub?.value, null, "still redacted");
+    assert.deepEqual(pub?.targets, [{ kind: "signal", name: "charge" }]);
   } finally {
     cleanup();
   }
