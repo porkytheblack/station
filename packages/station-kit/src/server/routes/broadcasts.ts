@@ -77,10 +77,14 @@ export function broadcastRoutes(deps: BroadcastDeps) {
     if (!deps.broadcastAdapter) {
       return c.json({ data: [], meta: { total: 0 } });
     }
-    const runs = await deps.broadcastAdapter.listBroadcastRuns(name);
+    const limitRaw = parseInt(c.req.query("limit") ?? "100", 10);
+    const limit = Math.min(Number.isNaN(limitRaw) ? 100 : Math.max(limitRaw, 1), 500);
+    const offsetRaw = parseInt(c.req.query("offset") ?? "0", 10);
+    const offset = Number.isNaN(offsetRaw) ? 0 : Math.max(offsetRaw, 0);
+    const runs = await deps.broadcastAdapter.listBroadcastRuns(name, { limit, offset });
     return c.json({
       data: runs.map(serializeBroadcastRun),
-      meta: { total: runs.length },
+      meta: { count: runs.length, limit, offset },
     });
   });
 

@@ -9,7 +9,15 @@ import { parseInterval } from "./interval.js";
 import type { AnySignal } from "./signal.js";
 import type { IPCMessage, JobInitMessage, SignalSubscriber } from "./subscribers/index.js";
 import { ConsoleSubscriber } from "./subscribers/console.js";
-import { DEFAULT_MAX_ATTEMPTS, DEFAULT_TIMEOUT_MS, type Run, type Step } from "./types.js";
+import {
+  DEFAULT_MAX_ATTEMPTS,
+  DEFAULT_TIMEOUT_MS,
+  type ListAllRunsOptions,
+  type ListRunsOptions,
+  type Run,
+  type RunStatus,
+  type Step,
+} from "./types.js";
 import { isSignal } from "./util.js";
 
 const BOOTSTRAP = fileURLToPath(new URL("./bootstrap.js", import.meta.url));
@@ -251,9 +259,19 @@ export class SignalRunner {
     return this.adapter.getRun(id);
   }
 
-  /** List all runs for a signal. */
-  async listRuns(signalName: string): Promise<Run[]> {
-    return this.adapter.listRuns(signalName);
+  /** List runs for a signal. Pass `options` to page/filter; omit for full history. */
+  async listRuns(signalName: string, options?: ListRunsOptions): Promise<Run[]> {
+    return this.adapter.listRuns(signalName, options);
+  }
+
+  /** List runs across all signals (or one, via `options.signalName`), newest-first. */
+  async listAllRuns(options?: ListAllRunsOptions): Promise<Run[]> {
+    return this.adapter.listAllRuns(options);
+  }
+
+  /** Count runs grouped by status (optionally for one signal). */
+  async countRunsByStatus(options?: { signalName?: string }): Promise<Partial<Record<RunStatus, number>>> {
+    return this.adapter.countRunsByStatus(options);
   }
 
   /** Get steps for a run. */
@@ -550,7 +568,11 @@ export class SignalRunner {
       }
     }
 
-    const due = await this.adapter.getRunsDue();
+    // Bounded batch: we dispatch at most `maxConcurrent` per tick, but some
+    // due runs get skipped (per-signal concurrency, retry back-off), so fetch
+    // a generous multiple rather than the whole (potentially huge) backlog.
+    const dueBatch = Math.max(this.maxConcurrent * 5, 100);
+    const due = await this.adapter.getRunsDue(dueBatch);
     for (const run of due) {
       if (this.activeCount >= this.maxConcurrent) break;
 

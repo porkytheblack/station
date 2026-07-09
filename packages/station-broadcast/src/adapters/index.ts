@@ -7,14 +7,29 @@ import type {
   DynamicBroadcastSpec,
 } from "../types.js";
 
+/**
+ * Query options for paginated broadcast-run listings. When set, results are
+ * newest-first (createdAt descending) and bounded by `limit`.
+ */
+export interface ListBroadcastRunsOptions {
+  limit?: number;
+  offset?: number;
+  statuses?: BroadcastRunStatus[];
+}
+
 export interface BroadcastQueueAdapter {
   // Broadcast runs
   addBroadcastRun(run: BroadcastRun): Promise<void>;
   getBroadcastRun(id: string): Promise<BroadcastRun | null>;
   updateBroadcastRun(id: string, patch: BroadcastRunPatch): Promise<void>;
-  getBroadcastRunsDue(): Promise<BroadcastRun[]>;
+  /** Broadcast runs ready to dispatch, oldest first; `limit` bounds the batch. */
+  getBroadcastRunsDue(limit?: number): Promise<BroadcastRun[]>;
   getBroadcastRunsRunning(): Promise<BroadcastRun[]>;
-  listBroadcastRuns(broadcastName: string): Promise<BroadcastRun[]>;
+  /**
+   * Runs for one broadcast. With no `options`, returns full history in natural
+   * order (back-compat); with `options`, newest-first and bounded.
+   */
+  listBroadcastRuns(broadcastName: string, options?: ListBroadcastRunsOptions): Promise<BroadcastRun[]>;
   hasBroadcastRunWithStatus(broadcastName: string, statuses: BroadcastRunStatus[]): Promise<boolean>;
   purgeBroadcastRuns(olderThan: Date, statuses: BroadcastRunStatus[]): Promise<number>;
 

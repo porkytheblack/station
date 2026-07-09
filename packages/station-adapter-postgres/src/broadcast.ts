@@ -8,6 +8,7 @@ import type {
   BroadcastNodeRun,
   BroadcastNodeRunPatch,
   DynamicBroadcastSpec,
+  ListBroadcastRunsOptions,
 } from "station-broadcast";
 
 import { validateTableName, createColumnMapper, rowToObject } from "./shared.js";
@@ -219,16 +220,20 @@ export class BroadcastPostgresAdapter implements BroadcastQueueAdapter {
     );
   }
 
-  async getBroadcastRunsDue(): Promise<BroadcastRun[]> {
+  async getBroadcastRunsDue(limit?: number): Promise<BroadcastRun[]> {
     await this.ready();
     const now = new Date();
-    const result = await this.pool.query(
+    const values: unknown[] = [now];
+    let sql =
       `SELECT * FROM ${this.runsTable}
        WHERE status = 'pending'
          AND (next_run_at IS NULL OR next_run_at <= $1)
-       ORDER BY created_at ASC`,
-      [now],
-    );
+       ORDER BY created_at ASC`;
+    if (limit !== undefined && limit >= 0) {
+      values.push(limit);
+      sql += ` LIMIT $${values.length}`;
+    }
+    const result = await this.pool.query(sql, values);
     return result.rows.map(rowToBroadcastRun);
   }
 
@@ -240,12 +245,28 @@ export class BroadcastPostgresAdapter implements BroadcastQueueAdapter {
     return result.rows.map(rowToBroadcastRun);
   }
 
-  async listBroadcastRuns(broadcastName: string): Promise<BroadcastRun[]> {
+  async listBroadcastRuns(broadcastName: string, options?: ListBroadcastRunsOptions): Promise<BroadcastRun[]> {
     await this.ready();
-    const result = await this.pool.query(
-      `SELECT * FROM ${this.runsTable} WHERE broadcast_name = $1 ORDER BY created_at DESC`,
-      [broadcastName],
-    );
+    const values: unknown[] = [broadcastName];
+    let sql = `SELECT * FROM ${this.runsTable} WHERE broadcast_name = $1`;
+
+    if (options?.statuses && options.statuses.length > 0) {
+      values.push(options.statuses);
+      sql += ` AND status = ANY($${values.length})`;
+    }
+
+    sql += ` ORDER BY created_at DESC`;
+
+    if (options?.limit !== undefined && options.limit >= 0) {
+      values.push(options.limit);
+      sql += ` LIMIT $${values.length}`;
+    }
+    if (options?.offset !== undefined && options.offset >= 0) {
+      values.push(options.offset);
+      sql += ` OFFSET $${values.length}`;
+    }
+
+    const result = await this.pool.query(sql, values);
     return result.rows.map(rowToBroadcastRun);
   }
 

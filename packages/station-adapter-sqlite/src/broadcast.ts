@@ -8,6 +8,7 @@ import type {
   BroadcastNodeRun,
   BroadcastNodeRunPatch,
   DynamicBroadcastSpec,
+  ListBroadcastRunsOptions,
 } from "station-broadcast";
 
 import { validateTableName, dateToStr, createColumnMapper, rowToObject } from "./shared.js";
@@ -204,14 +205,15 @@ export class BroadcastSqliteAdapter implements BroadcastQueueAdapter {
     this.prep(`UPDATE ${this.runsTable} SET ${setClauses.join(", ")} WHERE id = @id`).run(values);
   }
 
-  async getBroadcastRunsDue(): Promise<BroadcastRun[]> {
+  async getBroadcastRunsDue(limit?: number): Promise<BroadcastRun[]> {
     const now = new Date().toISOString();
+    const withLimit = limit !== undefined && limit >= 0;
     const rows = this.prep(`
       SELECT * FROM ${this.runsTable}
       WHERE status = 'pending'
         AND (next_run_at IS NULL OR next_run_at <= ?)
-      ORDER BY created_at ASC
-    `).all(now) as Record<string, unknown>[];
+      ORDER BY created_at ASC${withLimit ? " LIMIT ?" : ""}
+    `).all(...(withLimit ? [now, limit] : [now])) as Record<string, unknown>[];
     return rows.map(rowToBroadcastRun);
   }
 
@@ -220,8 +222,37 @@ export class BroadcastSqliteAdapter implements BroadcastQueueAdapter {
     return rows.map(rowToBroadcastRun);
   }
 
-  async listBroadcastRuns(broadcastName: string): Promise<BroadcastRun[]> {
-    const rows = this.prep(`SELECT * FROM ${this.runsTable} WHERE broadcast_name = ? ORDER BY created_at DESC`).all(broadcastName) as Record<string, unknown>[];
+  async listBroadcastRuns(broadcastName: string, options?: ListBroadcastRunsOptions): Promise<BroadcastRun[]> {
+    // No options → preserve legacy behavior (full history, newest-first).
+    if (!options) {
+      const rows = this.prep(`SELECT * FROM ${this.runsTable} WHERE broadcast_name = ? ORDER BY created_at DESC`).all(broadcastName) as Record<string, unknown>[];
+      return rows.map(rowToBroadcastRun);
+    }
+
+    const params: unknown[] = [broadcastName];
+    let sql = `SELECT * FROM ${this.runsTable} WHERE broadcast_name = ?`;
+
+    if (options.statuses && options.statuses.length > 0) {
+      const placeholders = options.statuses.map(() => "?").join(", ");
+      sql += ` AND status IN (${placeholders})`;
+      params.push(...options.statuses);
+    }
+
+    sql += " ORDER BY created_at DESC";
+
+    const hasLimit = options.limit !== undefined && options.limit >= 0;
+    const hasOffset = options.offset !== undefined && options.offset >= 0;
+    if (hasLimit || hasOffset) {
+      // SQLite requires LIMIT before OFFSET; -1 means "no upper bound".
+      sql += " LIMIT ?";
+      params.push(hasLimit ? options.limit : -1);
+    }
+    if (hasOffset) {
+      sql += " OFFSET ?";
+      params.push(options.offset);
+    }
+
+    const rows = this.prep(sql).all(...params) as Record<string, unknown>[];
     return rows.map(rowToBroadcastRun);
   }
 

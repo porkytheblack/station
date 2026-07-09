@@ -4,7 +4,7 @@ export { configure, getAdapter, getTriggerAdapter, isConfigured, onLocalEnqueue,
 export { parseInterval } from "./interval.js";
 
 export { DEFAULT_TIMEOUT_MS, DEFAULT_MAX_ATTEMPTS } from "./types.js";
-export type { Run, RunKind, RunStatus, RunPatch, Step, StepStatus, StepPatch, StepDefinition } from "./types.js";
+export type { Run, RunKind, RunStatus, RunPatch, Step, StepStatus, StepPatch, StepDefinition, ListRunsOptions, ListAllRunsOptions } from "./types.js";
 export {
   type SignalQueueAdapter,
   type SerializableAdapter,

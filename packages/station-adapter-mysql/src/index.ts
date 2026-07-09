@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import mysql from "mysql2/promise";
 import type { Pool, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 export type { Pool as MysqlPool } from "mysql2/promise";
-import type { SerializableAdapter, AdapterManifest, Run, RunPatch, RunStatus, Step, StepPatch } from "station-signal";
+import type { SerializableAdapter, AdapterManifest, Run, RunPatch, RunStatus, Step, StepPatch, ListRunsOptions, ListAllRunsOptions } from "station-signal";
 import { registerAdapter } from "station-signal";
 
 import { validateTableName, dateToStr, createColumnMapper, rowToObject, runIdempotentDdl } from "./shared.js";
@@ -31,6 +31,32 @@ const STEP_DATE_FIELDS = new Set(["startedAt", "completedAt"]);
 
 function rowToRun(row: Record<string, unknown>): Run {
   return rowToObject<Run>(row, toField, DATE_FIELDS);
+}
+
+/**
+ * Append LIMIT/OFFSET clauses for a paginated listing, pushing bound params.
+ * MySQL requires LIMIT before OFFSET and rejects a bare OFFSET, so when an
+ * offset is given without a limit we use the max BIGINT UNSIGNED sentinel.
+ */
+function buildLimitOffset(
+  options: { limit?: number; offset?: number },
+  params: (string | number)[],
+): string {
+  const hasLimit = options.limit !== undefined && options.limit >= 0;
+  const hasOffset = options.offset !== undefined && options.offset >= 0;
+  let sql = "";
+  if (hasLimit) {
+    sql += ` LIMIT ?`;
+    params.push(options.limit as number);
+    if (hasOffset) {
+      sql += ` OFFSET ?`;
+      params.push(options.offset as number);
+    }
+  } else if (hasOffset) {
+    sql += ` LIMIT 18446744073709551615 OFFSET ?`;
+    params.push(options.offset as number);
+  }
+  return sql;
 }
 function rowToStep(row: Record<string, unknown>): Step {
   return rowToObject<Step>(row, toStepField, STEP_DATE_FIELDS);
@@ -202,15 +228,18 @@ export class MysqlAdapter implements SerializableAdapter {
     );
   }
 
-  async getRunsDue(): Promise<Run[]> {
+  async getRunsDue(limit?: number): Promise<Run[]> {
     const now = dateToStr(new Date());
-    const [rows] = await this.pool.execute<RowDataPacket[]>(
-      `SELECT * FROM ${this.tableName}
+    const params: (string | number | null)[] = [now];
+    let sql = `SELECT * FROM ${this.tableName}
        WHERE status = 'pending'
          AND (next_run_at IS NULL OR next_run_at <= ?)
-       ORDER BY created_at ASC`,
-      [now],
-    );
+       ORDER BY created_at ASC`;
+    if (limit !== undefined && limit >= 0) {
+      sql += ` LIMIT ?`;
+      params.push(limit);
+    }
+    const [rows] = await this.pool.execute<RowDataPacket[]>(sql, params);
     return rows.map((row) => rowToRun(row as Record<string, unknown>));
   }
 
@@ -264,12 +293,63 @@ export class MysqlAdapter implements SerializableAdapter {
     );
   }
 
-  async listRuns(signalName: string): Promise<Run[]> {
-    const [rows] = await this.pool.execute<RowDataPacket[]>(
-      `SELECT * FROM ${this.tableName} WHERE signal_name = ? ORDER BY created_at DESC`,
-      [signalName],
-    );
+  async listRuns(signalName: string, options?: ListRunsOptions): Promise<Run[]> {
+    // No options → preserve legacy behavior (full history, created_at DESC).
+    if (!options) {
+      const [rows] = await this.pool.execute<RowDataPacket[]>(
+        `SELECT * FROM ${this.tableName} WHERE signal_name = ? ORDER BY created_at DESC`,
+        [signalName],
+      );
+      return rows.map((row) => rowToRun(row as Record<string, unknown>));
+    }
+    const params: (string | number)[] = [signalName];
+    let sql = `SELECT * FROM ${this.tableName} WHERE signal_name = ?`;
+    if (options.statuses && options.statuses.length > 0) {
+      const placeholders = options.statuses.map(() => "?").join(", ");
+      sql += ` AND status IN (${placeholders})`;
+      params.push(...options.statuses);
+    }
+    sql += ` ORDER BY created_at DESC`;
+    sql += buildLimitOffset(options, params);
+    const [rows] = await this.pool.execute<RowDataPacket[]>(sql, params);
     return rows.map((row) => rowToRun(row as Record<string, unknown>));
+  }
+
+  async listAllRuns(options?: ListAllRunsOptions): Promise<Run[]> {
+    const params: (string | number)[] = [];
+    const where: string[] = [];
+    if (options?.signalName) {
+      where.push(`signal_name = ?`);
+      params.push(options.signalName);
+    }
+    if (options?.statuses && options.statuses.length > 0) {
+      const placeholders = options.statuses.map(() => "?").join(", ");
+      where.push(`status IN (${placeholders})`);
+      params.push(...options.statuses);
+    }
+    let sql = `SELECT * FROM ${this.tableName}`;
+    if (where.length > 0) sql += ` WHERE ${where.join(" AND ")}`;
+    sql += ` ORDER BY created_at DESC`;
+    sql += buildLimitOffset(options ?? {}, params);
+    const [rows] = await this.pool.execute<RowDataPacket[]>(sql, params);
+    return rows.map((row) => rowToRun(row as Record<string, unknown>));
+  }
+
+  async countRunsByStatus(options?: { signalName?: string }): Promise<Partial<Record<RunStatus, number>>> {
+    const params: string[] = [];
+    let sql = `SELECT status, COUNT(*) AS n FROM ${this.tableName}`;
+    if (options?.signalName) {
+      sql += ` WHERE signal_name = ?`;
+      params.push(options.signalName);
+    }
+    sql += ` GROUP BY status`;
+    const [rows] = await this.pool.execute<RowDataPacket[]>(sql, params);
+    const counts: Partial<Record<RunStatus, number>> = {};
+    for (const row of rows) {
+      const { status, n } = row as { status: RunStatus; n: number | string };
+      counts[status] = Number(n);
+    }
+    return counts;
   }
 
   async hasRunWithStatus(signalName: string, statuses: RunStatus[]): Promise<boolean> {
@@ -538,16 +618,19 @@ class LazyMysqlAdapter implements SerializableAdapter {
     await this.pool.execute(`DELETE FROM ${this.tableName} WHERE id = ?`, [id]);
   }
 
-  async getRunsDue(): Promise<Run[]> {
+  async getRunsDue(limit?: number): Promise<Run[]> {
     await this.ready();
     const now = dateToStr(new Date());
-    const [rows] = await this.pool.execute<RowDataPacket[]>(
-      `SELECT * FROM ${this.tableName}
+    const params: (string | number | null)[] = [now];
+    let sql = `SELECT * FROM ${this.tableName}
        WHERE status = 'pending'
          AND (next_run_at IS NULL OR next_run_at <= ?)
-       ORDER BY created_at ASC`,
-      [now],
-    );
+       ORDER BY created_at ASC`;
+    if (limit !== undefined && limit >= 0) {
+      sql += ` LIMIT ?`;
+      params.push(limit);
+    }
+    const [rows] = await this.pool.execute<RowDataPacket[]>(sql, params);
     return rows.map((row) => rowToRun(row as Record<string, unknown>));
   }
 
@@ -601,13 +684,66 @@ class LazyMysqlAdapter implements SerializableAdapter {
     );
   }
 
-  async listRuns(signalName: string): Promise<Run[]> {
+  async listRuns(signalName: string, options?: ListRunsOptions): Promise<Run[]> {
     await this.ready();
-    const [rows] = await this.pool.execute<RowDataPacket[]>(
-      `SELECT * FROM ${this.tableName} WHERE signal_name = ? ORDER BY created_at DESC`,
-      [signalName],
-    );
+    // No options → preserve legacy behavior (full history, created_at DESC).
+    if (!options) {
+      const [rows] = await this.pool.execute<RowDataPacket[]>(
+        `SELECT * FROM ${this.tableName} WHERE signal_name = ? ORDER BY created_at DESC`,
+        [signalName],
+      );
+      return rows.map((row) => rowToRun(row as Record<string, unknown>));
+    }
+    const params: (string | number)[] = [signalName];
+    let sql = `SELECT * FROM ${this.tableName} WHERE signal_name = ?`;
+    if (options.statuses && options.statuses.length > 0) {
+      const placeholders = options.statuses.map(() => "?").join(", ");
+      sql += ` AND status IN (${placeholders})`;
+      params.push(...options.statuses);
+    }
+    sql += ` ORDER BY created_at DESC`;
+    sql += buildLimitOffset(options, params);
+    const [rows] = await this.pool.execute<RowDataPacket[]>(sql, params);
     return rows.map((row) => rowToRun(row as Record<string, unknown>));
+  }
+
+  async listAllRuns(options?: ListAllRunsOptions): Promise<Run[]> {
+    await this.ready();
+    const params: (string | number)[] = [];
+    const where: string[] = [];
+    if (options?.signalName) {
+      where.push(`signal_name = ?`);
+      params.push(options.signalName);
+    }
+    if (options?.statuses && options.statuses.length > 0) {
+      const placeholders = options.statuses.map(() => "?").join(", ");
+      where.push(`status IN (${placeholders})`);
+      params.push(...options.statuses);
+    }
+    let sql = `SELECT * FROM ${this.tableName}`;
+    if (where.length > 0) sql += ` WHERE ${where.join(" AND ")}`;
+    sql += ` ORDER BY created_at DESC`;
+    sql += buildLimitOffset(options ?? {}, params);
+    const [rows] = await this.pool.execute<RowDataPacket[]>(sql, params);
+    return rows.map((row) => rowToRun(row as Record<string, unknown>));
+  }
+
+  async countRunsByStatus(options?: { signalName?: string }): Promise<Partial<Record<RunStatus, number>>> {
+    await this.ready();
+    const params: string[] = [];
+    let sql = `SELECT status, COUNT(*) AS n FROM ${this.tableName}`;
+    if (options?.signalName) {
+      sql += ` WHERE signal_name = ?`;
+      params.push(options.signalName);
+    }
+    sql += ` GROUP BY status`;
+    const [rows] = await this.pool.execute<RowDataPacket[]>(sql, params);
+    const counts: Partial<Record<RunStatus, number>> = {};
+    for (const row of rows) {
+      const { status, n } = row as { status: RunStatus; n: number | string };
+      counts[status] = Number(n);
+    }
+    return counts;
   }
 
   async hasRunWithStatus(signalName: string, statuses: RunStatus[]): Promise<boolean> {

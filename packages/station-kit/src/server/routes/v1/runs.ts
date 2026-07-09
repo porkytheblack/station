@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import type { SignalRunner, SignalQueueAdapter, Run } from "station-signal";
+import type { SignalRunner, SignalQueueAdapter, Run, RunStatus } from "station-signal";
 import type { LogBuffer } from "../../log-buffer.js";
 import type { LogStore } from "../../log-store.js";
 
@@ -19,42 +19,18 @@ export function v1RunRoutes(deps: V1RunDeps) {
   app.get("/runs", async (c) => {
     const status = c.req.query("status");
     const signalName = c.req.query("signalName");
-    const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10) || 50, 200);
+    const limitRaw = parseInt(c.req.query("limit") ?? "50", 10);
+    const limit = Math.min(Number.isNaN(limitRaw) ? 50 : Math.max(limitRaw, 1), 200);
+    const offsetRaw = parseInt(c.req.query("offset") ?? "0", 10);
+    const offset = Number.isNaN(offsetRaw) ? 0 : Math.max(offsetRaw, 0);
+    const statuses = status ? ([status] as RunStatus[]) : undefined;
 
-    let runs: Run[] = [];
+    // Filtering/ordering/limiting happen in the adapter, not in memory.
+    const runs: Run[] = signalName
+      ? await deps.signalAdapter.listRuns(signalName, { limit, offset, statuses })
+      : await deps.signalAdapter.listAllRuns({ limit, offset, statuses });
 
-    if (signalName) {
-      runs = await deps.signalAdapter.listRuns(signalName);
-    } else if (deps.signalRunner) {
-      const seen = new Set<string>();
-      for (const { name } of deps.signalRunner.listRegistered()) {
-        const signalRuns = await deps.signalAdapter.listRuns(name);
-        for (const r of signalRuns) {
-          if (!seen.has(r.id)) {
-            seen.add(r.id);
-            runs.push(r);
-          }
-        }
-      }
-    }
-
-    if (status) {
-      runs = runs.filter((r) => r.status === status);
-    }
-
-    runs.sort((a, b) => {
-      const aTime = a.createdAt instanceof Date
-        ? a.createdAt.getTime()
-        : new Date(a.createdAt as unknown as string).getTime();
-      const bTime = b.createdAt instanceof Date
-        ? b.createdAt.getTime()
-        : new Date(b.createdAt as unknown as string).getTime();
-      return bTime - aTime;
-    });
-
-    runs = runs.slice(0, limit);
-
-    return c.json({ data: runs.map(serializeRun), meta: { total: runs.length } });
+    return c.json({ data: runs.map(serializeRun), meta: { count: runs.length, limit, offset } });
   });
 
   app.get("/runs/:id", async (c) => {

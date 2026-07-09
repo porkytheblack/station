@@ -1,14 +1,43 @@
-import type { Run, RunPatch, RunStatus, Step, StepPatch } from "../types.js";
+import type {
+  ListAllRunsOptions,
+  ListRunsOptions,
+  Run,
+  RunPatch,
+  RunStatus,
+  Step,
+  StepPatch,
+} from "../types.js";
 
 export interface SignalQueueAdapter {
   // Run methods
   addRun(run: Run): Promise<void>;
   removeRun(id: string): Promise<void>;
-  getRunsDue(): Promise<Run[]>;
+  /**
+   * Runs ready to dispatch (pending, next_run_at due), oldest first.
+   * `limit` bounds the batch — the runner only dispatches a bounded number
+   * per tick, so fetching the whole backlog every poll is wasted work.
+   */
+  getRunsDue(limit?: number): Promise<Run[]>;
   getRunsRunning(): Promise<Run[]>;
   getRun(id: string): Promise<Run | null>;
   updateRun(id: string, patch: RunPatch): Promise<void>;
-  listRuns(signalName: string): Promise<Run[]>;
+  /**
+   * Runs for one signal. With no `options`, returns the full history in the
+   * adapter's natural order (back-compat). With `options`, returns
+   * newest-first, filtered by `statuses`, and bounded by `limit`/`offset`.
+   */
+  listRuns(signalName: string, options?: ListRunsOptions): Promise<Run[]>;
+  /**
+   * Runs across all signals (or one, if `signalName` is set), newest-first,
+   * bounded by `limit`/`offset` and filtered by `statuses`. Lets the
+   * dashboard page history without loading every signal's full run list.
+   */
+  listAllRuns(options?: ListAllRunsOptions): Promise<Run[]>;
+  /**
+   * Count of runs grouped by status (optionally for one signal). Powers the
+   * dashboard stats tiles without materializing rows.
+   */
+  countRunsByStatus(options?: { signalName?: string }): Promise<Partial<Record<RunStatus, number>>>;
 
   /** Check if any run for the given signal has one of the specified statuses. */
   hasRunWithStatus(signalName: string, statuses: RunStatus[]): Promise<boolean>;

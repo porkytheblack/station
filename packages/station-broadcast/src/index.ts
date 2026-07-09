@@ -25,6 +25,7 @@ export {
 
 export {
   type BroadcastQueueAdapter,
+  type ListBroadcastRunsOptions,
   BroadcastMemoryAdapter,
 } from "./adapters/index.js";
 

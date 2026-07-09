@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import type { SignalRunner, SignalQueueAdapter } from "station-signal";
+import type { SignalRunner, SignalQueueAdapter, Run, RunStatus } from "station-signal";
 import type { LogBuffer } from "../log-buffer.js";
 import type { LogStore } from "../log-store.js";
 import type { StationSignalSubscriber } from "../subscriber.js";
@@ -18,82 +18,28 @@ export function runRoutes(deps: RunDeps) {
   app.get("/runs", async (c) => {
     const status = c.req.query("status");
     const signalName = c.req.query("signalName");
+    const limit = clampInt(c.req.query("limit"), 100, 1, 500);
+    const offset = clampInt(c.req.query("offset"), 0, 0, Number.MAX_SAFE_INTEGER);
+    const statuses = status ? ([status] as RunStatus[]) : undefined;
 
-    // Gather runs from adapter
-    let runs: any[] = [];
-
-    if (signalName) {
-      runs = await deps.signalAdapter.listRuns(signalName);
-    } else {
-      // Get all runs by combining due + running + listing by known signals
-      const due = await deps.signalAdapter.getRunsDue();
-      const running = await deps.signalAdapter.getRunsRunning();
-      const seen = new Set<string>();
-      for (const r of [...due, ...running]) {
-        if (!seen.has(r.id)) {
-          seen.add(r.id);
-          runs.push(r);
-        }
-      }
-
-      // Also get runs from known signals
-      if (deps.signalRunner) {
-        for (const { name } of deps.signalRunner.listRegistered()) {
-          const signalRuns = await deps.signalAdapter.listRuns(name);
-          for (const r of signalRuns) {
-            if (!seen.has(r.id)) {
-              seen.add(r.id);
-              runs.push(r);
-            }
-          }
-        }
-      }
-    }
-
-    if (status) {
-      runs = runs.filter((r) => r.status === status);
-    }
-
-    // Sort by createdAt descending
-    runs.sort((a, b) => {
-      const aTime = a.createdAt instanceof Date ? a.createdAt.getTime() : new Date(a.createdAt).getTime();
-      const bTime = b.createdAt instanceof Date ? b.createdAt.getTime() : new Date(b.createdAt).getTime();
-      return bTime - aTime;
-    });
+    // Push filtering, ordering, and limiting into the adapter instead of
+    // loading every signal's full history and sorting in memory.
+    const runs: Run[] = signalName
+      ? await deps.signalAdapter.listRuns(signalName, { limit, offset, statuses })
+      : await deps.signalAdapter.listAllRuns({ limit, offset, statuses });
 
     return c.json({
       data: runs.map(serializeRun),
-      meta: { total: runs.length },
+      meta: { count: runs.length, limit, offset },
     });
   });
 
   app.get("/runs/stats", async (c) => {
-    const due = await deps.signalAdapter.getRunsDue();
-    const running = await deps.signalAdapter.getRunsRunning();
-
-    // Aggregate from known signals
-    let allRuns: any[] = [...due, ...running];
-    const seen = new Set(allRuns.map((r) => r.id));
-
-    if (deps.signalRunner) {
-      for (const { name } of deps.signalRunner.listRegistered()) {
-        const signalRuns = await deps.signalAdapter.listRuns(name);
-        for (const r of signalRuns) {
-          if (!seen.has(r.id)) {
-            seen.add(r.id);
-            allRuns.push(r);
-          }
-        }
-      }
-    }
-
+    const counts = await deps.signalAdapter.countRunsByStatus();
     const stats = { pending: 0, running: 0, completed: 0, failed: 0, cancelled: 0 };
-    for (const r of allRuns) {
-      if (r.status in stats) {
-        stats[r.status as keyof typeof stats]++;
-      }
+    for (const key of Object.keys(stats) as RunStatus[]) {
+      stats[key as keyof typeof stats] = counts[key] ?? 0;
     }
-
     return c.json({ data: stats });
   });
 
@@ -211,6 +157,13 @@ export function runRoutes(deps: RunDeps) {
   });
 
   return app;
+}
+
+/** Parse an integer query param, clamping to [min, max] with a fallback. */
+function clampInt(raw: string | undefined, fallback: number, min: number, max: number): number {
+  const n = parseInt(raw ?? "", 10);
+  if (Number.isNaN(n)) return fallback;
+  return Math.min(Math.max(n, min), max);
 }
 
 function serializeRun(run: any): Record<string, unknown> {

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
-import type { SerializableAdapter, AdapterManifest, Run, RunPatch, RunStatus, Step, StepPatch } from "station-signal";
+import type { SerializableAdapter, AdapterManifest, Run, RunPatch, RunStatus, Step, StepPatch, ListRunsOptions, ListAllRunsOptions } from "station-signal";
 import { registerAdapter } from "station-signal";
 
 const MODULE_URL = import.meta.url;
@@ -177,16 +177,17 @@ export class SqliteAdapter implements SerializableAdapter {
       .run(id);
   }
 
-  async getRunsDue(): Promise<Run[]> {
+  async getRunsDue(limit?: number): Promise<Run[]> {
     const now = new Date().toISOString();
+    const withLimit = limit !== undefined && limit >= 0;
     const rows = this
       .prep(
         `SELECT * FROM ${this.tableName}
          WHERE status = 'pending'
            AND (next_run_at IS NULL OR next_run_at <= ?)
-         ORDER BY created_at ASC`,
+         ORDER BY created_at ASC${withLimit ? " LIMIT ?" : ""}`,
       )
-      .all(now) as Record<string, unknown>[];
+      .all(...(withLimit ? [now, limit] : [now])) as Record<string, unknown>[];
 
     return rows.map(rowToRun);
   }
@@ -241,14 +242,93 @@ export class SqliteAdapter implements SerializableAdapter {
       .run(values);
   }
 
-  async listRuns(signalName: string): Promise<Run[]> {
-    const rows = this
-      .prep(
-        `SELECT * FROM ${this.tableName} WHERE signal_name = ? ORDER BY created_at DESC`,
-      )
-      .all(signalName) as Record<string, unknown>[];
+  async listRuns(signalName: string, options?: ListRunsOptions): Promise<Run[]> {
+    // No options → preserve legacy behavior (full history, newest-first).
+    if (!options) {
+      const rows = this
+        .prep(
+          `SELECT * FROM ${this.tableName} WHERE signal_name = ? ORDER BY created_at DESC`,
+        )
+        .all(signalName) as Record<string, unknown>[];
+      return rows.map(rowToRun);
+    }
 
+    const params: unknown[] = [signalName];
+    let sql = `SELECT * FROM ${this.tableName} WHERE signal_name = ?`;
+
+    if (options.statuses && options.statuses.length > 0) {
+      const placeholders = options.statuses.map(() => "?").join(", ");
+      sql += ` AND status IN (${placeholders})`;
+      params.push(...options.statuses);
+    }
+
+    sql += " ORDER BY created_at DESC";
+
+    const hasLimit = options.limit !== undefined && options.limit >= 0;
+    const hasOffset = options.offset !== undefined && options.offset >= 0;
+    if (hasLimit || hasOffset) {
+      // SQLite requires LIMIT before OFFSET; -1 means "no upper bound".
+      sql += " LIMIT ?";
+      params.push(hasLimit ? options.limit : -1);
+    }
+    if (hasOffset) {
+      sql += " OFFSET ?";
+      params.push(options.offset);
+    }
+
+    const rows = this.prep(sql).all(...params) as Record<string, unknown>[];
     return rows.map(rowToRun);
+  }
+
+  async listAllRuns(options?: ListAllRunsOptions): Promise<Run[]> {
+    const params: unknown[] = [];
+    let sql = `SELECT * FROM ${this.tableName}`;
+    const where: string[] = [];
+
+    if (options?.signalName) {
+      where.push("signal_name = ?");
+      params.push(options.signalName);
+    }
+    if (options?.statuses && options.statuses.length > 0) {
+      const placeholders = options.statuses.map(() => "?").join(", ");
+      where.push(`status IN (${placeholders})`);
+      params.push(...options.statuses);
+    }
+    if (where.length > 0) sql += ` WHERE ${where.join(" AND ")}`;
+
+    sql += " ORDER BY created_at DESC";
+
+    const hasLimit = options?.limit !== undefined && options.limit >= 0;
+    const hasOffset = options?.offset !== undefined && options.offset >= 0;
+    if (hasLimit || hasOffset) {
+      // SQLite requires LIMIT before OFFSET; -1 means "no upper bound".
+      sql += " LIMIT ?";
+      params.push(hasLimit ? options!.limit : -1);
+    }
+    if (hasOffset) {
+      sql += " OFFSET ?";
+      params.push(options!.offset);
+    }
+
+    const rows = this.prep(sql).all(...params) as Record<string, unknown>[];
+    return rows.map(rowToRun);
+  }
+
+  async countRunsByStatus(options?: { signalName?: string }): Promise<Partial<Record<RunStatus, number>>> {
+    const params: unknown[] = [];
+    let sql = `SELECT status, COUNT(*) as n FROM ${this.tableName}`;
+    if (options?.signalName) {
+      sql += " WHERE signal_name = ?";
+      params.push(options.signalName);
+    }
+    sql += " GROUP BY status";
+
+    const rows = this.prep(sql).all(...params) as Array<{ status: RunStatus; n: number }>;
+    const counts: Partial<Record<RunStatus, number>> = {};
+    for (const row of rows) {
+      counts[row.status] = row.n;
+    }
+    return counts;
   }
 
   async hasRunWithStatus(signalName: string, statuses: RunStatus[]): Promise<boolean> {

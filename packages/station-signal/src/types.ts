@@ -26,6 +26,24 @@ export interface Run {
 /** Patchable fields on a Run — identity fields (id, signalName, kind, createdAt) are immutable. */
 export type RunPatch = Partial<Omit<Run, "id" | "signalName" | "kind" | "createdAt">>;
 
+/**
+ * Query options for paginated run listings. When any field is set, results
+ * are returned newest-first (createdAt descending) and bounded by `limit`.
+ */
+export interface ListRunsOptions {
+  /** Maximum rows to return. */
+  limit?: number;
+  /** Rows to skip (for pagination). */
+  offset?: number;
+  /** Restrict to these statuses. */
+  statuses?: RunStatus[];
+}
+
+/** Like {@link ListRunsOptions} but may span all signals; `signalName` narrows it. */
+export interface ListAllRunsOptions extends ListRunsOptions {
+  signalName?: string;
+}
+
 export type StepStatus = "pending" | "running" | "completed" | "failed";
 
 export interface Step {

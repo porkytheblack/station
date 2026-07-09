@@ -3,7 +3,8 @@ import { createMiddleware } from "hono/factory";
 import { bodyLimit } from "hono/body-limit";
 import { serve } from "@hono/node-server";
 import { resolve } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import type { Server } from "node:http";
 import { SignalRunner, MemoryAdapter, parseInterval } from "station-signal";
 import { BroadcastRunner, BroadcastMemoryAdapter } from "station-broadcast";
@@ -106,7 +107,7 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
   if (config.auth) {
     const storage = config.auth.keyStorage
       ?? new FileKeyStorage({ filePath: resolve(dataDir, "station-keys.json") });
-    keyStore = new KeyStore(storage);
+    keyStore = new KeyStore(storage, { pepper: resolveKeyPepper(dataDir) });
     sessionConfig = {
       username: config.auth.username,
       password: config.auth.password,
@@ -512,6 +513,36 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
 // upgrade doesn't silently appear to wipe a user's API keys.
 function isLoopbackHost(host: string): boolean {
   return host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]";
+}
+
+/**
+ * Resolve the API-key pepper (a server-side secret mixed into stored key
+ * hashes). Priority: STATION_KEY_PEPPER env var, else a persisted per-install
+ * secret at `<dataDir>/station-key-pepper` (generated with 0600 on first run).
+ * Persisting it means existing peppered keys keep verifying across restarts.
+ */
+function resolveKeyPepper(dataDir: string): string {
+  const fromEnv = process.env.STATION_KEY_PEPPER;
+  if (fromEnv) return fromEnv;
+
+  const pepperPath = resolve(dataDir, "station-key-pepper");
+  try {
+    if (existsSync(pepperPath)) {
+      const existing = readFileSync(pepperPath, "utf8").trim();
+      if (existing) return existing;
+    }
+  } catch {
+    // Unreadable — fall through and regenerate.
+  }
+  const pepper = randomBytes(32).toString("hex");
+  try {
+    writeFileSync(pepperPath, pepper, { mode: 0o600 });
+  } catch (err) {
+    // If we can't persist it, warn: keys created this run won't verify after
+    // a restart (a new pepper would be generated). Better than failing boot.
+    console.warn(`[station] Could not persist key pepper to ${pepperPath}:`, err);
+  }
+  return pepper;
 }
 
 function warnIfLegacySqliteFiles(dataDir: string): void {

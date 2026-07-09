@@ -561,8 +561,8 @@ export class BroadcastRunner {
         await this.advanceBroadcast(bRun);
       }
 
-      // Pick up pending broadcasts
-      const due = await this.adapter.getBroadcastRunsDue();
+      // Pick up pending broadcasts (bounded batch — we init them one per pass).
+      const due = await this.adapter.getBroadcastRunsDue(100);
       for (const bRun of due) {
         await this.initBroadcast(bRun);
       }

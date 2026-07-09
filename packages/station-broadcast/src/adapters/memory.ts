@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { BroadcastQueueAdapter } from "./index.js";
+import type { BroadcastQueueAdapter, ListBroadcastRunsOptions } from "./index.js";
 import type {
   BroadcastRun,
   BroadcastRunPatch,
@@ -85,15 +85,16 @@ export class BroadcastMemoryAdapter implements BroadcastQueueAdapter {
     }
   }
 
-  async getBroadcastRunsDue(): Promise<BroadcastRun[]> {
+  async getBroadcastRunsDue(limit?: number): Promise<BroadcastRun[]> {
     const now = new Date();
-    return Array.from(this.runs.values())
+    const due = Array.from(this.runs.values())
       .filter((run) => {
         if (run.status !== "pending") return false;
         if (!run.nextRunAt) return true;
         return run.nextRunAt <= now;
       })
       .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+    return limit !== undefined && limit >= 0 ? due.slice(0, limit) : due;
   }
 
   async getBroadcastRunsRunning(): Promise<BroadcastRun[]> {
@@ -102,10 +103,20 @@ export class BroadcastMemoryAdapter implements BroadcastQueueAdapter {
     );
   }
 
-  async listBroadcastRuns(broadcastName: string): Promise<BroadcastRun[]> {
-    return Array.from(this.runs.values()).filter(
+  async listBroadcastRuns(broadcastName: string, options?: ListBroadcastRunsOptions): Promise<BroadcastRun[]> {
+    let rows = Array.from(this.runs.values()).filter(
       (run) => run.broadcastName === broadcastName,
     );
+    if (!options) return rows;
+    if (options.statuses && options.statuses.length > 0) {
+      const set = new Set(options.statuses);
+      rows = rows.filter((run) => set.has(run.status));
+    }
+    rows = rows.slice().sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    const offset = options.offset ?? 0;
+    if (offset > 0) rows = rows.slice(offset);
+    if (options.limit !== undefined && options.limit >= 0) rows = rows.slice(0, options.limit);
+    return rows;
   }
 
   async hasBroadcastRunWithStatus(broadcastName: string, statuses: BroadcastRunStatus[]): Promise<boolean> {

@@ -9,6 +9,7 @@ import type {
   BroadcastNodeRun,
   BroadcastNodeRunPatch,
   DynamicBroadcastSpec,
+  ListBroadcastRunsOptions,
 } from "station-broadcast";
 
 import { validateTableName, dateToStr, createColumnMapper, rowToObject, runIdempotentDdl } from "./shared.js";
@@ -254,15 +255,18 @@ export class BroadcastMysqlAdapter implements BroadcastQueueAdapter {
     );
   }
 
-  async getBroadcastRunsDue(): Promise<BroadcastRun[]> {
+  async getBroadcastRunsDue(limit?: number): Promise<BroadcastRun[]> {
     const now = dateToStr(new Date());
-    const [rows] = await this.pool.execute<RowDataPacket[]>(
-      `SELECT * FROM ${this.runsTable}
+    const params: (string | number | null)[] = [now];
+    let sql = `SELECT * FROM ${this.runsTable}
        WHERE status = 'pending'
          AND (next_run_at IS NULL OR next_run_at <= ?)
-       ORDER BY created_at ASC`,
-      [now],
-    );
+       ORDER BY created_at ASC`;
+    if (limit !== undefined && limit >= 0) {
+      sql += ` LIMIT ?`;
+      params.push(limit);
+    }
+    const [rows] = await this.pool.execute<RowDataPacket[]>(sql, params);
     return rows.map((row) => rowToBroadcastRun(row as Record<string, unknown>));
   }
 
@@ -273,11 +277,37 @@ export class BroadcastMysqlAdapter implements BroadcastQueueAdapter {
     return rows.map((row) => rowToBroadcastRun(row as Record<string, unknown>));
   }
 
-  async listBroadcastRuns(broadcastName: string): Promise<BroadcastRun[]> {
-    const [rows] = await this.pool.execute<RowDataPacket[]>(
-      `SELECT * FROM ${this.runsTable} WHERE broadcast_name = ? ORDER BY created_at DESC`,
-      [broadcastName],
-    );
+  async listBroadcastRuns(broadcastName: string, options?: ListBroadcastRunsOptions): Promise<BroadcastRun[]> {
+    // No options → preserve legacy behavior (full history, created_at DESC).
+    if (!options) {
+      const [rows] = await this.pool.execute<RowDataPacket[]>(
+        `SELECT * FROM ${this.runsTable} WHERE broadcast_name = ? ORDER BY created_at DESC`,
+        [broadcastName],
+      );
+      return rows.map((row) => rowToBroadcastRun(row as Record<string, unknown>));
+    }
+    const params: (string | number)[] = [broadcastName];
+    let sql = `SELECT * FROM ${this.runsTable} WHERE broadcast_name = ?`;
+    if (options.statuses && options.statuses.length > 0) {
+      const placeholders = options.statuses.map(() => "?").join(", ");
+      sql += ` AND status IN (${placeholders})`;
+      params.push(...options.statuses);
+    }
+    sql += ` ORDER BY created_at DESC`;
+    const hasLimit = options.limit !== undefined && options.limit >= 0;
+    const hasOffset = options.offset !== undefined && options.offset >= 0;
+    if (hasLimit) {
+      sql += ` LIMIT ?`;
+      params.push(options.limit as number);
+      if (hasOffset) {
+        sql += ` OFFSET ?`;
+        params.push(options.offset as number);
+      }
+    } else if (hasOffset) {
+      sql += ` LIMIT 18446744073709551615 OFFSET ?`;
+      params.push(options.offset as number);
+    }
+    const [rows] = await this.pool.execute<RowDataPacket[]>(sql, params);
     return rows.map((row) => rowToBroadcastRun(row as Record<string, unknown>));
   }
 

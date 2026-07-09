@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import Redis from "ioredis";
 export type { Redis } from "ioredis";
-import type { SerializableAdapter, AdapterManifest, Run, RunPatch, RunStatus, Step, StepPatch } from "station-signal";
+import type { SerializableAdapter, AdapterManifest, ListAllRunsOptions, ListRunsOptions, Run, RunPatch, RunStatus, Step, StepPatch } from "station-signal";
 import { registerAdapter } from "station-signal";
 
 import {
@@ -9,6 +9,7 @@ import {
   pendingRunsKey,
   runningRunsKey,
   signalRunsKey,
+  signalNamesKey,
   statusRunsKey,
   completedAtRunsKey,
   stepHashKey,
@@ -19,12 +20,17 @@ import {
   hashToStep,
   dateToScore,
   patchToHashArgs,
+  ATOMIC_RUN_UPDATE_LUA,
+  atomicUpdateArgs,
   RUN_PATCH_KEYS,
   STEP_PATCH_KEYS,
   RUN_DATE_FIELDS,
   RUN_NUMBER_FIELDS,
   STEP_DATE_FIELDS,
 } from "./shared.js";
+
+/** All run statuses — used to enumerate status index sets. */
+const ALL_RUN_STATUSES: RunStatus[] = ["pending", "running", "completed", "failed", "cancelled"];
 
 const MODULE_URL = import.meta.url;
 
@@ -93,6 +99,12 @@ export class RedisAdapter implements SerializableAdapter {
     // Index by signal name (score = createdAt timestamp for ordering)
     pipeline.zadd(signalRunsKey(this.prefix, run.signalName), String(run.createdAt.getTime()), run.id);
 
+    // Track the signal name so listAllRuns/countRunsByStatus can enumerate
+    // signals. Forward-populated: runs written by older versions are still
+    // reachable via listRuns(name); they just won't appear in cross-signal
+    // queries until a new run for that signal is added.
+    pipeline.sadd(signalNamesKey(this.prefix), run.signalName);
+
     // Index by signal name + status (set for hasRunWithStatus)
     pipeline.sadd(statusRunsKey(this.prefix, run.signalName, run.status), run.id);
 
@@ -138,9 +150,11 @@ export class RedisAdapter implements SerializableAdapter {
     await pipeline.exec();
   }
 
-  async getRunsDue(): Promise<Run[]> {
+  async getRunsDue(limit?: number): Promise<Run[]> {
     const now = Date.now();
-    const ids = await this.redis.zrangebyscore(pendingRunsKey(this.prefix), "-inf", String(now));
+    const ids = limit !== undefined && limit >= 0
+      ? await this.redis.zrangebyscore(pendingRunsKey(this.prefix), "-inf", String(now), "LIMIT", 0, limit)
+      : await this.redis.zrangebyscore(pendingRunsKey(this.prefix), "-inf", String(now));
     if (ids.length === 0) return [];
 
     return this.fetchRunsByIds(ids);
@@ -172,66 +186,90 @@ export class RedisAdapter implements SerializableAdapter {
 
     if (Object.keys(setArgs).length === 0 && delFields.length === 0) return;
 
-    const pipeline = this.redis.multi();
-
-    // Update hash fields
-    if (Object.keys(setArgs).length > 0) {
-      pipeline.hset(runHashKey(this.prefix, id), setArgs);
-    }
-
-    // Remove deleted fields from hash
-    if (delFields.length > 0) {
-      pipeline.hdel(runHashKey(this.prefix, id), ...delFields);
-    }
-
-    // Handle status transitions
-    const newStatus = patch.status;
-    if (newStatus !== undefined && newStatus !== currentRun.status) {
-      // Remove from old status index set
-      pipeline.srem(statusRunsKey(this.prefix, currentRun.signalName, currentRun.status), id);
-      // Add to new status index set
-      pipeline.sadd(statusRunsKey(this.prefix, currentRun.signalName, newStatus), id);
-
-      // Remove from old scheduling sorted set
-      if (currentRun.status === "pending") {
-        pipeline.zrem(pendingRunsKey(this.prefix), id);
-      } else if (currentRun.status === "running") {
-        pipeline.zrem(runningRunsKey(this.prefix), id);
-      }
-
-      // Add to new scheduling sorted set
-      if (newStatus === "pending") {
-        const nextRunAt = patch.nextRunAt ?? currentRun.nextRunAt;
-        pipeline.zadd(pendingRunsKey(this.prefix), String(dateToScore(nextRunAt)), id);
-      } else if (newStatus === "running") {
-        const startedAt = patch.startedAt ?? currentRun.startedAt;
-        pipeline.zadd(runningRunsKey(this.prefix), String(dateToScore(startedAt)), id);
-      }
-    } else if (newStatus === undefined || newStatus === currentRun.status) {
-      // Status unchanged — but nextRunAt may have changed for a pending run
-      if (currentRun.status === "pending" && patch.nextRunAt !== undefined) {
-        pipeline.zadd(pendingRunsKey(this.prefix), String(dateToScore(patch.nextRunAt)), id);
-      }
-    }
-
-    // Track completedAt for purge
-    if (patch.completedAt !== undefined) {
-      if (patch.completedAt === null) {
-        pipeline.zrem(completedAtRunsKey(this.prefix), id);
-      } else {
-        pipeline.zadd(completedAtRunsKey(this.prefix), String((patch.completedAt as Date).getTime()), id);
-      }
-    }
-
-    await pipeline.exec();
+    // Atomic read-current-status + field update + index reconciliation, so
+    // concurrent updaters cannot corrupt the status set / scheduling zsets.
+    // signalName is immutable, so building the status-key base from the
+    // JS-read run is safe; only the scheduling *scores* fall back to the
+    // (harmlessly stale) current values.
+    const statusKeyBase = statusRunsKey(this.prefix, currentRun.signalName, "");
+    const argv = atomicUpdateArgs(setArgs, delFields, patch, currentRun);
+    await this.redis.eval(
+      ATOMIC_RUN_UPDATE_LUA,
+      4,
+      runHashKey(this.prefix, id),
+      pendingRunsKey(this.prefix),
+      runningRunsKey(this.prefix),
+      completedAtRunsKey(this.prefix),
+      id,
+      statusKeyBase,
+      ...argv,
+    );
   }
 
-  async listRuns(signalName: string): Promise<Run[]> {
+  async listRuns(signalName: string, options?: ListRunsOptions): Promise<Run[]> {
     // ZREVRANGE returns IDs ordered by createdAt descending
     const ids = await this.redis.zrevrange(signalRunsKey(this.prefix, signalName), 0, -1);
     if (ids.length === 0) return [];
 
-    return this.fetchRunsByIds(ids);
+    const runs = await this.fetchRunsByIds(ids);
+    return options ? applyRunListOptions(runs, options) : runs;
+  }
+
+  async listAllRuns(options?: ListAllRunsOptions): Promise<Run[]> {
+    const names = options?.signalName
+      ? [options.signalName]
+      : await this.redis.smembers(signalNamesKey(this.prefix));
+    if (names.length === 0) return [];
+
+    // Gather run ids for every signal in one pipeline.
+    const pipeline = this.redis.pipeline();
+    for (const name of names) {
+      pipeline.zrevrange(signalRunsKey(this.prefix, name), 0, -1);
+    }
+    const results = await pipeline.exec();
+    const ids: string[] = [];
+    if (results) {
+      for (const [err, list] of results) {
+        if (!err && Array.isArray(list)) ids.push(...(list as string[]));
+      }
+    }
+    if (ids.length === 0) return [];
+
+    const runs = await this.fetchRunsByIds(ids);
+    // Merge-sort across signals: newest first.
+    runs.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    return applyRunListOptions(runs, options ?? {});
+  }
+
+  async countRunsByStatus(options?: { signalName?: string }): Promise<Partial<Record<RunStatus, number>>> {
+    const names = options?.signalName
+      ? [options.signalName]
+      : await this.redis.smembers(signalNamesKey(this.prefix));
+    if (names.length === 0) return {};
+
+    // One SCARD per (signal, status) in a single pipeline; sum per status.
+    const pipeline = this.redis.pipeline();
+    const statusOrder: RunStatus[] = [];
+    for (const name of names) {
+      for (const status of ALL_RUN_STATUSES) {
+        pipeline.scard(statusRunsKey(this.prefix, name, status));
+        statusOrder.push(status);
+      }
+    }
+    const results = await pipeline.exec();
+    const counts: Partial<Record<RunStatus, number>> = {};
+    if (results) {
+      for (let i = 0; i < results.length; i++) {
+        const [err, card] = results[i];
+        if (err) continue;
+        const n = Number(card);
+        if (n > 0) {
+          const status = statusOrder[i];
+          counts[status] = (counts[status] ?? 0) + n;
+        }
+      }
+    }
+    return counts;
   }
 
   async hasRunWithStatus(signalName: string, statuses: RunStatus[]): Promise<boolean> {
@@ -399,6 +437,23 @@ export class RedisAdapter implements SerializableAdapter {
     }
     return runs;
   }
+}
+
+/**
+ * Apply status filter + offset/limit to an already-newest-first run list.
+ * Redis has no per-signal status-ordered index, so the status filter is a
+ * post-fetch pass — acceptable for the dashboard's bounded listings.
+ */
+function applyRunListOptions(runs: Run[], options: ListRunsOptions): Run[] {
+  let out = runs;
+  if (options.statuses && options.statuses.length > 0) {
+    const set = new Set(options.statuses);
+    out = out.filter((run) => set.has(run.status));
+  }
+  const offset = options.offset ?? 0;
+  if (offset > 0) out = out.slice(offset);
+  if (options.limit !== undefined && options.limit >= 0) out = out.slice(0, options.limit);
+  return out;
 }
 
 // Register in the adapter factory for cross-process reconstruction
