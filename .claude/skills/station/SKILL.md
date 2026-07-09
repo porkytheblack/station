@@ -368,7 +368,7 @@ npx station deploy
 ```
 
 **What it does:**
-1. Discovers all `.ts`/`.js` files in `signalsDir` and `broadcastsDir`
+1. Discovers all `.ts`/`.js`/`.mjs` files in `signalsDir` and `broadcastsDir`
 2. Bundles each as an esbuild entry point with code splitting (shared imports become chunk files)
 3. Externalizes npm packages (installed via `npm install` at deploy time)
 4. Resolves `workspace:*` to `^{version}` for monorepo dependencies
@@ -583,7 +583,8 @@ export const charge = signal("charge")
   });
 ```
 
-- **Requiring a var**: `.env("KEY", ...)` on a signal or beacon. Before dispatch the runner checks each key against the env store **and** the host `process.env`; a signal run **fails** with a clear error listing the missing keys, a beacon is marked **errored** (terminal — no restart loop; `startBeacon` clears it so you can retry after defining the var). Reserved keys (`PATH`, `NODE_OPTIONS`, `LD_PRELOAD`, `STATION_*`, …) are rejected — they change how the child executes, not what the handler reads.
+- **Requiring a var**: `.env("KEY", ...)` on a signal or beacon. Before dispatch the runner checks each key against the env store **and** the host `process.env`; a signal run **fails** with a clear error listing the missing keys, a beacon is marked **errored** (terminal — no restart loop; `startBeacon` clears it so you can retry after defining the var). (The `.env()` builder itself only validates the key *pattern*; it does not reject reserved keys — see next bullet.)
+- **Reserved keys**: the env **store** (the dashboard / API write path — *not* the `.env()` builder) rejects keys that change how the child *process* executes rather than what the handler reads. Blocked keys: `PATH`, `NODE_OPTIONS`, `NODE_PATH`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`; blocked prefixes: `STATION_SIGNAL_*`, `STATION_BEACON_*`, `__STATION*`. This is **not** a blanket `STATION_*` block — `STATION_ENDPOINT` / `STATION_API_KEY` are accepted.
 - **Scoping (resolution model)**: a var with no targets is **global** (injected into every signal and beacon); a var with `targets` applies only to those and **overrides** a global var of the same key. Two vars may share a key only if their scopes can't both apply to one target (resolution stays deterministic) — the store rejects a conflicting definition.
 - **Secrets**: mark a var `secret` and its value becomes write-only — the API/dashboard return `value: null`, but the real value is still injected at run time. A secret can't be downgraded to non-secret.
 - **Storage (pluggable)**: default is `FileEnvStorage` — a JSON file at `<dataDir>/station-env.json` (fsync'd tmp + rename, `0o600`, no native deps, single-process). Pass `envStorage` in `StationConfig` for a durable adapter from a `station-adapter-{sqlite,postgres,mysql,redis}/env` subpath in multi-process deployments. `EnvStore` methods (`create`, `update`, `delete`, `resolveFor`, `listPublic`, `close`) are async.
@@ -633,12 +634,18 @@ const station = await createTauriStation({
   signalsDir: "./signals",
   broadcastsDir: "./broadcasts",
   port: 4400,
+  // station: { logLevel: "warn", /* ... */ }  // optional Partial<StationUserConfig> overrides
 });
 
-// station.port — bound port
+// createTauriStation does NOT auto-start — you MUST call start() to bind the port.
+await station.start();
+
+// Returned instance shape: { port: number; apiKey: string; start(): Promise<void>; stop(): Promise<void> }
+// station.port   — bound port
 // station.apiKey — auto-provisioned API key
-// station.keyStore — key store instance
-// station.dataDir — resolved data directory
+// NOTE: keyStore / dataDir are NOT on this object. They live on the internal
+// createStation() instance, which createTauriStation does not re-surface.
+
 await station.stop();
 ```
 

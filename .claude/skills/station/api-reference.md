@@ -182,6 +182,7 @@ interface Signal<TInput = unknown, TOutput = void> {
   readonly maxAttempts: number;
   readonly maxConcurrency?: number;
   readonly recurringInput?: TInput;
+  readonly requiredEnv?: string[];        // keys declared via .env(); enforced before dispatch
 
   /**
    * Trigger the signal. Validates input against inputSchema.
@@ -203,10 +204,13 @@ interface SignalRunnerOptions {
   signalsDir?: string;
   adapter?: SignalQueueAdapter;
   pollIntervalMs?: number;          // default: 1000
+  idlePollIntervalMs?: number;      // default: max(pollIntervalMs, 5000) — ceiling for idle poll backoff
   maxAttempts?: number;              // default: 1
   subscribers?: SignalSubscriber[];
   maxConcurrent?: number;            // default: 5
   retryBackoffMs?: number;           // default: 1000
+  scheduleReconciler?: SignalScheduleReconciler;  // runtime schedules (see §10)
+  envProvider?: EnvProvider;                       // runtime env-var injection (see §14)
 }
 
 class SignalRunner {
@@ -350,11 +354,13 @@ interface SignalQueueAdapter {
   // Run methods
   addRun(run: Run): Promise<void>;
   removeRun(id: string): Promise<void>;
-  getRunsDue(): Promise<Run[]>;
+  getRunsDue(limit?: number): Promise<Run[]>;
   getRunsRunning(): Promise<Run[]>;
   getRun(id: string): Promise<Run | null>;
   updateRun(id: string, patch: RunPatch): Promise<void>;
   listRuns(signalName: string): Promise<Run[]>;
+  listAllRuns(options?: ListAllRunsOptions): Promise<Run[]>;
+  countRunsByStatus(options?: { signalName?: string }): Promise<Partial<Record<RunStatus, number>>>;
   hasRunWithStatus(signalName: string, statuses: RunStatus[]): Promise<boolean>;
   purgeRuns(olderThan: Date, statuses: RunStatus[]): Promise<number>;
 
@@ -1274,11 +1280,18 @@ interface StationConfig {
   host: string;                          // default: "localhost"
   adapter?: SignalQueueAdapter;
   broadcastAdapter?: BroadcastQueueAdapter;
+  beaconAdapter?: BeaconStateAdapter;    // durable beacon instance state + lifecycle log
   /**
    * Optional schedule storage. When provided, runtime-editable schedules are
    * persisted here and reconciled by both runners. (See §10.)
    */
   scheduleAdapter?: ScheduleAdapter;
+  /**
+   * Optional storage for runtime-managed environment variables. Defaults to a
+   * `FileEnvStorage` (JSON at `<dataDir>/station-env.json`, single-process).
+   * Provide a durable `EnvStorageAdapter` for multi-process deployments. (See §14.)
+   */
+  envStorage?: EnvStorageAdapter;
   /**
    * Pluggable storage backend for run logs. Defaults to a `FileLogStorage`
    * (append-only JSONL at `<dataDir>/station-logs.jsonl`, no native deps,
@@ -1289,6 +1302,7 @@ interface StationConfig {
   logStorage?: LogStorageAdapter;
   signalsDir?: string;                   // auto-detects "./signals" if exists
   broadcastsDir?: string;                // auto-detects "./broadcasts" if exists
+  beaconsDir?: string;                   // auto-detects "./beacons" if exists; supervises beacons + surfaces them on the dashboard
   runner: RunnerConfig;
   broadcastRunner: BroadcastRunnerConfig;
   runRunners: boolean;                   // default: true
@@ -2430,7 +2444,7 @@ interface EnvTarget { kind: "signal" | "beacon"; name: string; }
 
 interface EnvVar {
   id: string;
-  key: string;               // POSIX-style; reserved keys (PATH, NODE_OPTIONS, STATION_*, …) rejected
+  key: string;               // POSIX-style; store rejects loader/exec keys (PATH, NODE_OPTIONS, NODE_PATH, LD_PRELOAD, LD_LIBRARY_PATH, DYLD_INSERT_LIBRARIES, DYLD_LIBRARY_PATH) + prefixes STATION_SIGNAL_/STATION_BEACON_/__STATION
   value: string;
   secret: boolean;           // secret ⇒ value redacted (null) on read, still injected at run time
   targets: EnvTarget[];      // empty ⇒ global; else scoped (overrides a global of the same key)

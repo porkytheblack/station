@@ -1279,6 +1279,9 @@ const station = await createTauriStation({
   port: 4400,
 });
 
+// createTauriStation returns an UNSTARTED instance — start() binds the port.
+await station.start();
+
 console.log(`Station ready on port ${station.port}`);
 console.log(`API key: ${station.apiKey}`);
 
@@ -1757,7 +1760,7 @@ If your logic outgrows the expression language (async lookups, complex string te
 
 ## 23. Custom API Key Storage
 
-`KeyStore` accepts a pluggable `ApiKeyStorageAdapter`. Default is SQLite. Implement the interface against any backend.
+`KeyStore` accepts a pluggable `ApiKeyStorageAdapter`. The default is `FileKeyStorage` — a JSON file at `<dataDir>/station-keys.json`, no native deps (`SqliteKeyStorage` is opt-in and requires `better-sqlite3`). Implement the interface against any backend.
 
 ### 23.1 Skeleton: Postgres-backed key storage
 
