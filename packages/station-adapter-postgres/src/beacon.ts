@@ -13,6 +13,8 @@ export interface BeaconPostgresAdapterOptions {
   pool?: pg.Pool;
   tableName?: string;
   eventsTableName?: string;
+  /** Max lifecycle events retained per beacon. @default 1000 */
+  maxEventsPerBeacon?: number;
 }
 
 /** Durable {@link BeaconStateAdapter} backed by PostgreSQL (pg). */
@@ -21,11 +23,13 @@ export class BeaconPostgresAdapter implements BeaconStateAdapter {
   private ownsPool: boolean;
   private table: string;
   private eventsTable: string;
+  private maxEvents: number;
   private initialized: Promise<void>;
 
   constructor(options: BeaconPostgresAdapterOptions = {}) {
     this.table = validateTableName(options.tableName ?? "beacon_instances");
     this.eventsTable = validateTableName(options.eventsTableName ?? "beacon_events");
+    this.maxEvents = options.maxEventsPerBeacon ?? 1000;
     if (options.pool) {
       this.pool = options.pool;
       this.ownsPool = false;
@@ -187,6 +191,19 @@ export class BeaconPostgresAdapter implements BeaconStateAdapter {
       `INSERT INTO ${this.eventsTable} (id, beacon_name, incarnation, type, message, at)
        VALUES ($1, $2, $3, $4, $5, $6)`,
       [event.id, event.beaconName, event.incarnation, event.type, event.message ?? null, event.at],
+    );
+    // Prune this beacon's oldest events beyond the retention cap. The subquery
+    // returns the seq of the maxEvents-th newest row (LIMIT 1 OFFSET maxEvents);
+    // rows at/below it are deleted. When the beacon has <= maxEvents rows the
+    // subquery yields no row → NULL → `seq <= NULL` deletes nothing.
+    await this.pool.query(
+      `DELETE FROM ${this.eventsTable}
+       WHERE beacon_name = $1
+         AND seq <= (
+           SELECT seq FROM ${this.eventsTable}
+           WHERE beacon_name = $2 ORDER BY seq DESC LIMIT 1 OFFSET $3
+         )`,
+      [event.beaconName, event.beaconName, this.maxEvents],
     );
   }
 

@@ -55,7 +55,9 @@ export function beaconRoutes(deps: BeaconDeps) {
   // GET /beacons/:name/events — lifecycle event log (if the adapter records one)
   app.get("/beacons/:name/events", async (c) => {
     const name = c.req.param("name");
-    const limit = Number(c.req.query("limit") ?? "200");
+    // Clamp so a client can't request an unbounded (or NaN) event scan.
+    const raw = Number(c.req.query("limit") ?? "200");
+    const limit = Number.isFinite(raw) ? Math.min(Math.max(Math.trunc(raw), 1), 1000) : 200;
     if (!deps.beaconAdapter?.listEvents) return c.json({ data: [] });
     const events = await deps.beaconAdapter.listEvents(name, limit);
     return c.json({

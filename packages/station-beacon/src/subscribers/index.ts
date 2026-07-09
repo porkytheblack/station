@@ -20,6 +20,22 @@ export interface BeaconIPCMessage {
 }
 
 /**
+ * Message sent from the supervisor to a beacon child right after spawn. Carries
+ * the beacon config and signal-adapter configuration (which may contain DB
+ * credentials) over the private IPC channel so they never appear in the child's
+ * environment — env is world-readable to same-user processes via /proc.
+ */
+export interface BeaconJobInitMessage {
+  type: "job:init";
+  data: {
+    config: string;
+    signalAdapterName?: string;
+    signalAdapterOptions?: Record<string, unknown>;
+    signalAdapterImport?: string;
+  };
+}
+
+/**
  * Subscriber interface for beacon supervision events. All methods are optional
  * — implement only the events you care about. Errors thrown from a handler are
  * caught and logged by the supervisor.

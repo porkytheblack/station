@@ -35,6 +35,7 @@ export {
 export {
   type BeaconSubscriber,
   type BeaconIPCMessage,
+  type BeaconJobInitMessage,
   ConsoleBeaconSubscriber,
 } from "./subscribers/index.js";
 
