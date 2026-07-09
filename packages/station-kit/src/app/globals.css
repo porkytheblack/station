@@ -522,6 +522,54 @@ a:hover {
   background: var(--muted-light);
 }
 
+/* Beacon lifecycle statuses */
+.status-badge--stopped {
+  background: rgba(58, 58, 60, 0.08);
+  color: var(--muted);
+}
+
+.status-badge--stopped .status-badge-dot {
+  background: var(--wire);
+}
+
+.status-badge--starting {
+  background: rgba(139, 90, 43, 0.1);
+  color: var(--rust);
+}
+
+.status-badge--starting .status-badge-dot {
+  background: var(--rust-pale);
+  animation: status-blink var(--duration-blink) ease-in-out infinite;
+}
+
+.status-badge--stopping {
+  background: rgba(139, 90, 43, 0.08);
+  color: var(--rust-light);
+}
+
+.status-badge--stopping .status-badge-dot {
+  background: var(--rust-pale);
+  animation: status-blink var(--duration-blink) ease-in-out infinite;
+}
+
+.status-badge--backoff {
+  background: rgba(139, 90, 43, 0.08);
+  color: var(--rust-light);
+}
+
+.status-badge--backoff .status-badge-dot {
+  background: var(--rust-pale);
+}
+
+.status-badge--errored {
+  background: rgba(139, 90, 43, 0.1);
+  color: var(--rust);
+}
+
+.status-badge--errored .status-badge-dot {
+  background: var(--rust);
+}
+
 /* ─── Tables ──────────────────────────────────────────────── */
 
 .station-table {

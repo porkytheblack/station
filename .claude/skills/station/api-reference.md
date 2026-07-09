@@ -2385,6 +2385,7 @@ All optional; errors are caught and logged. `onBeaconDiscovered`, `onBeaconStart
 - **Fatal errors** (invalid config, beacon not found) exit with `FATAL_EXIT_CODE` (78, exported) and go to `errored` without restarting — the sentinel exit code is authoritative so a bad config never restart-loops, even under `restart("always")`.
 - Child processes are `unref`'d and self-exit on IPC `disconnect`, so a dying supervisor never leaves orphans.
 - Triggering signals from a beacon requires a **persistent** signal adapter (SQLite/Postgres/…) wired via `signalRunner`; the default in-memory adapter does not cross the child-process boundary.
+- **Dashboard**: set `beaconsDir` (and optionally `beaconAdapter`) in `station-kit`'s `defineConfig` to supervise beacons and surface them on the dashboard `/beacons` page (live status, logs, lifecycle events, start/stop/restart controls). REST surface: `GET /api/beacons`, `GET /api/beacons/:name/{events,logs}`, `POST /api/beacons/:name/{start,stop,restart}`.
 
 ---
 

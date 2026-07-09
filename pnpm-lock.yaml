@@ -273,6 +273,9 @@ importers:
         specifier: workspace:*
         version: link:../../packages/station-signal
     devDependencies:
+      station-kit:
+        specifier: workspace:*
+        version: link:../../packages/station-kit
       tsx:
         specifier: ^4.21.0
         version: 4.21.0
@@ -436,6 +439,9 @@ importers:
       station-adapter-sqlite:
         specifier: workspace:*
         version: link:../station-adapter-sqlite
+      station-beacon:
+        specifier: workspace:*
+        version: link:../station-beacon
       station-broadcast:
         specifier: workspace:*
         version: link:../station-broadcast

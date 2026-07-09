@@ -21,6 +21,18 @@ This starts three beacons from `beacons/`:
 Press `Ctrl-C` to trigger a graceful shutdown — each beacon's `onStop` cleanup
 runs before the process exits.
 
+## Dashboard
+
+`station.config.ts` points the dashboard at these beacons. Run:
+
+```bash
+npx station
+```
+
+Then open **http://localhost:4400/beacons** to watch each beacon's status,
+incarnation, restart count, live logs, and lifecycle events — and start / stop /
+restart them from the UI.
+
 ## Triggering signals from a beacon
 
 Beacons can trigger signals (e.g. a poller firing an alert when a check fails).

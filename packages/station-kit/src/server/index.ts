@@ -6,8 +6,10 @@ import { existsSync } from "node:fs";
 import type { Server } from "node:http";
 import { SignalRunner, MemoryAdapter, parseInterval } from "station-signal";
 import { BroadcastRunner, BroadcastMemoryAdapter } from "station-broadcast";
+import { BeaconRunner, BeaconMemoryAdapter } from "station-beacon";
 import type { SignalQueueAdapter } from "station-signal";
 import type { BroadcastQueueAdapter } from "station-broadcast";
+import type { BeaconStateAdapter } from "station-beacon";
 import {
   ScheduleReconciler,
   type Schedule,
@@ -19,11 +21,12 @@ import { WebSocketHub } from "./ws.js";
 import { SSEHub } from "./sse.js";
 import { LogBuffer } from "./log-buffer.js";
 import { LogStore, FileLogStorage } from "./log-store.js";
-import { StationSignalSubscriber, StationBroadcastSubscriber } from "./subscriber.js";
+import { StationSignalSubscriber, StationBroadcastSubscriber, StationBeaconSubscriber } from "./subscriber.js";
 import { healthRoutes } from "./routes/health.js";
 import { signalRoutes } from "./routes/signals.js";
 import { runRoutes } from "./routes/runs.js";
 import { broadcastRoutes } from "./routes/broadcasts.js";
+import { beaconRoutes } from "./routes/beacons.js";
 import { KeyStore, FileKeyStorage } from "./auth/keys.js";
 import { verifySessionToken, verifyCredentials, createSessionToken, type SessionConfig } from "./auth/session.js";
 import { authResolver } from "./middleware/auth.js";
@@ -78,6 +81,8 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
   const signalAdapter: SignalQueueAdapter = config.adapter ?? new MemoryAdapter();
   const broadcastAdapter: BroadcastQueueAdapter | undefined =
     config.broadcastAdapter ?? (config.broadcastsDir ? new BroadcastMemoryAdapter() : undefined);
+  const beaconAdapter: BeaconStateAdapter | undefined =
+    config.beaconAdapter ?? (config.beaconsDir ? new BeaconMemoryAdapter() : undefined);
 
   const { dataDir } = ensureStationDir(cwd, config.stationDir);
 
@@ -121,17 +126,26 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
       ? resolve(cwd, "broadcasts")
       : undefined;
 
+  const beaconsDir = config.beaconsDir
+    ? resolve(cwd, config.beaconsDir)
+    : existsSync(resolve(cwd, "beacons"))
+      ? resolve(cwd, "beacons")
+      : undefined;
+
   // Create subscribers (always — they collect metadata)
   const stationSignalSub = new StationSignalSubscriber(wsHub, logBuffer, logStore);
   const stationBroadcastSub = new StationBroadcastSubscriber(wsHub);
+  const stationBeaconSub = new StationBeaconSubscriber(wsHub, logBuffer, logStore);
 
   // Wire SSE hub into subscribers so events reach both WS and SSE clients
   stationSignalSub.setSSEHub(sseHub);
   stationBroadcastSub.setSSEHub(sseHub);
+  stationBeaconSub.setSSEHub(sseHub);
 
   // Create runners if enabled
   let signalRunner: SignalRunner | undefined;
   let broadcastRunner: BroadcastRunner | undefined;
+  let beaconRunner: BeaconRunner | undefined;
   const scheduleAdapter: ScheduleAdapter | undefined = config.scheduleAdapter;
 
   if (config.runRunners) {
@@ -180,6 +194,15 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
         pollIntervalMs: config.broadcastRunner.pollIntervalMs,
         subscribers: [stationBroadcastSub],
         scheduleReconciler: broadcastScheduleReconciler,
+      });
+    }
+
+    if (beaconsDir || beaconAdapter) {
+      beaconRunner = new BeaconRunner({
+        beaconsDir,
+        adapter: beaconAdapter ?? new BeaconMemoryAdapter(),
+        signalRunner, // beacons can trigger signals into the shared queue
+        subscribers: [stationBeaconSub],
       });
     }
   }
@@ -248,6 +271,7 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
   app.route("/api", signalRoutes({ signalRunner, signalAdapter, signalSubscriber: stationSignalSub }));
   app.route("/api", runRoutes({ signalRunner, signalAdapter, logBuffer, logStore, signalSubscriber: stationSignalSub }));
   app.route("/api", broadcastRoutes({ broadcastRunner, broadcastAdapter, broadcastSubscriber: stationBroadcastSub, logBuffer, logStore }));
+  app.route("/api", beaconRoutes({ beaconRunner, beaconAdapter, logBuffer, logStore }));
 
   // ── v1 API routes (authenticated) ──────────────────────────────────
 
@@ -396,6 +420,11 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
             console.error("[station] Broadcast runner error:", err);
           });
         }
+        if (beaconRunner) {
+          beaconRunner.start().catch((err: unknown) => {
+            console.error("[station] Beacon runner error:", err);
+          });
+        }
       }
 
       // Start Hono server
@@ -411,7 +440,11 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
     },
 
     async stop() {
-      // Stop broadcast runner first — it queries the DB during graceful shutdown
+      // Stop beacons first — they are producers that may trigger signals.
+      if (beaconRunner) {
+        await beaconRunner.stop({ graceful: true, timeoutMs: 5000 });
+      }
+      // Stop broadcast runner next — it queries the DB during graceful shutdown
       if (broadcastRunner) {
         await broadcastRunner.stop({ graceful: true, timeoutMs: 5000 });
       }

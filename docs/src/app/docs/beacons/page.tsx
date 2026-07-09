@@ -649,6 +649,29 @@ await beaconRunner.start();`}</Code>
         trigger signals.
       </div>
 
+      <h3>Dashboard</h3>
+      <p>
+        Point the <Link href="/docs/dashboard">dashboard</Link> at a beacons
+        directory and it supervises them and surfaces them under a{" "}
+        <strong>Beacons</strong> page — live status, incarnation and restart
+        counts, lifecycle events, streaming logs, and start / stop / restart
+        controls.
+      </p>
+      <Code>{`// station.config.ts
+import { defineConfig } from "station-kit";
+
+export default defineConfig({
+  beaconsDir: "./beacons",
+  // beaconAdapter: new BeaconSqliteAdapter(...),  // optional, for durable state
+});`}</Code>
+      <p>
+        Then run <code>npx station</code> and open <code>/beacons</code>. The
+        REST surface (<code>GET /api/beacons</code>,{" "}
+        <code>/api/beacons/:name/&#123;events,logs&#125;</code>, and{" "}
+        <code>POST /api/beacons/:name/&#123;start,stop,restart&#125;</code>) backs
+        the page and is available for your own tooling.
+      </p>
+
       <h3>Persistence</h3>
       <p>
         Supervision state lives behind a <code>BeaconStateAdapter</code>. The

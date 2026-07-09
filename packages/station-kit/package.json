@@ -36,6 +36,7 @@
     "test": "node --import tsx --test \"test/**/*.test.ts\""
   },
   "peerDependencies": {
+    "station-beacon": "workspace:*",
     "station-broadcast": "workspace:*",
     "station-signal": "workspace:*"
   },
@@ -58,6 +59,7 @@
     "@types/ws": "^8",
     "better-sqlite3": "^11.9.1",
     "station-adapter-sqlite": "workspace:*",
+    "station-beacon": "workspace:*",
     "station-broadcast": "workspace:*",
     "station-signal": "workspace:*",
     "typescript": "^5.9.3"

@@ -81,6 +81,46 @@ export interface BroadcastMeta {
   interval: string | null;
 }
 
+export type BeaconStatus =
+  | "stopped" | "starting" | "running" | "stopping" | "backoff" | "errored";
+
+export interface BeaconInstance {
+  beaconName: string;
+  status: BeaconStatus;
+  desiredState: "running" | "stopped";
+  incarnation: number;
+  restartCount: number;
+  pid?: number;
+  config?: string;
+  startedAt?: string;
+  readyAt?: string;
+  lastHeartbeatAt?: string;
+  lastExitAt?: string;
+  lastExitReason?: "clean" | "failure" | "stopped" | "stalled";
+  lastError?: string;
+  nextRestartAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BeaconListItem {
+  name: string;
+  filePath: string;
+  mode: "run" | "poll";
+  restartPolicy: string;
+  autoStart: boolean;
+  instance: BeaconInstance | null;
+}
+
+export interface BeaconEvent {
+  id: string;
+  beaconName: string;
+  incarnation: number;
+  type: string;
+  message?: string;
+  at: string;
+}
+
 // ─── Dynamic broadcasts / schedules / expressions ───────────────────
 
 export type ScheduleKind = "signal" | "broadcast-static" | "broadcast-dynamic";
@@ -173,6 +213,16 @@ export function useApi() {
     getBroadcastRunLogs: (id: string) => fetchApi<Array<{ runId: string; signalName: string; level: string; message: string; timestamp: string; nodeName: string }>>(`/broadcast-runs/${id}/logs`),
     cancelBroadcastRun: (id: string) => fetchApi<{ cancelled: boolean }>(`/broadcast-runs/${id}/cancel`, { method: "POST" }),
     rerunBroadcastRun: (id: string) => fetchApi<{ id: string; broadcastName: string; status: string }>(`/broadcast-runs/${id}/rerun`, { method: "POST" }),
+
+    // Beacons
+    getBeacons: () => fetchApi<BeaconListItem[]>("/beacons"),
+    getBeacon: (name: string) => fetchApi<BeaconListItem>(`/beacons/${encodeURIComponent(name)}`),
+    getBeaconEvents: (name: string) => fetchApi<BeaconEvent[]>(`/beacons/${encodeURIComponent(name)}/events`),
+    getBeaconLogs: (name: string) =>
+      fetchApi<Array<{ runId: string; signalName: string; level: string; message: string; timestamp: string }>>(`/beacons/${encodeURIComponent(name)}/logs`),
+    startBeacon: (name: string) => fetchApi<{ started: boolean }>(`/beacons/${encodeURIComponent(name)}/start`, { method: "POST" }),
+    stopBeacon: (name: string) => fetchApi<{ stopped: boolean }>(`/beacons/${encodeURIComponent(name)}/stop`, { method: "POST" }),
+    restartBeacon: (name: string) => fetchApi<{ restarted: boolean }>(`/beacons/${encodeURIComponent(name)}/restart`, { method: "POST" }),
 
     // Dynamic broadcast definitions (v1)
     getBroadcastDefinitions: () =>

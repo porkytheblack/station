@@ -68,6 +68,18 @@ function IconBroadcasts() {
   );
 }
 
+function IconBeacon() {
+  /* Beacon: a mast emitting — long-running supervised process */
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="7" cy="2.5" r="1.25" fill="currentColor" stroke="none" />
+      <path d="M7 3.75V11" />
+      <path d="M4.5 11 7 7.5 9.5 11" />
+      <path d="M3.6 2.6a3 3 0 0 0 0 3.2M10.4 2.6a3 3 0 0 1 0 3.2" opacity="0.6" />
+    </svg>
+  );
+}
+
 function IconSettings() {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" aria-hidden="true">
@@ -155,6 +167,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           <NavLink href="/" label="Overview" section="overview" icon={<IconOverview />} />
           <NavLink href="/signals" label="Signals" section="signals" icon={<IconSignals />} />
           <NavLink href="/broadcasts" label="Broadcasts" section="broadcasts" icon={<IconBroadcasts />} />
+          <NavLink href="/beacons" label="Beacons" section="beacons" icon={<IconBeacon />} />
           <NavLink href="/schedules" label="Schedules" section="schedules" icon={<IconSchedules />} />
           <div className="station-sidebar-nav-label" style={{ marginTop: "1rem" }}>Tools</div>
           <NavLink href="/playground/expression" label="Expressions" section="playground" icon={<IconPlayground />} />

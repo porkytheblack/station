@@ -332,6 +332,7 @@ export default defineConfig({
   port: 4400,
   signalsDir: "./signals",
   broadcastsDir: "./broadcasts",
+  beaconsDir: "./beacons", // supervises beacons + surfaces them on the dashboard
   adapter: new SqliteAdapter({ dbPath: "./jobs.db" }),
   broadcastAdapter: new BroadcastSqliteAdapter({ dbPath: "./jobs.db" }),
   auth: { username: "admin", password: "changeme" },
