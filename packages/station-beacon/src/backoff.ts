@@ -11,7 +11,7 @@ import type { BackoffConfig, DesiredState, ExitReason, RestartPolicy } from "./t
  * A beacon is never restarted when the operator wants it stopped, nor when the
  * supervisor itself asked it to stop. Otherwise the restart policy governs:
  *  - `never`      → never restart
- *  - `on-failure` → restart only on a crash/failure or a stall
+ *  - `on-failure` → restart only on a crash/failure, a stall, or a startup timeout
  *  - `always`     → restart on any exit (clean or failure), as long as the stop
  *                   wasn't operator-initiated
  */
@@ -23,7 +23,9 @@ export function shouldRestart(
   if (desiredState === "stopped") return false;
   if (exitReason === "stopped") return false;
   if (policy === "never") return false;
-  if (policy === "on-failure") return exitReason === "failure" || exitReason === "stalled";
+  if (policy === "on-failure") {
+    return exitReason === "failure" || exitReason === "stalled" || exitReason === "startup-timeout";
+  }
   // policy === "always"
   return true;
 }

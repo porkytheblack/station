@@ -8,6 +8,10 @@ import { readyBeacon } from "./fixtures/ready-beacon.js";
 import { crashBeacon } from "./fixtures/crash-beacon.js";
 import { quickBeacon } from "./fixtures/quick-beacon.js";
 import { stallBeacon } from "./fixtures/stall-beacon.js";
+import {
+  startupTimeoutBeacon,
+  startupTimeoutNeverBeacon,
+} from "./fixtures/startup-timeout-beacon.js";
 import { manualBeacon } from "./fixtures/manual-beacon.js";
 import { badConfigBeacon } from "./fixtures/bad-config-beacon.js";
 
@@ -314,6 +318,62 @@ test("detects a heartbeat stall and restarts the beacon", async () => {
       (es) => es.filter((e) => e.type === "starting" && e.name === "stall-b").length >= 2,
       "stall-b to restart after stalling",
     );
+  } finally {
+    await runner.stop({ graceful: true, timeoutMs: 3_000 });
+  }
+});
+
+test("kills and restarts a beacon that never becomes ready within its startup timeout", async () => {
+  const rec = makeRecorder();
+  const runner = new BeaconRunner({
+    adapter: new BeaconMemoryAdapter(),
+    pollIntervalMs: 25,
+    subscribers: [rec.sub],
+  });
+  runner.register(startupTimeoutBeacon, fx("startup-timeout-beacon"));
+  runner.start().catch(() => {});
+  try {
+    await rec.waitFor(
+      (es) => es.some((e) => e.type === "stalled" && e.name === "startup-b"),
+      "startup-b to hit its startup timeout",
+    );
+    await rec.waitFor(
+      (es) => es.some((e) => e.type === "exited" && e.name === "startup-b"),
+      "startup-b to exit after the startup timeout",
+    );
+    const inst = await runner.getInstance("startup-b");
+    assert.equal(inst?.lastExitReason, "startup-timeout");
+    assert.match(inst?.lastError ?? "", /Startup timed out/);
+    assert.equal(inst?.readyAt, undefined, "never recorded readiness");
+    // on-failure policy → the supervisor brings it back up.
+    await rec.waitFor(
+      (es) => es.filter((e) => e.type === "starting" && e.name === "startup-b").length >= 2,
+      "startup-b to restart after timing out",
+    );
+  } finally {
+    await runner.stop({ graceful: true, timeoutMs: 3_000 });
+  }
+});
+
+test("parks a startup-timing-out beacon in errored under a 'never' restart policy", async () => {
+  const rec = makeRecorder();
+  const runner = new BeaconRunner({
+    adapter: new BeaconMemoryAdapter(),
+    pollIntervalMs: 25,
+    subscribers: [rec.sub],
+  });
+  runner.register(startupTimeoutNeverBeacon, fx("startup-timeout-beacon"));
+  runner.start().catch(() => {});
+  try {
+    await rec.waitFor(
+      (es) => es.some((e) => e.type === "errored" && e.name === "startup-never-b"),
+      "startup-never-b to error out",
+    );
+    const inst = await runner.getInstance("startup-never-b");
+    assert.equal(inst?.status, "errored");
+    assert.equal(inst?.lastExitReason, "startup-timeout");
+    // No restart under 'never'.
+    assert.equal(rec.count("starting", "startup-never-b"), 1);
   } finally {
     await runner.stop({ graceful: true, timeoutMs: 3_000 });
   }

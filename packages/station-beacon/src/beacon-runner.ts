@@ -50,6 +50,8 @@ interface Supervised {
   stopRequested: boolean;
   /** This incarnation was killed for missing its heartbeat deadline. */
   stalled: boolean;
+  /** This incarnation was killed for not becoming ready within the startup deadline. */
+  startupTimedOut?: boolean;
   /** The child reported a fatal (non-restartable) error, e.g. invalid config. */
   fatal?: boolean;
   /** After this incarnation exits, restart it immediately regardless of policy. */
@@ -455,6 +457,28 @@ export class BeaconRunner {
       return;
     }
 
+    // Startup-timeout detection — a beacon must reach ready (ctx.ready()) within
+    // startupTimeoutMs of spawn. Catches boot/import hangs (never reports
+    // started) and "started but never came up" handlers. Only applies before
+    // readiness; once ready, heartbeat detection takes over.
+    if (
+      beacon.startupTimeoutMs &&
+      sup.child &&
+      !sup.stopRequested &&
+      !inst.readyAt &&
+      (inst.status === "starting" || inst.status === "running") &&
+      sup.startedAtMs !== undefined &&
+      now - sup.startedAtMs > beacon.startupTimeoutMs
+    ) {
+      sup.startupTimedOut = true;
+      const error = `Startup timed out after ${beacon.startupTimeoutMs}ms (never became ready)`;
+      await this.patch(beacon.name, { lastError: error });
+      this.emit("onBeaconStalled", { instance: { ...this.instances.get(beacon.name)! } });
+      await this.addEvent(beacon.name, inst.incarnation, "stalled", error);
+      this.initiateStop(beacon.name);
+      return;
+    }
+
     // Heartbeat stall detection — only once the handler has actually started,
     // so process boot time never counts against the heartbeat deadline.
     if (
@@ -467,8 +491,10 @@ export class BeaconRunner {
       const last = sup.lastHeartbeatMs ?? sup.runningSinceMs;
       if (now - last > beacon.heartbeatTimeoutMs) {
         sup.stalled = true;
-        this.emit("onBeaconStalled", { instance: { ...inst } });
-        await this.addEvent(beacon.name, inst.incarnation, "stalled");
+        const error = `Heartbeat stalled (no heartbeat within ${beacon.heartbeatTimeoutMs}ms)`;
+        await this.patch(beacon.name, { lastError: error });
+        this.emit("onBeaconStalled", { instance: { ...this.instances.get(beacon.name)! } });
+        await this.addEvent(beacon.name, inst.incarnation, "stalled", error);
         this.initiateStop(beacon.name);
         return;
       }
@@ -639,13 +665,15 @@ export class BeaconRunner {
     const child = sup.child;
     sup.child = undefined;
 
-    const reason: ExitReason = sup.stalled
-      ? "stalled"
-      : sup.stopRequested || this.stopping
-        ? "stopped"
-        : code === 0
-          ? "clean"
-          : "failure";
+    const reason: ExitReason = sup.startupTimedOut
+      ? "startup-timeout"
+      : sup.stalled
+        ? "stalled"
+        : sup.stopRequested || this.stopping
+          ? "stopped"
+          : code === 0
+            ? "clean"
+            : "failure";
 
     const inst = this.instances.get(beacon.name)!;
     await this.patch(beacon.name, {
@@ -691,7 +719,7 @@ export class BeaconRunner {
     }
 
     // No restart. Distinguish a terminal failure from a completed/stopped beacon.
-    if (reason === "failure" || reason === "stalled") {
+    if (reason === "failure" || reason === "stalled" || reason === "startup-timeout") {
       await this.patch(beacon.name, { status: "errored" });
       this.emit("onBeaconErrored", {
         instance: { ...this.instances.get(beacon.name)! },

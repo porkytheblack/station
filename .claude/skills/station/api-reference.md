@@ -2239,7 +2239,7 @@ The `station-sidecar` bin is the standalone entry point for Tauri's sidecar spaw
 
 ## 13. station-beacon
 
-The long-running, supervised process primitive. Where a signal runs to completion and exits, a **beacon** stays up — a server, a poller, or a client. The `BeaconRunner` supervises each beacon in its own child process: restart policy, exponential backoff, heartbeat stall detection, graceful shutdown, and per-beacon desired-state reconciliation. `station-beacon` has `station-signal` as a **peer dependency** (used for `z`, `parseInterval`, and passing the signal adapter manifest to children). Import `beacon` and `z` from `station-beacon`.
+The long-running, supervised process primitive. Where a signal runs to completion and exits, a **beacon** stays up — a server, a poller, or a client. The `BeaconRunner` supervises each beacon in its own child process: restart policy, exponential backoff, startup-timeout and heartbeat stall detection, graceful shutdown, and per-beacon desired-state reconciliation. `station-beacon` has `station-signal` as a **peer dependency** (used for `z`, `parseInterval`, and passing the signal adapter manifest to children). Import `beacon` and `z` from `station-beacon`.
 
 ### `beacon(name)` builder
 
@@ -2251,6 +2251,7 @@ export const webhookServer = beacon("webhook-server")
   .withConfig({ port: 8080 })                            // default config
   .restart("always")                                     // restart policy
   .backoff("1s", { factor: 2, max: "30s", resetAfter: "60s" })
+  .startupTimeout("30s")                                 // ready() deadline (opt-in)
   .heartbeat("10s", { timeout: "45s" })                  // stall detection (opt-in)
   .stopTimeout("10s")                                    // grace before SIGKILL
   .run(async (ctx) => { /* long-running handler */ });
@@ -2268,6 +2269,7 @@ Two terminals finalize a beacon:
 | `.restart(policy)` | `"always"` \| `"on-failure"` (default) \| `"never"`. |
 | `.backoff(base, opts?)` | Exponential backoff. `base`: interval string or ms. `opts`: `{ factor=2, max="30s", resetAfter="60s" }`. |
 | `.heartbeat(interval, opts?)` | Opt into stall detection. `opts.timeout` defaults to 3× interval. Handler must call `ctx.heartbeat()`. |
+| `.startupTimeout(value)` | Deadline from spawn to reach ready (`ctx.ready()`). Missing it kills+restarts with reason `startup-timeout` (per policy). Off by default; handler must call `ctx.ready()`. |
 | `.stopTimeout(value)` | Grace period after a stop request before force-kill. Default `"10s"`. |
 | `.manualStart()` | Don't auto-start on discovery. |
 | `.run(handler)` / `.poll(interval, fn)` | Finalize. |
@@ -2335,7 +2337,7 @@ One record per beacon, mirrored in-memory and written through to the adapter.
 ```ts
 type BeaconStatus = "stopped" | "starting" | "running" | "stopping" | "backoff" | "errored";
 type DesiredState = "running" | "stopped";
-type ExitReason = "clean" | "failure" | "stopped" | "stalled";
+type ExitReason = "clean" | "failure" | "stopped" | "stalled" | "startup-timeout";
 type RestartPolicy = "always" | "on-failure" | "never";
 
 interface BeaconInstance {
@@ -2353,7 +2355,7 @@ interface BeaconInstance {
 }
 ```
 
-Restart decision (`shouldRestart`, exported from `station-beacon`): never restart when `desiredState==="stopped"` or the stop was operator-initiated; `never` never restarts; `on-failure` restarts on `failure`/`stalled`; `always` restarts on any non-operator exit. Backoff: `computeBackoffMs(attempt, cfg) = min(max, base × factor^attempt)`; `shouldResetBackoff(uptimeMs, cfg)` resets the attempt counter after the process stays up past `resetAfterMs`.
+Restart decision (`shouldRestart`, exported from `station-beacon`): never restart when `desiredState==="stopped"` or the stop was operator-initiated; `never` never restarts; `on-failure` restarts on `failure`/`stalled`/`startup-timeout`; `always` restarts on any non-operator exit. Backoff: `computeBackoffMs(attempt, cfg) = min(max, base × factor^attempt)`; `shouldResetBackoff(uptimeMs, cfg)` resets the attempt counter after the process stays up past `resetAfterMs`.
 
 ### `BeaconStateAdapter`
 

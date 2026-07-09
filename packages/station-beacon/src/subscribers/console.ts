@@ -52,8 +52,9 @@ export class ConsoleBeaconSubscriber implements BeaconSubscriber {
   }
 
   onBeaconStalled(event: { instance: BeaconInstance }): void {
+    const detail = event.instance.lastError ?? "liveness deadline missed";
     console.warn(
-      `${this.prefix} Stalled "${event.instance.beaconName}" — no heartbeat within deadline, restarting`,
+      `${this.prefix} Stalled "${event.instance.beaconName}" — ${detail}, restarting`,
     );
   }
 

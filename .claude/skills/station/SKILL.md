@@ -206,11 +206,12 @@ export const priceWatcher = beacon("price-watcher")
     if (price > 100) await priceAlert.trigger({ price });
   });
 
-// CLIENT — reconnects on failure with backoff + heartbeat stall detection
+// CLIENT — reconnects on failure with backoff + startup + heartbeat liveness
 export const streamConsumer = beacon("stream-consumer")
   .restart("on-failure")
   .backoff("1s", { max: "30s" })
-  .heartbeat("10s")
+  .startupTimeout("30s")  // must connect (ctx.ready()) within 30s or get restarted
+  .heartbeat("10s")       // ...and keep reporting liveness once connected
   .run(async (ctx) => {
     const conn = await connect();
     ctx.ready();
@@ -449,6 +450,7 @@ docker run -p 4400:4400 \
 | `.restart(policy)` | `"always"`, `"on-failure"` (default), `"never"` |
 | `.backoff(base, opts?)` | Exponential restart backoff; `opts`: `{ factor, max, resetAfter }` |
 | `.heartbeat(interval, opts?)` | Stall detection — restart if no `ctx.heartbeat()` within `opts.timeout` (default 3× interval) |
+| `.startupTimeout(ms)` | Deadline from spawn to reach ready (`ctx.ready()`) — restart if it never comes up. Off by default |
 | `.stopTimeout(ms)` | Grace period before force-kill on stop (default `10s`) |
 | `.manualStart()` | Don't auto-start on discovery |
 | `.run(handler)` | Finalize with a long-running handler |

@@ -56,6 +56,12 @@ export interface Beacon<TConfig = unknown> {
   readonly backoff: BackoffConfig;
   /** Grace period after SIGTERM before the process is force-killed. */
   readonly stopTimeoutMs: number;
+  /**
+   * Max time in ms from spawn for the beacon to reach ready (`ctx.ready()`).
+   * If exceeded, the supervisor kills and restarts it (per policy). Presence
+   * enables startup-timeout detection; requires the beacon to call `ctx.ready()`.
+   */
+  readonly startupTimeoutMs?: number;
   /** Declared heartbeat cadence in ms — presence enables stall detection. */
   readonly heartbeatIntervalMs?: number;
   /** Deadline in ms after which a missed heartbeat is treated as a stall. */
@@ -73,6 +79,7 @@ interface BuilderOpts<TConfig> {
   restartPolicy: RestartPolicy;
   backoff: BackoffConfig;
   stopTimeoutMs: number;
+  startupTimeoutMs?: number;
   heartbeatIntervalMs?: number;
   heartbeatTimeoutMs?: number;
   autoStart: boolean;
@@ -163,6 +170,16 @@ export class BeaconBuilder<TConfig = Record<string, never>> {
     return this._clone({ stopTimeoutMs: toMs(value) });
   }
 
+  /**
+   * Deadline (from spawn) for the beacon to reach ready via `ctx.ready()`. If it
+   * doesn't, the supervisor kills and restarts it (per policy) — catching boot
+   * hangs (a wedged import) and "started but never came up" handlers. Requires
+   * the beacon to call `ctx.ready()`; off by default.
+   */
+  startupTimeout(value: string | number): BeaconBuilder<TConfig> {
+    return this._clone({ startupTimeoutMs: toMs(value) });
+  }
+
   /** Don't auto-start on discovery — the beacon stays stopped until started explicitly. */
   manualStart(): BeaconBuilder<TConfig> {
     return this._clone({ autoStart: false });
@@ -186,6 +203,7 @@ export class BeaconBuilder<TConfig = Record<string, never>> {
       restartPolicy: this._opts.restartPolicy,
       backoff: this._opts.backoff,
       stopTimeoutMs: this._opts.stopTimeoutMs,
+      startupTimeoutMs: this._opts.startupTimeoutMs,
       heartbeatIntervalMs: this._opts.heartbeatIntervalMs,
       heartbeatTimeoutMs: this._opts.heartbeatTimeoutMs,
       autoStart: this._opts.autoStart,

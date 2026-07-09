@@ -42,7 +42,9 @@ export type ExitReason =
   /** The supervisor asked it to stop (desired=stopped or shutdown). */
   | "stopped"
   /** Killed by the supervisor after missing its heartbeat deadline. */
-  | "stalled";
+  | "stalled"
+  /** Killed by the supervisor for not becoming ready within the startup deadline. */
+  | "startup-timeout";
 
 /** Terminal-ish statuses where no child process is expected to be alive. */
 export const INACTIVE_STATUSES: readonly BeaconStatus[] = ["stopped", "backoff", "errored"];

@@ -18,8 +18,9 @@ export default function BeaconsPage() {
         DAG, a beacon <em>stays up</em> — an HTTP server, a queue consumer, a
         poller, a websocket client. The <code>BeaconRunner</code> supervises each
         beacon in its own child process: it keeps it alive according to a restart
-        policy, backs off between restarts, detects heartbeat stalls, and shuts it
-        down gracefully — reconciling a per-beacon <strong>desired state</strong>{" "}
+        policy, backs off between restarts, detects startup timeouts and heartbeat
+        stalls, and shuts it down gracefully — reconciling a per-beacon{" "}
+        <strong>desired state</strong>{" "}
         (running / stopped) you can flip at runtime.
       </p>
 
@@ -103,8 +104,8 @@ export const webhookServer = beacon("webhook-server")
           <tr>
             <td><code>&quot;on-failure&quot;</code></td>
             <td>
-              Restart only on a crash/failure or a heartbeat stall. A clean
-              return parks the beacon. The default.
+              Restart only on a crash/failure, a heartbeat stall, or a startup
+              timeout. A clean return parks the beacon. The default.
             </td>
           </tr>
           <tr>
@@ -180,6 +181,31 @@ export const webhookServer = beacon("webhook-server")
       ctx.heartbeat();
       await process(job);
     }
+  });`}</Code>
+
+      <h4>
+        <code>.startupTimeout(ms)</code>
+      </h4>
+      <p>
+        Sets a deadline, measured from spawn, for the beacon to reach ready via{" "}
+        <code>ctx.ready()</code>. If it doesn&apos;t come up in time the
+        supervisor kills the process and restarts it per the restart policy,
+        recording the exit reason as <code>startup-timeout</code>. This catches
+        two things heartbeat detection can&apos;t: a boot or module import that
+        never resolves (the handler never even runs), and a handler that starts
+        but wedges before it&apos;s ready — a server that never binds its port,
+        say. Startup timeout covers the pre-ready window; heartbeats cover
+        everything after. Off by default; requires the beacon to call{" "}
+        <code>ctx.ready()</code>.
+      </p>
+      <Code>{`beacon("api-server")
+  .startupTimeout("30s")  // must call ctx.ready() within 30s of spawn
+  .heartbeat("10s")       // ...and keep reporting liveness once ready
+  .run(async (ctx) => {
+    const server = await listen(ctx.config.port);
+    ctx.ready();
+    ctx.onStop(() => server.close());
+    await ctx.untilStopped();
   });`}</Code>
 
       <h4>
@@ -567,7 +593,7 @@ const inst = await runner.getInstance("consumer");
           </tr>
           <tr>
             <td><code>lastExitReason</code></td>
-            <td><code>&quot;clean&quot; | &quot;failure&quot; | &quot;stopped&quot; | &quot;stalled&quot;</code></td>
+            <td><code>&quot;clean&quot; | &quot;failure&quot; | &quot;stopped&quot; | &quot;stalled&quot; | &quot;startup-timeout&quot;</code></td>
             <td>How the most recent incarnation ended.</td>
           </tr>
           <tr>
@@ -606,7 +632,7 @@ const inst = await runner.getInstance("consumer");
           <tr><td><code>onBeaconRestartScheduled</code></td><td>A restart was scheduled after an exit (with the backoff delay).</td></tr>
           <tr><td><code>onBeaconStopped</code></td><td>The beacon reached a cleanly stopped state.</td></tr>
           <tr><td><code>onBeaconErrored</code></td><td>The beacon failed terminally and will not be restarted.</td></tr>
-          <tr><td><code>onBeaconStalled</code></td><td>A heartbeat deadline was missed; the process is being restarted.</td></tr>
+          <tr><td><code>onBeaconStalled</code></td><td>A heartbeat deadline or startup timeout was missed; the process is being restarted.</td></tr>
           <tr><td><code>onBeaconLog</code></td><td>Log output — from <code>ctx.log()</code> or captured stdout/stderr.</td></tr>
         </tbody>
       </table>

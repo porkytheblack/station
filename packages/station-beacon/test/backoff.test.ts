@@ -29,6 +29,7 @@ test("computeBackoffMs with factor 1 is constant", () => {
 test("shouldRestart: never restarts when the operator wants it stopped", () => {
   assert.equal(shouldRestart("always", "failure", "stopped"), false);
   assert.equal(shouldRestart("always", "clean", "stopped"), false);
+  assert.equal(shouldRestart("always", "startup-timeout", "stopped"), false);
 });
 
 test("shouldRestart: never restarts an operator-initiated stop", () => {
@@ -40,18 +41,21 @@ test("shouldRestart: policy 'never' never restarts", () => {
   assert.equal(shouldRestart("never", "failure", "running"), false);
   assert.equal(shouldRestart("never", "clean", "running"), false);
   assert.equal(shouldRestart("never", "stalled", "running"), false);
+  assert.equal(shouldRestart("never", "startup-timeout", "running"), false);
 });
 
-test("shouldRestart: policy 'on-failure' restarts only on failure or stall", () => {
+test("shouldRestart: policy 'on-failure' restarts on failure, stall, or startup timeout", () => {
   assert.equal(shouldRestart("on-failure", "failure", "running"), true);
   assert.equal(shouldRestart("on-failure", "stalled", "running"), true);
+  assert.equal(shouldRestart("on-failure", "startup-timeout", "running"), true);
   assert.equal(shouldRestart("on-failure", "clean", "running"), false);
 });
 
-test("shouldRestart: policy 'always' restarts on clean and failure exits", () => {
+test("shouldRestart: policy 'always' restarts on clean, failure, and startup-timeout exits", () => {
   assert.equal(shouldRestart("always", "clean", "running"), true);
   assert.equal(shouldRestart("always", "failure", "running"), true);
   assert.equal(shouldRestart("always", "stalled", "running"), true);
+  assert.equal(shouldRestart("always", "startup-timeout", "running"), true);
 });
 
 test("shouldResetBackoff compares uptime against the reset threshold", () => {

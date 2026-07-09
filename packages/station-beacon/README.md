@@ -71,6 +71,7 @@ export const streamConsumer = beacon("stream-consumer")
 | `.restart(policy)` | `"always"`, `"on-failure"` (default), or `"never"`. |
 | `.backoff(base, opts?)` | Exponential restart backoff. `opts`: `{ factor, max, resetAfter }`. |
 | `.heartbeat(interval, opts?)` | Opt into stall detection. Restarts if no `ctx.heartbeat()` within `opts.timeout` (default 3× interval). |
+| `.startupTimeout(ms)` | Deadline from spawn to reach ready (`ctx.ready()`). If exceeded, the supervisor kills and restarts it (per policy). Off by default. |
 | `.stopTimeout(ms)` | Grace period after a stop request before the process is force-killed (default `10s`). |
 | `.manualStart()` | Don't auto-start on discovery — stays stopped until started explicitly. |
 | `.run(handler)` | Finalize with a long-running handler. |
@@ -104,6 +105,26 @@ Every handler receives a `ctx`:
 Restarts use exponential backoff: `base × factor^n`, capped at `max`. After a
 beacon stays up longer than `resetAfter`, the counter resets so a later blip
 restarts quickly instead of at the top of the curve.
+
+## Liveness: startup timeout & heartbeats
+
+The supervisor can kill and restart a process that is alive but unhealthy, in
+two windows:
+
+- **Startup timeout** (`.startupTimeout("30s")`) — the beacon must reach ready
+  (`ctx.ready()`) within the deadline *from spawn*. This catches a boot/import
+  that never resolves (the handler never even runs) and a handler that starts
+  but wedges before coming up (e.g. a server that never binds its port). On a
+  miss, the incarnation exits with reason `startup-timeout` and the restart
+  policy takes over. Off by default; requires the beacon to call `ctx.ready()`.
+- **Heartbeat stall** (`.heartbeat("10s")`) — once ready, the handler must call
+  `ctx.heartbeat()` at least every interval; a gap longer than `opts.timeout`
+  (default 3× the interval) is treated as a stall.
+
+Startup timeout covers the *pre-ready* window and heartbeats cover the
+*post-ready* window, so a beacon that declares both is supervised end to end.
+Both `startup-timeout` and `stalled` exits restart under the `on-failure`
+policy.
 
 ## Running the supervisor
 
@@ -169,10 +190,6 @@ new BeaconRunner({ beaconsDir: "./beacons", adapter });
   exit with `FATAL_EXIT_CODE` (78) so the supervisor parks them in `errored`
   without restart-looping. A handler that itself exits with 78 is treated as
   fatal.
-- **No startup timeout yet.** Heartbeat stall detection covers the *running*
-  state; a beacon that hangs *before* reporting started (e.g. a module import
-  that never resolves) stays in `starting`. Add a health/heartbeat once running,
-  or supervise boot externally.
 - **Register before start.** `register()` after `start()` is not seeded or
   supervised (it warns). Use `beaconsDir` discovery or register up front.
 
