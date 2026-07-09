@@ -14,6 +14,8 @@ export interface BeaconSqliteAdapterOptions {
   tableName?: string;
   /** Table name for the lifecycle event log. @default "beacon_events" */
   eventsTableName?: string;
+  /** Max lifecycle events retained per beacon. @default 1000 */
+  maxEventsPerBeacon?: number;
 }
 
 /** Durable {@link BeaconStateAdapter} backed by SQLite (better-sqlite3). */
@@ -21,11 +23,24 @@ export class BeaconSqliteAdapter implements BeaconStateAdapter {
   private db: Database.Database;
   private table: string;
   private eventsTable: string;
+  private maxEvents: number;
+  /** Prepared-statement cache — better-sqlite3 recompiles on every prepare(). */
+  private stmtCache = new Map<string, Database.Statement>();
+
+  private prep(sql: string): Database.Statement {
+    let stmt = this.stmtCache.get(sql);
+    if (!stmt) {
+      stmt = this.db.prepare(sql);
+      this.stmtCache.set(sql, stmt);
+    }
+    return stmt;
+  }
 
   constructor(options: BeaconSqliteAdapterOptions = {}) {
     const dbPath = options.dbPath ?? "station.db";
     this.table = validateTableName(options.tableName ?? "beacon_instances");
     this.eventsTable = validateTableName(options.eventsTableName ?? "beacon_events");
+    this.maxEvents = options.maxEventsPerBeacon ?? 1000;
     this.db = new Database(dbPath);
     this.db.pragma("journal_mode = WAL");
 
@@ -71,7 +86,7 @@ export class BeaconSqliteAdapter implements BeaconStateAdapter {
   }
 
   async upsertInstance(instance: BeaconInstance): Promise<void> {
-    this.db.prepare(`
+    this.prep(`
       INSERT OR REPLACE INTO ${this.table}
         (beacon_name, status, desired_state, incarnation, restart_count, pid, config,
          started_at, ready_at, last_heartbeat_at, last_exit_at, last_exit_reason,
@@ -101,7 +116,7 @@ export class BeaconSqliteAdapter implements BeaconStateAdapter {
   }
 
   async getInstance(beaconName: string): Promise<BeaconInstance | null> {
-    const row = this.db.prepare(`SELECT * FROM ${this.table} WHERE beacon_name = ?`).get(beaconName) as
+    const row = this.prep(`SELECT * FROM ${this.table} WHERE beacon_name = ?`).get(beaconName) as
       | Record<string, unknown>
       | undefined;
     return row ? rowToInstance(row) : null;
@@ -151,21 +166,21 @@ export class BeaconSqliteAdapter implements BeaconStateAdapter {
     }
 
     if (setClauses.length === 0) return;
-    this.db.prepare(`UPDATE ${this.table} SET ${setClauses.join(", ")} WHERE beacon_name = @beacon_name`).run(values);
+    this.prep(`UPDATE ${this.table} SET ${setClauses.join(", ")} WHERE beacon_name = @beacon_name`).run(values);
   }
 
   async listInstances(): Promise<BeaconInstance[]> {
-    const rows = this.db.prepare(`SELECT * FROM ${this.table} ORDER BY beacon_name ASC`).all() as Record<string, unknown>[];
+    const rows = this.prep(`SELECT * FROM ${this.table} ORDER BY beacon_name ASC`).all() as Record<string, unknown>[];
     return rows.map(rowToInstance);
   }
 
   async removeInstance(beaconName: string): Promise<void> {
-    this.db.prepare(`DELETE FROM ${this.table} WHERE beacon_name = ?`).run(beaconName);
+    this.prep(`DELETE FROM ${this.table} WHERE beacon_name = ?`).run(beaconName);
   }
 
   async addEvent(event: BeaconEvent): Promise<void> {
-    const seq = (this.db.prepare(`SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM ${this.eventsTable}`).get() as { next: number }).next;
-    this.db.prepare(`
+    const seq = (this.prep(`SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM ${this.eventsTable}`).get() as { next: number }).next;
+    this.prep(`
       INSERT INTO ${this.eventsTable} (id, beacon_name, incarnation, type, message, at, seq)
       VALUES (@id, @beacon_name, @incarnation, @type, @message, @at, @seq)
     `).run({
@@ -177,10 +192,22 @@ export class BeaconSqliteAdapter implements BeaconStateAdapter {
       at: dateToStr(event.at),
       seq,
     });
+    // Prune this beacon's oldest events beyond the retention cap. The subquery
+    // returns the seq of the maxEvents-th newest row (via LIMIT 1 OFFSET
+    // maxEvents); rows at/below it are deleted. When the beacon has <= maxEvents
+    // rows the subquery yields no row → NULL → `seq <= NULL` deletes nothing.
+    this.prep(
+      `DELETE FROM ${this.eventsTable}
+       WHERE beacon_name = ?
+         AND seq <= (
+           SELECT seq FROM ${this.eventsTable}
+           WHERE beacon_name = ? ORDER BY seq DESC LIMIT 1 OFFSET ?
+         )`,
+    ).run(event.beaconName, event.beaconName, this.maxEvents);
   }
 
   async listEvents(beaconName: string, limit = 100): Promise<BeaconEvent[]> {
-    const rows = this.db.prepare(
+    const rows = this.prep(
       `SELECT * FROM ${this.eventsTable} WHERE beacon_name = ? ORDER BY seq DESC LIMIT ?`,
     ).all(beaconName, limit) as Record<string, unknown>[];
     return rows.map(rowToEvent);
@@ -192,7 +219,7 @@ export class BeaconSqliteAdapter implements BeaconStateAdapter {
 
   async ping(): Promise<boolean> {
     try {
-      this.db.prepare("SELECT 1").get();
+      this.prep("SELECT 1").get();
       return true;
     } catch {
       return false;
@@ -200,6 +227,7 @@ export class BeaconSqliteAdapter implements BeaconStateAdapter {
   }
 
   async close(): Promise<void> {
+    this.stmtCache.clear();
     this.db.close();
   }
 }

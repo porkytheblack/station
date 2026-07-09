@@ -43,17 +43,17 @@ export function signalRoutes(deps: SignalDeps) {
     }> = [];
 
     for (const sig of recurring) {
-      const runs = await deps.signalAdapter.listRuns(sig.name);
-      const pendingRun = runs.find((r) => r.status === "pending" && r.kind === "recurring");
-      const lastRun = runs
-        .filter((r) => r.status !== "pending")
-        .sort((a, b) => {
-          const aT = a.completedAt ?? a.startedAt ?? a.createdAt;
-          const bT = b.completedAt ?? b.startedAt ?? b.createdAt;
-          const aMs = aT instanceof Date ? aT.getTime() : new Date(aT).getTime();
-          const bMs = bT instanceof Date ? bT.getTime() : new Date(bT).getTime();
-          return bMs - aMs;
-        })[0];
+      // Two bounded queries instead of loading the signal's full history:
+      // the current pending run and the most recent non-pending run.
+      const [pendingRuns, lastRuns] = await Promise.all([
+        deps.signalAdapter.listRuns(sig.name, { limit: 1, statuses: ["pending"] }),
+        deps.signalAdapter.listRuns(sig.name, {
+          limit: 1,
+          statuses: ["running", "completed", "failed", "cancelled"],
+        }),
+      ]);
+      const pendingRun = pendingRuns.find((r) => r.kind === "recurring");
+      const lastRun = lastRuns[0];
 
       result.push({
         name: sig.name,
@@ -131,10 +131,14 @@ export function signalRoutes(deps: SignalDeps) {
     if (!deps.signalRunner) {
       return c.json({ data: [], meta: { total: 0 } });
     }
-    const runs = await deps.signalRunner.listRuns(name);
+    const limitRaw = parseInt(c.req.query("limit") ?? "100", 10);
+    const limit = Math.min(Number.isNaN(limitRaw) ? 100 : Math.max(limitRaw, 1), 500);
+    const offsetRaw = parseInt(c.req.query("offset") ?? "0", 10);
+    const offset = Number.isNaN(offsetRaw) ? 0 : Math.max(offsetRaw, 0);
+    const runs = await deps.signalRunner.listRuns(name, { limit, offset });
     return c.json({
       data: runs.map(serializeRun),
-      meta: { total: runs.length },
+      meta: { count: runs.length, limit, offset },
     });
   });
 

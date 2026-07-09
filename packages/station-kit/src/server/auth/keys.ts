@@ -137,8 +137,15 @@ export class FileKeyStorage implements ApiKeyStorageAdapter {
   touch(id: string, lastUsedIso: string): void {
     const r = this.records.get(id);
     if (!r) return;
+    const prev = r.lastUsed ? Date.parse(r.lastUsed) : 0;
     r.lastUsed = lastUsedIso;
-    this.flush();
+    // lastUsed is advisory. flush() rewrites and fsyncs the whole file
+    // synchronously — doing that on every authenticated request stalls the
+    // event loop, so only persist when the value moves by at least a minute.
+    // Reads stay fresh because list() serves from memory.
+    if (Date.parse(lastUsedIso) - prev >= 60_000) {
+      this.flush();
+    }
   }
 
   revoke(id: string): boolean {
@@ -264,7 +271,15 @@ export class SqliteKeyStorage implements ApiKeyStorageAdapter {
     }));
   }
 
+  /** Last persisted lastUsed per key id, to skip per-request UPDATEs. */
+  private lastTouched = new Map<string, number>();
+
   touch(id: string, lastUsedIso: string): void {
+    // lastUsed is advisory — throttle writes to once a minute per key.
+    const prev = this.lastTouched.get(id) ?? 0;
+    const next = Date.parse(lastUsedIso);
+    if (next - prev < 60_000) return;
+    this.lastTouched.set(id, next);
     this.db.prepare(`UPDATE ${this.table} SET last_used = ? WHERE id = ?`).run(lastUsedIso, id);
   }
 
@@ -332,8 +347,20 @@ export class MemoryKeyStorage implements ApiKeyStorageAdapter {
 
 // ─── KeyStore — owns crypto, delegates persistence ──────────────────
 
+export interface KeyStoreOptions {
+  /**
+   * Server-side secret ("pepper") mixed into stored key hashes via HMAC.
+   * Defense-in-depth: a leaked key file alone can't be brute-forced or
+   * precomputed against without also stealing this secret. Optional — when
+   * omitted, keys are hashed with plain SHA-256 (legacy behavior). Existing
+   * plain-SHA-256 keys keep verifying after a pepper is added (see verify()).
+   */
+  pepper?: string;
+}
+
 export class KeyStore {
   private storage: ApiKeyStorageAdapter;
+  private pepper?: Buffer;
 
   /**
    * Pass an `ApiKeyStorageAdapter` for any backend. The string overload is
@@ -341,7 +368,7 @@ export class KeyStore {
    * at the given path. (Previously this returned a SqliteKeyStorage; SQLite
    * is now opt-in to avoid native build dependencies.)
    */
-  constructor(storageOrPath: ApiKeyStorageAdapter | string) {
+  constructor(storageOrPath: ApiKeyStorageAdapter | string, options?: KeyStoreOptions) {
     if (typeof storageOrPath === "string") {
       const filePath = storageOrPath.endsWith(".db")
         ? storageOrPath.replace(/\.db$/, ".json")
@@ -350,13 +377,27 @@ export class KeyStore {
     } else {
       this.storage = storageOrPath;
     }
+    if (options?.pepper) this.pepper = Buffer.from(options.pepper, "utf8");
+  }
+
+  /** Peppered hash for new keys — HMAC-SHA256 when a pepper is set, else SHA-256. */
+  private hashKey(rawKey: string): string {
+    if (this.pepper) {
+      return crypto.createHmac("sha256", this.pepper).update(rawKey).digest("hex");
+    }
+    return crypto.createHash("sha256").update(rawKey).digest("hex");
+  }
+
+  /** Unpeppered SHA-256 — used to verify keys stored before a pepper was configured. */
+  private legacyHashKey(rawKey: string): string {
+    return crypto.createHash("sha256").update(rawKey).digest("hex");
   }
 
   /** Generate a new API key. Returns the full key (only shown once) and the stored record. */
   async create(name: string, scopes: string[] = ["trigger", "read"]): Promise<{ key: string; record: ApiKey }> {
     const id = crypto.randomUUID();
     const rawKey = `sk_live_${crypto.randomBytes(16).toString("hex")}`;
-    const keyHash = crypto.createHash("sha256").update(rawKey).digest("hex");
+    const keyHash = this.hashKey(rawKey);
     const keyPrefix = rawKey.slice(0, 12);
     const createdAt = new Date().toISOString();
 
@@ -370,8 +411,12 @@ export class KeyStore {
 
   /** Verify an API key. Returns the key record if valid, null otherwise. */
   async verify(rawKey: string): Promise<ApiKey | null> {
-    const keyHash = crypto.createHash("sha256").update(rawKey).digest("hex");
-    const record = await this.storage.findByHash(keyHash);
+    let record = await this.storage.findByHash(this.hashKey(rawKey));
+    // Fall back to the unpeppered hash for keys created before the pepper was
+    // configured, so enabling a pepper doesn't invalidate existing keys.
+    if (!record && this.pepper) {
+      record = await this.storage.findByHash(this.legacyHashKey(rawKey));
+    }
     if (!record) return null;
     if (record.revoked) return null;
     if (record.expiresAt && new Date(record.expiresAt) < new Date()) return null;

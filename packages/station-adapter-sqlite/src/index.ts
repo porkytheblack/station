@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
-import type { SerializableAdapter, AdapterManifest, Run, RunPatch, RunStatus, Step, StepPatch } from "station-signal";
+import type { SerializableAdapter, AdapterManifest, Run, RunPatch, RunStatus, Step, StepPatch, ListRunsOptions, ListAllRunsOptions } from "station-signal";
 import { registerAdapter } from "station-signal";
 
 const MODULE_URL = import.meta.url;
@@ -43,6 +43,17 @@ export class SqliteAdapter implements SerializableAdapter {
   private db: Database.Database;
   private tableName: string;
   private options: SqliteAdapterOptions;
+  /** Prepared-statement cache — better-sqlite3 recompiles on every prepare(). */
+  private stmtCache = new Map<string, Database.Statement>();
+
+  private prep(sql: string): Database.Statement {
+    let stmt = this.stmtCache.get(sql);
+    if (!stmt) {
+      stmt = this.db.prepare(sql);
+      this.stmtCache.set(sql, stmt);
+    }
+    return stmt;
+  }
 
   constructor(options: SqliteAdapterOptions = {}) {
     this.options = options;
@@ -128,8 +139,8 @@ export class SqliteAdapter implements SerializableAdapter {
   }
 
   async addRun(run: Run): Promise<void> {
-    this.db
-      .prepare(
+    this
+      .prep(
         `INSERT INTO ${this.tableName}
           (id, signal_name, kind, input, status, attempts, max_attempts,
            timeout, interval, next_run_at, last_run_at, started_at,
@@ -161,36 +172,37 @@ export class SqliteAdapter implements SerializableAdapter {
 
   async removeRun(id: string): Promise<void> {
     // Steps cascade via FOREIGN KEY ON DELETE CASCADE
-    this.db
-      .prepare(`DELETE FROM ${this.tableName} WHERE id = ?`)
+    this
+      .prep(`DELETE FROM ${this.tableName} WHERE id = ?`)
       .run(id);
   }
 
-  async getRunsDue(): Promise<Run[]> {
+  async getRunsDue(limit?: number): Promise<Run[]> {
     const now = new Date().toISOString();
-    const rows = this.db
-      .prepare(
+    const withLimit = limit !== undefined && limit >= 0;
+    const rows = this
+      .prep(
         `SELECT * FROM ${this.tableName}
          WHERE status = 'pending'
            AND (next_run_at IS NULL OR next_run_at <= ?)
-         ORDER BY created_at ASC`,
+         ORDER BY created_at ASC${withLimit ? " LIMIT ?" : ""}`,
       )
-      .all(now) as Record<string, unknown>[];
+      .all(...(withLimit ? [now, limit] : [now])) as Record<string, unknown>[];
 
     return rows.map(rowToRun);
   }
 
   async getRunsRunning(): Promise<Run[]> {
-    const rows = this.db
-      .prepare(`SELECT * FROM ${this.tableName} WHERE status = 'running'`)
+    const rows = this
+      .prep(`SELECT * FROM ${this.tableName} WHERE status = 'running'`)
       .all() as Record<string, unknown>[];
 
     return rows.map(rowToRun);
   }
 
   async getRun(id: string): Promise<Run | null> {
-    const row = this.db
-      .prepare(`SELECT * FROM ${this.tableName} WHERE id = ?`)
+    const row = this
+      .prep(`SELECT * FROM ${this.tableName} WHERE id = ?`)
       .get(id) as Record<string, unknown> | undefined;
 
     return row ? rowToRun(row) : null;
@@ -223,28 +235,107 @@ export class SqliteAdapter implements SerializableAdapter {
 
     if (setClauses.length === 0) return;
 
-    this.db
-      .prepare(
+    this
+      .prep(
         `UPDATE ${this.tableName} SET ${setClauses.join(", ")} WHERE id = @id`,
       )
       .run(values);
   }
 
-  async listRuns(signalName: string): Promise<Run[]> {
-    const rows = this.db
-      .prepare(
-        `SELECT * FROM ${this.tableName} WHERE signal_name = ? ORDER BY created_at DESC`,
-      )
-      .all(signalName) as Record<string, unknown>[];
+  async listRuns(signalName: string, options?: ListRunsOptions): Promise<Run[]> {
+    // No options → preserve legacy behavior (full history, newest-first).
+    if (!options) {
+      const rows = this
+        .prep(
+          `SELECT * FROM ${this.tableName} WHERE signal_name = ? ORDER BY created_at DESC`,
+        )
+        .all(signalName) as Record<string, unknown>[];
+      return rows.map(rowToRun);
+    }
 
+    const params: unknown[] = [signalName];
+    let sql = `SELECT * FROM ${this.tableName} WHERE signal_name = ?`;
+
+    if (options.statuses && options.statuses.length > 0) {
+      const placeholders = options.statuses.map(() => "?").join(", ");
+      sql += ` AND status IN (${placeholders})`;
+      params.push(...options.statuses);
+    }
+
+    sql += " ORDER BY created_at DESC";
+
+    const hasLimit = options.limit !== undefined && options.limit >= 0;
+    const hasOffset = options.offset !== undefined && options.offset >= 0;
+    if (hasLimit || hasOffset) {
+      // SQLite requires LIMIT before OFFSET; -1 means "no upper bound".
+      sql += " LIMIT ?";
+      params.push(hasLimit ? options.limit : -1);
+    }
+    if (hasOffset) {
+      sql += " OFFSET ?";
+      params.push(options.offset);
+    }
+
+    const rows = this.prep(sql).all(...params) as Record<string, unknown>[];
     return rows.map(rowToRun);
+  }
+
+  async listAllRuns(options?: ListAllRunsOptions): Promise<Run[]> {
+    const params: unknown[] = [];
+    let sql = `SELECT * FROM ${this.tableName}`;
+    const where: string[] = [];
+
+    if (options?.signalName) {
+      where.push("signal_name = ?");
+      params.push(options.signalName);
+    }
+    if (options?.statuses && options.statuses.length > 0) {
+      const placeholders = options.statuses.map(() => "?").join(", ");
+      where.push(`status IN (${placeholders})`);
+      params.push(...options.statuses);
+    }
+    if (where.length > 0) sql += ` WHERE ${where.join(" AND ")}`;
+
+    sql += " ORDER BY created_at DESC";
+
+    const hasLimit = options?.limit !== undefined && options.limit >= 0;
+    const hasOffset = options?.offset !== undefined && options.offset >= 0;
+    if (hasLimit || hasOffset) {
+      // SQLite requires LIMIT before OFFSET; -1 means "no upper bound".
+      sql += " LIMIT ?";
+      params.push(hasLimit ? options!.limit : -1);
+    }
+    if (hasOffset) {
+      sql += " OFFSET ?";
+      params.push(options!.offset);
+    }
+
+    const rows = this.prep(sql).all(...params) as Record<string, unknown>[];
+    return rows.map(rowToRun);
+  }
+
+  async countRunsByStatus(options?: { signalName?: string }): Promise<Partial<Record<RunStatus, number>>> {
+    const params: unknown[] = [];
+    let sql = `SELECT status, COUNT(*) as n FROM ${this.tableName}`;
+    if (options?.signalName) {
+      sql += " WHERE signal_name = ?";
+      params.push(options.signalName);
+    }
+    sql += " GROUP BY status";
+
+    const rows = this.prep(sql).all(...params) as Array<{ status: RunStatus; n: number }>;
+    const counts: Partial<Record<RunStatus, number>> = {};
+    for (const row of rows) {
+      counts[row.status] = row.n;
+    }
+    return counts;
   }
 
   async hasRunWithStatus(signalName: string, statuses: RunStatus[]): Promise<boolean> {
     if (statuses.length === 0) return false;
     const placeholders = statuses.map(() => "?").join(", ");
-    const row = this.db
-      .prepare(
+    const row = this
+      .prep(
         `SELECT 1 FROM ${this.tableName} WHERE signal_name = ? AND status IN (${placeholders}) LIMIT 1`,
       )
       .get(signalName, ...statuses);
@@ -256,8 +347,8 @@ export class SqliteAdapter implements SerializableAdapter {
     const placeholders = statuses.map(() => "?").join(", ");
     const cutoff = olderThan.toISOString();
     // Steps cascade via FOREIGN KEY ON DELETE CASCADE
-    const result = this.db
-      .prepare(
+    const result = this
+      .prep(
         `DELETE FROM ${this.tableName} WHERE status IN (${placeholders}) AND completed_at IS NOT NULL AND completed_at < ?`,
       )
       .run(...statuses, cutoff);
@@ -265,8 +356,8 @@ export class SqliteAdapter implements SerializableAdapter {
   }
 
   async addStep(step: Step): Promise<void> {
-    this.db
-      .prepare(
+    this
+      .prep(
         `INSERT INTO ${this.tableName}_steps
           (id, run_id, name, status, input, output, error, started_at, completed_at)
          VALUES
@@ -311,30 +402,30 @@ export class SqliteAdapter implements SerializableAdapter {
 
     if (setClauses.length === 0) return;
 
-    this.db
-      .prepare(
+    this
+      .prep(
         `UPDATE ${this.tableName}_steps SET ${setClauses.join(", ")} WHERE id = @id`,
       )
       .run(values);
   }
 
   async getSteps(runId: string): Promise<Step[]> {
-    const rows = this.db
-      .prepare(`SELECT * FROM ${this.tableName}_steps WHERE run_id = ?`)
+    const rows = this
+      .prep(`SELECT * FROM ${this.tableName}_steps WHERE run_id = ?`)
       .all(runId) as Record<string, unknown>[];
 
     return rows.map(rowToStep);
   }
 
   async removeSteps(runId: string): Promise<void> {
-    this.db
-      .prepare(`DELETE FROM ${this.tableName}_steps WHERE run_id = ?`)
+    this
+      .prep(`DELETE FROM ${this.tableName}_steps WHERE run_id = ?`)
       .run(runId);
   }
 
   async ping(): Promise<boolean> {
     try {
-      this.db.prepare("SELECT 1").get();
+      this.prep("SELECT 1").get();
       return true;
     } catch {
       return false;
@@ -346,6 +437,7 @@ export class SqliteAdapter implements SerializableAdapter {
   }
 
   async close(): Promise<void> {
+    this.stmtCache.clear();
     this.db.close();
   }
 }

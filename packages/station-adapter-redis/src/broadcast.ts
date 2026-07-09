@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import Redis from "ioredis";
 import type {
   BroadcastQueueAdapter,
+  ListBroadcastRunsOptions,
   BroadcastRun,
   BroadcastRunPatch,
   BroadcastRunStatus,
@@ -25,6 +26,8 @@ import {
   hashToNodeRun,
   dateToScore,
   patchToHashArgs,
+  ATOMIC_RUN_UPDATE_LUA,
+  atomicUpdateArgs,
   BROADCAST_RUN_PATCH_KEYS,
   NODE_RUN_PATCH_KEYS,
   BROADCAST_RUN_DATE_FIELDS,
@@ -118,63 +121,29 @@ export class BroadcastRedisAdapter implements BroadcastQueueAdapter {
 
     if (Object.keys(setArgs).length === 0 && delFields.length === 0) return;
 
-    const pipeline = this.redis.multi();
-
-    // Update hash fields
-    if (Object.keys(setArgs).length > 0) {
-      pipeline.hset(broadcastRunHashKey(this.prefix, id), setArgs);
-    }
-
-    // Remove deleted fields from hash
-    if (delFields.length > 0) {
-      pipeline.hdel(broadcastRunHashKey(this.prefix, id), ...delFields);
-    }
-
-    // Handle status transitions
-    const newStatus = patch.status;
-    if (newStatus !== undefined && newStatus !== currentRun.status) {
-      // Remove from old status index set
-      pipeline.srem(broadcastStatusRunsKey(this.prefix, currentRun.broadcastName, currentRun.status), id);
-      // Add to new status index set
-      pipeline.sadd(broadcastStatusRunsKey(this.prefix, currentRun.broadcastName, newStatus), id);
-
-      // Remove from old scheduling sorted set
-      if (currentRun.status === "pending") {
-        pipeline.zrem(pendingBroadcastRunsKey(this.prefix), id);
-      } else if (currentRun.status === "running") {
-        pipeline.zrem(runningBroadcastRunsKey(this.prefix), id);
-      }
-
-      // Add to new scheduling sorted set
-      if (newStatus === "pending") {
-        const nextRunAt = patch.nextRunAt ?? currentRun.nextRunAt;
-        pipeline.zadd(pendingBroadcastRunsKey(this.prefix), String(dateToScore(nextRunAt)), id);
-      } else if (newStatus === "running") {
-        const startedAt = patch.startedAt ?? currentRun.startedAt;
-        pipeline.zadd(runningBroadcastRunsKey(this.prefix), String(dateToScore(startedAt)), id);
-      }
-    } else if (newStatus === undefined || newStatus === currentRun.status) {
-      // Status unchanged — but nextRunAt may have changed for a pending run
-      if (currentRun.status === "pending" && patch.nextRunAt !== undefined) {
-        pipeline.zadd(pendingBroadcastRunsKey(this.prefix), String(dateToScore(patch.nextRunAt)), id);
-      }
-    }
-
-    // Track completedAt for purge
-    if (patch.completedAt !== undefined) {
-      if (patch.completedAt === null) {
-        pipeline.zrem(completedAtBroadcastRunsKey(this.prefix), id);
-      } else {
-        pipeline.zadd(completedAtBroadcastRunsKey(this.prefix), String((patch.completedAt as Date).getTime()), id);
-      }
-    }
-
-    await pipeline.exec();
+    // Atomic status read + field update + index reconciliation (same script
+    // as the signal adapter) so concurrent updaters cannot corrupt the status
+    // set / scheduling zsets. broadcastName is immutable.
+    const statusKeyBase = broadcastStatusRunsKey(this.prefix, currentRun.broadcastName, "");
+    const argv = atomicUpdateArgs(setArgs, delFields, patch, currentRun);
+    await this.redis.eval(
+      ATOMIC_RUN_UPDATE_LUA,
+      4,
+      broadcastRunHashKey(this.prefix, id),
+      pendingBroadcastRunsKey(this.prefix),
+      runningBroadcastRunsKey(this.prefix),
+      completedAtBroadcastRunsKey(this.prefix),
+      id,
+      statusKeyBase,
+      ...argv,
+    );
   }
 
-  async getBroadcastRunsDue(): Promise<BroadcastRun[]> {
+  async getBroadcastRunsDue(limit?: number): Promise<BroadcastRun[]> {
     const now = Date.now();
-    const ids = await this.redis.zrangebyscore(pendingBroadcastRunsKey(this.prefix), "-inf", String(now));
+    const ids = limit !== undefined && limit >= 0
+      ? await this.redis.zrangebyscore(pendingBroadcastRunsKey(this.prefix), "-inf", String(now), "LIMIT", 0, limit)
+      : await this.redis.zrangebyscore(pendingBroadcastRunsKey(this.prefix), "-inf", String(now));
     if (ids.length === 0) return [];
 
     return this.fetchBroadcastRunsByIds(ids);
@@ -187,21 +156,32 @@ export class BroadcastRedisAdapter implements BroadcastQueueAdapter {
     return this.fetchBroadcastRunsByIds(ids);
   }
 
-  async listBroadcastRuns(broadcastName: string): Promise<BroadcastRun[]> {
+  async listBroadcastRuns(broadcastName: string, options?: ListBroadcastRunsOptions): Promise<BroadcastRun[]> {
     const ids = await this.redis.zrevrange(broadcastNameRunsKey(this.prefix, broadcastName), 0, -1);
     if (ids.length === 0) return [];
 
-    return this.fetchBroadcastRunsByIds(ids);
+    const runs = await this.fetchBroadcastRunsByIds(ids);
+    if (!options) return runs;
+    // Runs are already newest-first (ZREVRANGE by createdAt score).
+    let out = runs;
+    if (options.statuses && options.statuses.length > 0) {
+      const set = new Set(options.statuses);
+      out = out.filter((run) => set.has(run.status));
+    }
+    const offset = options.offset ?? 0;
+    if (offset > 0) out = out.slice(offset);
+    if (options.limit !== undefined && options.limit >= 0) out = out.slice(0, options.limit);
+    return out;
   }
 
   async hasBroadcastRunWithStatus(broadcastName: string, statuses: BroadcastRunStatus[]): Promise<boolean> {
     if (statuses.length === 0) return false;
 
-    for (const status of statuses) {
-      const count = await this.redis.scard(broadcastStatusRunsKey(this.prefix, broadcastName, status));
-      if (count > 0) return true;
-    }
-    return false;
+    // Redis deletes empty sets, so a single EXISTS over all status-set keys
+    // is equivalent to checking each SCARD — one round trip instead of N.
+    const keys = statuses.map((status) => broadcastStatusRunsKey(this.prefix, broadcastName, status));
+    const count = await this.redis.exists(...keys);
+    return count > 0;
   }
 
   async purgeBroadcastRuns(olderThan: Date, statuses: BroadcastRunStatus[]): Promise<number> {
@@ -219,12 +199,21 @@ export class BroadcastRedisAdapter implements BroadcastQueueAdapter {
 
     if (candidateIds.length === 0) return 0;
 
+    // Check all candidates' statuses in one pipeline instead of N round trips
+    const statusPipeline = this.redis.pipeline();
+    for (const id of candidateIds) {
+      statusPipeline.hget(broadcastRunHashKey(this.prefix, id), "status");
+    }
+    const statusResults = await statusPipeline.exec();
+    if (!statusResults) return 0;
+
     let purged = 0;
 
-    for (const id of candidateIds) {
-      const status = await this.redis.hget(broadcastRunHashKey(this.prefix, id), "status");
-      if (status && statusSet.has(status as BroadcastRunStatus)) {
-        await this.removeBroadcastRun(id);
+    for (let i = 0; i < candidateIds.length; i++) {
+      const [err, status] = statusResults[i];
+      if (err) continue;
+      if (typeof status === "string" && statusSet.has(status as BroadcastRunStatus)) {
+        await this.removeBroadcastRun(candidateIds[i]);
         purged++;
       }
     }
@@ -353,11 +342,34 @@ export class BroadcastRedisAdapter implements BroadcastQueueAdapter {
     const names = await this.redis.smembers(broadcastDefinitionNamesKey(this.prefix));
     if (names.length === 0) return [];
     const deletedFlags = await this.redis.hmget(this.deletedFlagKey(), ...names);
+    const activeNames = names.filter((_, i) => deletedFlags[i] !== "1");
+    if (activeNames.length === 0) return [];
+
+    // Pipeline the latest-version lookups for all names in one round trip
+    const versionPipeline = this.redis.pipeline();
+    for (const name of activeNames) {
+      versionPipeline.zrevrange(broadcastDefinitionVersionsKey(this.prefix, name), 0, 0);
+    }
+    const versionResults = await versionPipeline.exec();
+    if (!versionResults) return [];
+
+    // Pipeline the spec GETs for every name that has a version
+    const getPipeline = this.redis.pipeline();
+    let hasGets = false;
+    for (let i = 0; i < activeNames.length; i++) {
+      const [err, top] = versionResults[i];
+      if (err || !Array.isArray(top) || top.length === 0) continue;
+      getPipeline.get(broadcastDefinitionKey(this.prefix, activeNames[i], Number(top[0])));
+      hasGets = true;
+    }
+    if (!hasGets) return [];
+    const getResults = await getPipeline.exec();
+    if (!getResults) return [];
+
     const out: DynamicBroadcastSpec[] = [];
-    for (let i = 0; i < names.length; i++) {
-      if (deletedFlags[i] === "1") continue;
-      const latest = await this.getDefinition(names[i]);
-      if (latest) out.push(latest);
+    for (const [err, json] of getResults) {
+      if (err || typeof json !== "string") continue;
+      out.push(deserializeSpec(json));
     }
     out.sort((a, b) => a.name.localeCompare(b.name));
     return out;

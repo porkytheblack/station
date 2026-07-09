@@ -73,3 +73,26 @@ export function getTriggerAdapter(): TriggerAdapter | null {
 export function isConfigured(): boolean {
   return _configured;
 }
+
+const _wakeListeners = new Set<() => void>();
+
+/**
+ * Register a callback invoked whenever a run is enqueued locally (in-process).
+ * Runners use this to wake from idle back-off immediately instead of waiting
+ * for the next poll. Returns an unsubscribe function.
+ */
+export function onLocalEnqueue(listener: () => void): () => void {
+  _wakeListeners.add(listener);
+  return () => _wakeListeners.delete(listener);
+}
+
+/** Notify runners in this process that a run was just enqueued. */
+export function notifyLocalEnqueue(): void {
+  for (const listener of _wakeListeners) {
+    try {
+      listener();
+    } catch {
+      // Wake listeners must never break the trigger path.
+    }
+  }
+}

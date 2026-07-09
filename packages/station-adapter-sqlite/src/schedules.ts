@@ -16,6 +16,17 @@ export interface ScheduleSqliteAdapterOptions {
 export class ScheduleSqliteAdapter implements ScheduleAdapter {
   private db: Database.Database;
   private table: string;
+  /** Prepared-statement cache — better-sqlite3 recompiles on every prepare(). */
+  private stmtCache = new Map<string, Database.Statement>();
+
+  private prep(sql: string): Database.Statement {
+    let stmt = this.stmtCache.get(sql);
+    if (!stmt) {
+      stmt = this.db.prepare(sql);
+      this.stmtCache.set(sql, stmt);
+    }
+    return stmt;
+  }
 
   constructor(options: ScheduleSqliteAdapterOptions = {}) {
     const dbPath = options.dbPath ?? "station.db";
@@ -48,7 +59,7 @@ export class ScheduleSqliteAdapter implements ScheduleAdapter {
   }
 
   async add(schedule: Schedule): Promise<void> {
-    this.db.prepare(`
+    this.prep(`
       INSERT INTO ${this.table}
         (id, kind, target, interval, input, enabled, next_run_at,
          last_run_at, last_run_status, last_run_id,
@@ -75,7 +86,7 @@ export class ScheduleSqliteAdapter implements ScheduleAdapter {
   }
 
   async get(id: string): Promise<Schedule | null> {
-    const row = this.db.prepare(`SELECT * FROM ${this.table} WHERE id = ?`).get(id) as
+    const row = this.prep(`SELECT * FROM ${this.table} WHERE id = ?`).get(id) as
       | Record<string, unknown>
       | undefined;
     return row ? rowToSchedule(row) : null;
@@ -98,7 +109,7 @@ export class ScheduleSqliteAdapter implements ScheduleAdapter {
       params.push(new Date().toISOString());
     }
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-    const rows = this.db.prepare(`SELECT * FROM ${this.table} ${where} ORDER BY next_run_at ASC`).all(...params) as Record<string, unknown>[];
+    const rows = this.prep(`SELECT * FROM ${this.table} ${where} ORDER BY next_run_at ASC`).all(...params) as Record<string, unknown>[];
     return rows.map(rowToSchedule);
   }
 
@@ -144,11 +155,11 @@ export class ScheduleSqliteAdapter implements ScheduleAdapter {
     }
 
     if (setClauses.length === 0) return;
-    this.db.prepare(`UPDATE ${this.table} SET ${setClauses.join(", ")} WHERE id = @id`).run(values);
+    this.prep(`UPDATE ${this.table} SET ${setClauses.join(", ")} WHERE id = @id`).run(values);
   }
 
   async delete(id: string): Promise<boolean> {
-    const result = this.db.prepare(`DELETE FROM ${this.table} WHERE id = ?`).run(id);
+    const result = this.prep(`DELETE FROM ${this.table} WHERE id = ?`).run(id);
     return result.changes > 0;
   }
 
@@ -157,8 +168,8 @@ export class ScheduleSqliteAdapter implements ScheduleAdapter {
    * expected. Prevents two runners from double-firing the same schedule.
    */
   async claimDue(id: string, expectedNextRunAt: Date, newNextRunAt: Date): Promise<boolean> {
-    const result = this.db
-      .prepare(`UPDATE ${this.table}
+    const result = this
+      .prep(`UPDATE ${this.table}
                 SET next_run_at = @new_next, updated_at = @now
                 WHERE id = @id AND next_run_at = @expected AND enabled = 1`)
       .run({
@@ -176,7 +187,7 @@ export class ScheduleSqliteAdapter implements ScheduleAdapter {
 
   async ping(): Promise<boolean> {
     try {
-      this.db.prepare("SELECT 1").get();
+      this.prep("SELECT 1").get();
       return true;
     } catch {
       return false;
@@ -184,6 +195,7 @@ export class ScheduleSqliteAdapter implements ScheduleAdapter {
   }
 
   async close(): Promise<void> {
+    this.stmtCache.clear();
     this.db.close();
   }
 }

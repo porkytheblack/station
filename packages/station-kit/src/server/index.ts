@@ -1,8 +1,10 @@
 import { Hono } from "hono";
 import { createMiddleware } from "hono/factory";
+import { bodyLimit } from "hono/body-limit";
 import { serve } from "@hono/node-server";
 import { resolve } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import type { Server } from "node:http";
 import { SignalRunner, MemoryAdapter, parseInterval } from "station-signal";
 import { BroadcastRunner, BroadcastMemoryAdapter } from "station-broadcast";
@@ -105,7 +107,7 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
   if (config.auth) {
     const storage = config.auth.keyStorage
       ?? new FileKeyStorage({ filePath: resolve(dataDir, "station-keys.json") });
-    keyStore = new KeyStore(storage);
+    keyStore = new KeyStore(storage, { pepper: resolveKeyPepper(dataDir) });
     sessionConfig = {
       username: config.auth.username,
       password: config.auth.password,
@@ -210,6 +212,15 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
   // Build Hono app
   const app = new Hono();
 
+  // Bound request bodies so oversized payloads can't be parsed/stored.
+  app.use("/api/*", bodyLimit({
+    maxSize: 5 * 1024 * 1024,
+    onError: (c) => c.json({ error: "payload_too_large", message: "Request body too large." }, 413),
+  }));
+
+  // Brute-force protection for the dashboard login (the v1 login is limited below).
+  app.use("/api/auth/login", rateLimiter({ windowMs: 60_000, max: 10 }));
+
   // ── Dashboard auth routes (always accessible) ──────────────────────
   app.get("/api/auth/check", async (c) => {
     if (!sessionConfig) {
@@ -278,9 +289,11 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
   // Public v1 routes (no auth required)
   app.route("/api/v1", v1HealthRoutes({ signalAdapter, broadcastAdapter }));
 
-  // Auth routes: public but rate-limited to prevent brute force
+  // Auth routes: public but rate-limited to prevent brute force. The limiter
+  // is scoped to /auth/* — a "/*" limiter here would run for every /api/v1
+  // route mounted after this app and throttle the whole API to 10 req/min.
   const authApp = new Hono();
-  authApp.use("/*", rateLimiter({ windowMs: 60_000, max: 10 }));
+  authApp.use("/auth/*", rateLimiter({ windowMs: 60_000, max: 10 }));
   authApp.route("/", v1AuthRoutes({ sessionConfig }));
   app.route("/api/v1", authApp);
 
@@ -288,9 +301,22 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
   const v1 = new Hono();
   v1.use("/*", authResolver({ keyStore, sessionConfig }));
 
+  // Hono runs a sub-app's `use("/*")` middleware for routes that sibling
+  // sub-apps mount LATER under the same prefix, so per-group scope guards
+  // stack instead of isolating (a trigger-only key would be rejected by the
+  // read group's guard before reaching /trigger). Attach the guard to each
+  // route individually instead.
+  const guarded = (scope: string, group: Hono): Hono => {
+    const out = new Hono();
+    const guard = requireScope(scope);
+    for (const r of group.routes) {
+      out.on(r.method, r.path, guard, r.handler);
+    }
+    return out;
+  };
+
   // Read-scope routes
   const readRoutes = new Hono();
-  readRoutes.use("/*", requireScope("read"));
   readRoutes.route("/", v1SignalRoutes({ signalRunner, signalSubscriber: stationSignalSub }));
   readRoutes.route("/", v1RunRoutes({ signalRunner, signalAdapter, logBuffer, logStore }));
   readRoutes.route("/", v1BroadcastRoutes({ broadcastRunner, broadcastAdapter, broadcastSubscriber: stationBroadcastSub }));
@@ -304,17 +330,13 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
     signalRunner,
     signalSubscriber: stationSignalSub,
   }));
-  v1.route("/", readRoutes);
+  v1.route("/", guarded("read", readRoutes));
 
   // Trigger-scope routes
-  const triggerRoutes = new Hono();
-  triggerRoutes.use("/*", requireScope("trigger"));
-  triggerRoutes.route("/", v1TriggerRoutes({ signalRunner, signalAdapter, broadcastRunner, broadcastAdapter, signalSubscriber: stationSignalSub }));
-  v1.route("/", triggerRoutes);
+  v1.route("/", guarded("trigger", v1TriggerRoutes({ signalRunner, signalAdapter, broadcastRunner, broadcastAdapter, signalSubscriber: stationSignalSub })));
 
   // Cancel-scope routes — only the cancel endpoints
   const cancelRoutes = new Hono();
-  cancelRoutes.use("/*", requireScope("cancel"));
   cancelRoutes.post("/runs/:id/cancel", async (c) => {
     const id = c.req.param("id");
     if (!signalRunner) {
@@ -337,11 +359,10 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
     }
     return c.json({ data: { cancelled: true } });
   });
-  v1.route("/", cancelRoutes);
+  v1.route("/", guarded("cancel", cancelRoutes));
 
   // Admin-scope routes — destructive / mutating endpoints
   const adminRoutes = new Hono();
-  adminRoutes.use("/*", requireScope("admin"));
   adminRoutes.route("/", v1KeyRoutes({ keyStore }));
   adminRoutes.route("/", v1DefinitionRoutes({
     broadcastRunner,
@@ -350,7 +371,7 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
     signalSubscriber: stationSignalSub,
   }));
   adminRoutes.route("/", v1ScheduleRoutes({ scheduleAdapter }));
-  v1.route("/", adminRoutes);
+  v1.route("/", guarded("admin", adminRoutes));
 
   app.route("/api/v1", v1);
 
@@ -408,6 +429,14 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
     keyStore,
     dataDir,
     async start() {
+      if (!config.auth && !isLoopbackHost(config.host)) {
+        console.warn(
+          `[station] WARNING: no auth configured while binding to ${config.host} — ` +
+          "anyone who can reach this port can view logs and trigger, cancel, or rerun jobs. " +
+          "Set auth (STATION_AUTH_USERNAME/STATION_AUTH_PASSWORD) or bind to 127.0.0.1.",
+        );
+      }
+
       // Start runners (non-blocking — they have internal poll loops)
       if (config.runRunners) {
         if (signalRunner) {
@@ -435,8 +464,23 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
         },
       ) as unknown as Server;
 
-      // Attach WebSocket to the HTTP server
-      wsHub.attach(httpServer);
+      // Attach WebSocket to the HTTP server. The upgrade path never passes
+      // through Hono middleware, so it enforces auth itself: session cookie
+      // or a read-scoped API key, mirroring the SSE endpoint.
+      wsHub.attach(httpServer, async (req) => {
+        if (!sessionConfig && !keyStore) return true;
+        const cookie = req.headers.cookie;
+        if (cookie && sessionConfig) {
+          const match = cookie.match(/station_session=([^;]+)/);
+          if (match && verifySessionToken(match[1], sessionConfig)) return true;
+        }
+        const authHeader = req.headers.authorization;
+        if (authHeader?.startsWith("Bearer ") && keyStore) {
+          const key = await keyStore.verify(authHeader.slice(7));
+          if (key?.scopes.includes("read")) return true;
+        }
+        return false;
+      });
     },
 
     async stop() {
@@ -467,6 +511,40 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
 // new defaults are `station-keys.json` and `station-logs.jsonl`; the
 // legacy files are NOT auto-migrated. Emit a one-time warning so an
 // upgrade doesn't silently appear to wipe a user's API keys.
+function isLoopbackHost(host: string): boolean {
+  return host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]";
+}
+
+/**
+ * Resolve the API-key pepper (a server-side secret mixed into stored key
+ * hashes). Priority: STATION_KEY_PEPPER env var, else a persisted per-install
+ * secret at `<dataDir>/station-key-pepper` (generated with 0600 on first run).
+ * Persisting it means existing peppered keys keep verifying across restarts.
+ */
+function resolveKeyPepper(dataDir: string): string {
+  const fromEnv = process.env.STATION_KEY_PEPPER;
+  if (fromEnv) return fromEnv;
+
+  const pepperPath = resolve(dataDir, "station-key-pepper");
+  try {
+    if (existsSync(pepperPath)) {
+      const existing = readFileSync(pepperPath, "utf8").trim();
+      if (existing) return existing;
+    }
+  } catch {
+    // Unreadable — fall through and regenerate.
+  }
+  const pepper = randomBytes(32).toString("hex");
+  try {
+    writeFileSync(pepperPath, pepper, { mode: 0o600 });
+  } catch (err) {
+    // If we can't persist it, warn: keys created this run won't verify after
+    // a restart (a new pepper would be generated). Better than failing boot.
+    console.warn(`[station] Could not persist key pepper to ${pepperPath}:`, err);
+  }
+  return pepper;
+}
+
 function warnIfLegacySqliteFiles(dataDir: string): void {
   const legacy: { file: string; replacement: string }[] = [
     { file: "station-keys.db", replacement: "station-keys.json" },

@@ -11,7 +11,7 @@ import type { AnyBeacon } from "./beacon.js";
 import { computeBackoffMs, shouldResetBackoff, shouldRestart } from "./backoff.js";
 import type { BeaconStateAdapter } from "./adapters/index.js";
 import { BeaconMemoryAdapter } from "./adapters/memory.js";
-import type { BeaconIPCMessage, BeaconSubscriber } from "./subscribers/index.js";
+import type { BeaconIPCMessage, BeaconJobInitMessage, BeaconSubscriber } from "./subscribers/index.js";
 import {
   type BeaconInstance,
   type BeaconInstancePatch,
@@ -193,7 +193,13 @@ export class BeaconRunner {
     try {
       const entries = await readdir(dir, { recursive: true });
       files = entries
-        .filter((f) => f.endsWith(".ts") || f.endsWith(".js"))
+        .filter((f) => (f.endsWith(".ts") || f.endsWith(".js")) && !f.endsWith(".d.ts"))
+        // Importing a file executes it — never auto-execute dependencies or
+        // hidden files that happen to live under beaconsDir.
+        .filter((f) => {
+          const parts = f.split(/[\\/]/);
+          return !parts.some((p) => p === "node_modules" || p.startsWith("."));
+        })
         .map((f) => join(dir, f));
     } catch {
       console.error(`[station-beacon] Cannot read beaconsDir: ${dir}`);
@@ -529,23 +535,17 @@ export class BeaconRunner {
     this.emit("onBeaconStarting", { instance: { ...this.instances.get(beacon.name)! } });
     await this.addEvent(beacon.name, incarnation, "starting");
 
+    // Only non-sensitive identifiers go through the environment (readable via
+    // /proc/<pid>/environ by any same-user process). The beacon config and the
+    // signal-adapter options — which may contain DB credentials — are sent over
+    // the private IPC channel below (job:init).
     const env: Record<string, string> = {
       ...(process.env as Record<string, string>),
       STATION_BEACON_NAME: beacon.name,
       STATION_BEACON_FILE: reg.filePath,
       STATION_BEACON_INCARNATION: String(incarnation),
-      STATION_BEACON_CONFIG: inst.config ?? "{}",
       STATION_BEACON_STOP_TIMEOUT: String(beacon.stopTimeoutMs),
     };
-    if (this.signalAdapterName) {
-      env.STATION_SIGNAL_ADAPTER = this.signalAdapterName;
-      if (this.signalAdapterOptions) {
-        env.STATION_SIGNAL_ADAPTER_OPTIONS = JSON.stringify(this.signalAdapterOptions);
-      }
-      if (this.signalAdapterImport) {
-        env.STATION_SIGNAL_ADAPTER_IMPORT = this.signalAdapterImport;
-      }
-    }
 
     // A stop may have been requested while we prepared to launch. Bail before
     // spawning so we never leave a child the stop sweep has already passed.
@@ -557,6 +557,21 @@ export class BeaconRunner {
       env,
       stdio: ["ignore", "pipe", "pipe", "ipc"],
     });
+
+    const jobInit: BeaconJobInitMessage = {
+      type: "job:init",
+      data: {
+        config: inst.config ?? "{}",
+        signalAdapterName: this.signalAdapterName,
+        signalAdapterOptions: this.signalAdapterOptions,
+        signalAdapterImport: this.signalAdapterImport,
+      },
+    };
+    try {
+      child.send(jobInit);
+    } catch (err) {
+      console.error(`[station-beacon] Failed to send job:init to "${beacon.name}":`, err);
+    }
     // The supervisor's own poll loop keeps this process alive; a child must not.
     // Otherwise a lingering beacon would prevent the supervisor from exiting.
     // (stdout/stderr are sockets at runtime, but typed as Readable without unref.)

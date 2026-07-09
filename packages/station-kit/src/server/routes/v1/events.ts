@@ -31,11 +31,11 @@ export function v1EventRoutes(deps: V1EventDeps) {
         signalFilter,
         broadcastFilter,
         eventFilter,
-        send(event: StationEvent) {
+        send(event: StationEvent, serializedData: string) {
           eventCounter++;
           stream.writeSSE({
             event: event.type,
-            data: JSON.stringify(event.data),
+            data: serializedData,
             id: `evt_${eventCounter}`,
           });
         },

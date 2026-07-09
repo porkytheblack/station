@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 export type { Pool as PgPool } from "pg";
-import type { SerializableAdapter, AdapterManifest, Run, RunPatch, RunStatus, Step, StepPatch } from "station-signal";
+import type { SerializableAdapter, AdapterManifest, Run, RunPatch, RunStatus, Step, StepPatch, ListRunsOptions, ListAllRunsOptions } from "station-signal";
 import { registerAdapter } from "station-signal";
 
 const MODULE_URL = import.meta.url;
@@ -182,16 +182,20 @@ export class PostgresAdapter implements SerializableAdapter {
     );
   }
 
-  async getRunsDue(): Promise<Run[]> {
+  async getRunsDue(limit?: number): Promise<Run[]> {
     await this.ready();
     const now = new Date();
-    const result = await this.pool.query(
+    const values: unknown[] = [now];
+    let sql =
       `SELECT * FROM ${this.tableName}
        WHERE status = 'pending'
          AND (next_run_at IS NULL OR next_run_at <= $1)
-       ORDER BY created_at ASC`,
-      [now],
-    );
+       ORDER BY created_at ASC`;
+    if (limit !== undefined && limit >= 0) {
+      values.push(limit);
+      sql += ` LIMIT $${values.length}`;
+    }
+    const result = await this.pool.query(sql, values);
     return result.rows.map(rowToRun);
   }
 
@@ -245,13 +249,80 @@ export class PostgresAdapter implements SerializableAdapter {
     );
   }
 
-  async listRuns(signalName: string): Promise<Run[]> {
+  async listRuns(signalName: string, options?: ListRunsOptions): Promise<Run[]> {
     await this.ready();
-    const result = await this.pool.query(
-      `SELECT * FROM ${this.tableName} WHERE signal_name = $1 ORDER BY created_at DESC`,
-      [signalName],
-    );
+    const values: unknown[] = [signalName];
+    let sql = `SELECT * FROM ${this.tableName} WHERE signal_name = $1`;
+
+    if (options?.statuses && options.statuses.length > 0) {
+      values.push(options.statuses);
+      sql += ` AND status = ANY($${values.length})`;
+    }
+
+    sql += ` ORDER BY created_at DESC`;
+
+    if (options?.limit !== undefined && options.limit >= 0) {
+      values.push(options.limit);
+      sql += ` LIMIT $${values.length}`;
+    }
+    if (options?.offset !== undefined && options.offset >= 0) {
+      values.push(options.offset);
+      sql += ` OFFSET $${values.length}`;
+    }
+
+    const result = await this.pool.query(sql, values);
     return result.rows.map(rowToRun);
+  }
+
+  async listAllRuns(options?: ListAllRunsOptions): Promise<Run[]> {
+    await this.ready();
+    const values: unknown[] = [];
+    let sql = `SELECT * FROM ${this.tableName}`;
+    const conditions: string[] = [];
+
+    if (options?.signalName !== undefined) {
+      values.push(options.signalName);
+      conditions.push(`signal_name = $${values.length}`);
+    }
+    if (options?.statuses && options.statuses.length > 0) {
+      values.push(options.statuses);
+      conditions.push(`status = ANY($${values.length})`);
+    }
+    if (conditions.length > 0) {
+      sql += ` WHERE ${conditions.join(" AND ")}`;
+    }
+
+    sql += ` ORDER BY created_at DESC`;
+
+    if (options?.limit !== undefined && options.limit >= 0) {
+      values.push(options.limit);
+      sql += ` LIMIT $${values.length}`;
+    }
+    if (options?.offset !== undefined && options.offset >= 0) {
+      values.push(options.offset);
+      sql += ` OFFSET $${values.length}`;
+    }
+
+    const result = await this.pool.query(sql, values);
+    return result.rows.map(rowToRun);
+  }
+
+  async countRunsByStatus(options?: { signalName?: string }): Promise<Partial<Record<RunStatus, number>>> {
+    await this.ready();
+    const values: unknown[] = [];
+    let sql = `SELECT status, COUNT(*) AS count FROM ${this.tableName}`;
+    if (options?.signalName !== undefined) {
+      values.push(options.signalName);
+      sql += ` WHERE signal_name = $${values.length}`;
+    }
+    sql += ` GROUP BY status`;
+
+    const result = await this.pool.query(sql, values);
+    const counts: Partial<Record<RunStatus, number>> = {};
+    for (const row of result.rows) {
+      counts[row.status as RunStatus] = Number(row.count);
+    }
+    return counts;
   }
 
   async hasRunWithStatus(signalName: string, statuses: RunStatus[]): Promise<boolean> {

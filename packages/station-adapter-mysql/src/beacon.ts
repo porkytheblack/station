@@ -14,6 +14,8 @@ export interface BeaconMysqlAdapterOptions {
   pool?: Pool;
   tableName?: string;
   eventsTableName?: string;
+  /** Max lifecycle events retained per beacon. @default 1000 */
+  maxEventsPerBeacon?: number;
 }
 
 /** Durable {@link BeaconStateAdapter} backed by MySQL (mysql2). */
@@ -22,17 +24,20 @@ export class BeaconMysqlAdapter implements BeaconStateAdapter {
   private table: string;
   private eventsTable: string;
   private ownsPool: boolean;
+  private maxEvents: number;
 
-  private constructor(pool: Pool, table: string, eventsTable: string, ownsPool: boolean) {
+  private constructor(pool: Pool, table: string, eventsTable: string, ownsPool: boolean, maxEvents: number) {
     this.pool = pool;
     this.table = table;
     this.eventsTable = eventsTable;
     this.ownsPool = ownsPool;
+    this.maxEvents = maxEvents;
   }
 
   static async create(options: BeaconMysqlAdapterOptions = {}): Promise<BeaconMysqlAdapter> {
     const table = validateTableName(options.tableName ?? "beacon_instances");
     const eventsTable = validateTableName(options.eventsTableName ?? "beacon_events");
+    const maxEvents = options.maxEventsPerBeacon ?? 1000;
     let pool: Pool;
     let ownsPool: boolean;
     if (options.pool) {
@@ -82,7 +87,7 @@ export class BeaconMysqlAdapter implements BeaconStateAdapter {
       `CREATE INDEX idx_${eventsTable}_beacon ON ${eventsTable} (beacon_name, seq)`,
     );
 
-    return new BeaconMysqlAdapter(pool, table, eventsTable, ownsPool);
+    return new BeaconMysqlAdapter(pool, table, eventsTable, ownsPool, maxEvents);
   }
 
   async upsertInstance(instance: BeaconInstance): Promise<void> {
@@ -191,6 +196,24 @@ export class BeaconMysqlAdapter implements BeaconStateAdapter {
       `INSERT INTO ${this.eventsTable} (id, beacon_name, incarnation, type, message, at)
        VALUES (?, ?, ?, ?, ?, ?)`,
       [event.id, event.beaconName, event.incarnation, event.type, event.message ?? null, dateToStr(event.at)],
+    );
+    // Prune this beacon's oldest events beyond the retention cap. The inner
+    // query finds the seq of the maxEvents-th newest row; rows at/below it are
+    // deleted. OFFSET is inlined (coerced integer) as mysql2 doesn't reliably
+    // bind LIMIT/OFFSET placeholders, and the subquery is wrapped in a derived
+    // table so MySQL allows referencing the DELETE target. When the beacon has
+    // <= maxEvents rows the inner query yields no row → NULL → nothing deleted.
+    const cap = Math.max(0, Math.floor(this.maxEvents));
+    await this.pool.execute(
+      `DELETE FROM ${this.eventsTable}
+       WHERE beacon_name = ?
+         AND seq <= (
+           SELECT s FROM (
+             SELECT seq AS s FROM ${this.eventsTable}
+             WHERE beacon_name = ? ORDER BY seq DESC LIMIT 1 OFFSET ${cap}
+           ) AS cutoff
+         )`,
+      [event.beaconName, event.beaconName],
     );
   }
 

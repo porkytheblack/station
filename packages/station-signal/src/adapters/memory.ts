@@ -1,6 +1,14 @@
 import { randomUUID } from "node:crypto";
 import type { SignalQueueAdapter } from "./index.js";
-import type { Run, RunPatch, RunStatus, Step, StepPatch } from "../types.js";
+import type {
+  ListAllRunsOptions,
+  ListRunsOptions,
+  Run,
+  RunPatch,
+  RunStatus,
+  Step,
+  StepPatch,
+} from "../types.js";
 import { registerAdapter } from "./registry.js";
 
 /**
@@ -53,15 +61,16 @@ export class MemoryAdapter implements SignalQueueAdapter {
     await this.removeSteps(id);
   }
 
-  async getRunsDue(): Promise<Run[]> {
+  async getRunsDue(limit?: number): Promise<Run[]> {
     const now = new Date();
-    return Array.from(this.runs.values())
+    const due = Array.from(this.runs.values())
       .filter((run) => {
         if (run.status !== "pending") return false;
         if (!run.nextRunAt) return true;
         return run.nextRunAt <= now;
       })
       .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+    return limit !== undefined && limit >= 0 ? due.slice(0, limit) : due;
   }
 
   async getRunsRunning(): Promise<Run[]> {
@@ -79,6 +88,7 @@ export class MemoryAdapter implements SignalQueueAdapter {
     if (run) {
       const rec = run as unknown as Record<string, unknown>;
       for (const [key, value] of Object.entries(patch)) {
+        if (key === "__proto__" || key === "constructor" || key === "prototype") continue;
         if (value === undefined) {
           delete rec[key];
         } else {
@@ -88,10 +98,44 @@ export class MemoryAdapter implements SignalQueueAdapter {
     }
   }
 
-  async listRuns(signalName: string): Promise<Run[]> {
-    return Array.from(this.runs.values()).filter(
+  async listRuns(signalName: string, options?: ListRunsOptions): Promise<Run[]> {
+    const rows = Array.from(this.runs.values()).filter(
       (run) => run.signalName === signalName,
     );
+    // No options → preserve legacy behavior (full history, insertion order).
+    if (!options) return rows;
+    return this.applyListOptions(rows, options);
+  }
+
+  async listAllRuns(options?: ListAllRunsOptions): Promise<Run[]> {
+    let rows = Array.from(this.runs.values());
+    if (options?.signalName) {
+      rows = rows.filter((run) => run.signalName === options.signalName);
+    }
+    return this.applyListOptions(rows, options ?? {});
+  }
+
+  private applyListOptions(rows: Run[], options: ListRunsOptions): Run[] {
+    let out = rows;
+    if (options.statuses && options.statuses.length > 0) {
+      const set = new Set(options.statuses);
+      out = out.filter((run) => set.has(run.status));
+    }
+    // Newest first.
+    out = out.slice().sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    const offset = options.offset ?? 0;
+    if (offset > 0) out = out.slice(offset);
+    if (options.limit !== undefined && options.limit >= 0) out = out.slice(0, options.limit);
+    return out;
+  }
+
+  async countRunsByStatus(options?: { signalName?: string }): Promise<Partial<Record<RunStatus, number>>> {
+    const counts: Partial<Record<RunStatus, number>> = {};
+    for (const run of this.runs.values()) {
+      if (options?.signalName && run.signalName !== options.signalName) continue;
+      counts[run.status] = (counts[run.status] ?? 0) + 1;
+    }
+    return counts;
   }
 
   async hasRunWithStatus(signalName: string, statuses: RunStatus[]): Promise<boolean> {
@@ -124,6 +168,7 @@ export class MemoryAdapter implements SignalQueueAdapter {
     if (step) {
       const rec = step as unknown as Record<string, unknown>;
       for (const [key, value] of Object.entries(patch)) {
+        if (key === "__proto__" || key === "constructor" || key === "prototype") continue;
         if (value === undefined) {
           delete rec[key];
         } else {

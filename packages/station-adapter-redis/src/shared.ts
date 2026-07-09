@@ -20,6 +20,8 @@ export const runningRunsKey = (prefix: string) => key(prefix, "runs", "running")
 export const signalRunsKey = (prefix: string, signalName: string) => key(prefix, "runs", "signal", signalName);
 export const statusRunsKey = (prefix: string, signalName: string, status: string) => key(prefix, "runs", "status", signalName, status);
 export const completedAtRunsKey = (prefix: string) => key(prefix, "runs", "completed-at");
+/** Set of all signal names seen — lets listAllRuns/countRunsByStatus enumerate signals. */
+export const signalNamesKey = (prefix: string) => key(prefix, "runs", "signal-names");
 
 // Signal step keys
 export const stepHashKey = (prefix: string, id: string) => key(prefix, "step", id);
@@ -273,3 +275,91 @@ export const NODE_RUN_PATCH_KEYS = new Set([
 
 // Re-export the field sets for use in patch methods
 export { RUN_DATE_FIELDS, RUN_NUMBER_FIELDS, STEP_DATE_FIELDS, BROADCAST_RUN_DATE_FIELDS, BROADCAST_RUN_NUMBER_FIELDS, NODE_RUN_DATE_FIELDS };
+
+// ---------------------------------------------------------------------------
+// Atomic run update (Lua)
+// ---------------------------------------------------------------------------
+
+/**
+ * Atomically apply a run/broadcast-run patch and reconcile its status indexes.
+ * The previous JS read-modify-write read the status outside the transaction,
+ * so two runners could interleave and leave the id in the wrong (or both)
+ * status set/scheduling zset. This script reads the current status INSIDE the
+ * atomic script and moves index membership based on that authoritative value,
+ * so membership can never tear from the stored status.
+ *
+ * KEYS: [hashKey, pendingZset, runningZset, completedAtZset]
+ * ARGV:
+ *   1 id
+ *   2 statusKeyBase   — e.g. "<prefix>:runs:status:<name>:"; status is appended
+ *   3 setArgs JSON    — object of field→string to HSET
+ *   4 delFields JSON  — array of fields to HDEL
+ *   5 newStatus       — "" when the patch does not change status
+ *   6 pendingScore    — score used when transitioning INTO pending
+ *   7 runningScore    — score used when transitioning INTO running
+ *   8 completedOp     — "" (no change) | "DEL" | numeric score string
+ *   9 nextRunAtInPatch— "1"/"0": patch set nextRunAt while status unchanged
+ *  10 nextRunAtScore  — score for the status-unchanged pending nextRunAt update
+ * Returns 1 if the run existed and was updated, 0 if the hash was missing.
+ */
+export const ATOMIC_RUN_UPDATE_LUA = `
+local hashKey = KEYS[1]
+if redis.call('EXISTS', hashKey) == 0 then return 0 end
+local id = ARGV[1]
+local statusBase = ARGV[2]
+local oldStatus = redis.call('HGET', hashKey, 'status')
+local setArgs = cjson.decode(ARGV[3])
+for k, v in pairs(setArgs) do redis.call('HSET', hashKey, k, v) end
+local delFields = cjson.decode(ARGV[4])
+for _, f in ipairs(delFields) do redis.call('HDEL', hashKey, f) end
+local newStatus = ARGV[5]
+if newStatus ~= '' and newStatus ~= oldStatus then
+  if oldStatus then redis.call('SREM', statusBase .. oldStatus, id) end
+  redis.call('SADD', statusBase .. newStatus, id)
+  if oldStatus == 'pending' then redis.call('ZREM', KEYS[2], id)
+  elseif oldStatus == 'running' then redis.call('ZREM', KEYS[3], id) end
+  if newStatus == 'pending' then redis.call('ZADD', KEYS[2], ARGV[6], id)
+  elseif newStatus == 'running' then redis.call('ZADD', KEYS[3], ARGV[7], id) end
+else
+  if oldStatus == 'pending' and ARGV[9] == '1' then
+    redis.call('ZADD', KEYS[2], ARGV[10], id)
+  end
+end
+local completedOp = ARGV[8]
+if completedOp == 'DEL' then redis.call('ZREM', KEYS[4], id)
+elseif completedOp ~= '' then redis.call('ZADD', KEYS[4], completedOp, id) end
+return 1
+`;
+
+/**
+ * Build the ARGV[3..10] slice shared by both run and broadcast-run atomic
+ * updates from a patch's computed HSET args and the fallback (current) run.
+ */
+export function atomicUpdateArgs(
+  setArgs: Record<string, string>,
+  delFields: string[],
+  patch: { status?: string; nextRunAt?: Date | null; startedAt?: Date | null; completedAt?: Date | null },
+  current: { nextRunAt?: Date; startedAt?: Date },
+): string[] {
+  const newStatus = patch.status ?? "";
+  // Scores only affect ordering within a zset, not membership, so using the
+  // (possibly slightly stale) current value as a fallback is safe.
+  const pendingScore = String(dateToScore(patch.nextRunAt ?? current.nextRunAt));
+  const runningScore = String(dateToScore(patch.startedAt ?? current.startedAt));
+  let completedOp = "";
+  if (patch.completedAt !== undefined) {
+    completedOp = patch.completedAt === null ? "DEL" : String((patch.completedAt as Date).getTime());
+  }
+  const nextRunAtInPatch = patch.nextRunAt !== undefined ? "1" : "0";
+  const nextRunAtScore = String(dateToScore(patch.nextRunAt ?? undefined));
+  return [
+    JSON.stringify(setArgs),
+    JSON.stringify(delFields),
+    newStatus,
+    pendingScore,
+    runningScore,
+    completedOp,
+    nextRunAtInPatch,
+    nextRunAtScore,
+  ];
+}

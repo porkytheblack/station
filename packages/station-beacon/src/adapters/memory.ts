@@ -31,6 +31,7 @@ export class BeaconMemoryAdapter implements BeaconStateAdapter {
     if (!instance) return;
     const rec = instance as unknown as Record<string, unknown>;
     for (const [key, value] of Object.entries(patch)) {
+      if (key === "__proto__" || key === "constructor" || key === "prototype") continue;
       if (value === undefined) {
         delete rec[key];
       } else {

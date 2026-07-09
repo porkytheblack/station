@@ -14,24 +14,46 @@
  */
 
 import type { BeaconContext } from "./context.js";
+import type { BeaconJobInitMessage } from "./subscribers/index.js";
 import { FATAL_EXIT_CODE } from "./types.js";
 import { isBeacon } from "./util.js";
 
 const beaconName = process.env.STATION_BEACON_NAME;
 const beaconFile = process.env.STATION_BEACON_FILE;
 const incarnation = Number(process.env.STATION_BEACON_INCARNATION ?? "1");
-const rawConfig = process.env.STATION_BEACON_CONFIG;
 const stopTimeoutMs = Number(process.env.STATION_BEACON_STOP_TIMEOUT ?? "10000");
-
-// Optional signal-adapter passthrough so `signal.trigger()` inside a beacon
-// writes to the same queue the SignalRunner drains (mirrors the signal bootstrap).
-const signalAdapterName = process.env.STATION_SIGNAL_ADAPTER;
-const signalAdapterOptionsRaw = process.env.STATION_SIGNAL_ADAPTER_OPTIONS;
-const signalAdapterImport = process.env.STATION_SIGNAL_ADAPTER_IMPORT;
 
 if (!beaconName || !beaconFile) {
   console.error("[station-beacon] Missing required env vars in spawned process");
   process.exit(1);
+}
+
+/**
+ * The beacon config and signal-adapter configuration (which may contain DB
+ * credentials) arrive over the private IPC channel rather than the environment,
+ * so they are not exposed via /proc/<pid>/environ. Registered synchronously at
+ * module load so a job:init sent immediately after spawn isn't missed.
+ */
+function waitForJobInit(timeoutMs = 10_000): Promise<BeaconJobInitMessage["data"]> {
+  return new Promise((resolve) => {
+    if (typeof process.send !== "function") {
+      console.error("[station-beacon] No IPC channel — bootstrap must be spawned by BeaconRunner");
+      process.exit(1);
+    }
+    const timer = setTimeout(() => {
+      console.error("[station-beacon] Timed out waiting for job:init from supervisor");
+      process.exit(1);
+    }, timeoutMs);
+    timer.unref?.();
+    const onMessage = (msg: unknown) => {
+      if (msg && typeof msg === "object" && (msg as BeaconJobInitMessage).type === "job:init") {
+        clearTimeout(timer);
+        process.off("message", onMessage);
+        resolve((msg as BeaconJobInitMessage).data);
+      }
+    };
+    process.on("message", onMessage);
+  });
 }
 
 function sendIPC(
@@ -165,15 +187,17 @@ function buildContext<TConfig>(config: TConfig): BeaconContext<TConfig> {
 
 // ─── Run ──────────────────────────────────────────────────────────────
 try {
+  const job = await waitForJobInit();
+  const rawConfig = job.config;
+
   // Reconstruct the signal adapter (if provided) so beacon handlers can trigger
   // signals into the shared queue rather than an isolated in-child adapter.
-  if (signalAdapterName) {
+  if (job.signalAdapterName) {
     const { configure, createAdapter } = await import("station-signal");
-    if (signalAdapterImport) {
-      await import(signalAdapterImport);
+    if (job.signalAdapterImport) {
+      await import(job.signalAdapterImport);
     }
-    const options = signalAdapterOptionsRaw ? JSON.parse(signalAdapterOptionsRaw) : {};
-    configure({ adapter: createAdapter(signalAdapterName, options) });
+    configure({ adapter: createAdapter(job.signalAdapterName, job.signalAdapterOptions ?? {}) });
   }
 
   const mod = await import(beaconFile);

@@ -2,7 +2,8 @@ import type { StationEvent } from "./ws.js";
 
 export interface SSEClient {
   id: string;
-  send(event: StationEvent): void;
+  /** `serializedData` is `JSON.stringify(event.data)`, computed once per broadcast. */
+  send(event: StationEvent, serializedData: string): void;
   close(): void;
   readonly signalFilter: Set<string> | null;
   readonly broadcastFilter: Set<string> | null;
@@ -25,9 +26,13 @@ export class SSEHub {
   }
 
   broadcast(event: StationEvent): void {
+    // Serialize once per event, not once per client — log-chunk events fan
+    // out to every connected dashboard.
+    let serialized: string | null = null;
     for (const client of this.clients.values()) {
       if (this.matchesFilter(client, event)) {
-        client.send(event);
+        serialized ??= JSON.stringify(event.data);
+        client.send(event, serialized);
       }
     }
   }

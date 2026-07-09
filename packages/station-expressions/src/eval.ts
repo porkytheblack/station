@@ -46,6 +46,9 @@ function evalNode(node: ExprNode, ctx: EvalContext, state: EvalState): unknown {
     case "obj": {
       const result: Record<string, unknown> = {};
       for (const [key, sub] of Object.entries(node.entries)) {
+        // A spec-supplied "__proto__" key would change the result's prototype
+        // rather than set a data property.
+        if (key === "__proto__" || key === "constructor" || key === "prototype") continue;
         result[key] = evalNode(sub, ctx, state);
       }
       return result;
@@ -86,6 +89,9 @@ function resolveRef(path: string[], ctx: EvalContext): unknown {
   for (let i = 1; i < path.length; i++) {
     if (cur === null || cur === undefined) return undefined;
     if (typeof cur !== "object") return undefined;
+    // Own-property access only: refs must not reach prototype members like
+    // `constructor` — expressions may evaluate untrusted specs.
+    if (!Object.hasOwn(cur, path[i])) return undefined;
     cur = (cur as Record<string, unknown>)[path[i]];
   }
   return cur;
