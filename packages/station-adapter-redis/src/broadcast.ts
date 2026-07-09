@@ -197,11 +197,11 @@ export class BroadcastRedisAdapter implements BroadcastQueueAdapter {
   async hasBroadcastRunWithStatus(broadcastName: string, statuses: BroadcastRunStatus[]): Promise<boolean> {
     if (statuses.length === 0) return false;
 
-    for (const status of statuses) {
-      const count = await this.redis.scard(broadcastStatusRunsKey(this.prefix, broadcastName, status));
-      if (count > 0) return true;
-    }
-    return false;
+    // Redis deletes empty sets, so a single EXISTS over all status-set keys
+    // is equivalent to checking each SCARD — one round trip instead of N.
+    const keys = statuses.map((status) => broadcastStatusRunsKey(this.prefix, broadcastName, status));
+    const count = await this.redis.exists(...keys);
+    return count > 0;
   }
 
   async purgeBroadcastRuns(olderThan: Date, statuses: BroadcastRunStatus[]): Promise<number> {
@@ -219,12 +219,21 @@ export class BroadcastRedisAdapter implements BroadcastQueueAdapter {
 
     if (candidateIds.length === 0) return 0;
 
+    // Check all candidates' statuses in one pipeline instead of N round trips
+    const statusPipeline = this.redis.pipeline();
+    for (const id of candidateIds) {
+      statusPipeline.hget(broadcastRunHashKey(this.prefix, id), "status");
+    }
+    const statusResults = await statusPipeline.exec();
+    if (!statusResults) return 0;
+
     let purged = 0;
 
-    for (const id of candidateIds) {
-      const status = await this.redis.hget(broadcastRunHashKey(this.prefix, id), "status");
-      if (status && statusSet.has(status as BroadcastRunStatus)) {
-        await this.removeBroadcastRun(id);
+    for (let i = 0; i < candidateIds.length; i++) {
+      const [err, status] = statusResults[i];
+      if (err) continue;
+      if (typeof status === "string" && statusSet.has(status as BroadcastRunStatus)) {
+        await this.removeBroadcastRun(candidateIds[i]);
         purged++;
       }
     }
@@ -353,11 +362,34 @@ export class BroadcastRedisAdapter implements BroadcastQueueAdapter {
     const names = await this.redis.smembers(broadcastDefinitionNamesKey(this.prefix));
     if (names.length === 0) return [];
     const deletedFlags = await this.redis.hmget(this.deletedFlagKey(), ...names);
+    const activeNames = names.filter((_, i) => deletedFlags[i] !== "1");
+    if (activeNames.length === 0) return [];
+
+    // Pipeline the latest-version lookups for all names in one round trip
+    const versionPipeline = this.redis.pipeline();
+    for (const name of activeNames) {
+      versionPipeline.zrevrange(broadcastDefinitionVersionsKey(this.prefix, name), 0, 0);
+    }
+    const versionResults = await versionPipeline.exec();
+    if (!versionResults) return [];
+
+    // Pipeline the spec GETs for every name that has a version
+    const getPipeline = this.redis.pipeline();
+    let hasGets = false;
+    for (let i = 0; i < activeNames.length; i++) {
+      const [err, top] = versionResults[i];
+      if (err || !Array.isArray(top) || top.length === 0) continue;
+      getPipeline.get(broadcastDefinitionKey(this.prefix, activeNames[i], Number(top[0])));
+      hasGets = true;
+    }
+    if (!hasGets) return [];
+    const getResults = await getPipeline.exec();
+    if (!getResults) return [];
+
     const out: DynamicBroadcastSpec[] = [];
-    for (let i = 0; i < names.length; i++) {
-      if (deletedFlags[i] === "1") continue;
-      const latest = await this.getDefinition(names[i]);
-      if (latest) out.push(latest);
+    for (const [err, json] of getResults) {
+      if (err || typeof json !== "string") continue;
+      out.push(deserializeSpec(json));
     }
     out.sort((a, b) => a.name.localeCompare(b.name));
     return out;

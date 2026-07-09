@@ -13,19 +13,42 @@ import { createAdapter } from "./adapters/registry.js";
 import "./adapters/memory.js";
 import { SignalNotFoundError, SignalValidationError } from "./errors.js";
 import type { AnySignal } from "./signal.js";
+import type { JobInitMessage } from "./subscribers/index.js";
 import type { Step } from "./types.js";
 import { isSignal } from "./util.js";
 
-const signalName = process.env.STATION_SIGNAL_NAME;
-const signalFile = process.env.STATION_SIGNAL_FILE;
-const runId = process.env.STATION_SIGNAL_RUN_ID;
-const rawInput = process.env.STATION_SIGNAL_INPUT;
-const adapterName = process.env.STATION_SIGNAL_ADAPTER;
-const adapterOptionsRaw = process.env.STATION_SIGNAL_ADAPTER_OPTIONS;
-const adapterImport = process.env.STATION_SIGNAL_ADAPTER_IMPORT;
+/**
+ * The run input, signal file, and adapter configuration (which may contain
+ * database credentials) arrive over the private IPC channel rather than
+ * environment variables, so they are not exposed via /proc/<pid>/environ.
+ */
+function waitForJobInit(timeoutMs = 10_000): Promise<JobInitMessage["data"]> {
+  return new Promise((resolve) => {
+    if (typeof process.send !== "function") {
+      console.error("[station-signal] No IPC channel — bootstrap must be spawned by SignalRunner");
+      process.exit(1);
+    }
+    const timer = setTimeout(() => {
+      console.error("[station-signal] Timed out waiting for job:init from runner");
+      process.exit(1);
+    }, timeoutMs);
+    const onMessage = (msg: unknown) => {
+      if (msg && typeof msg === "object" && (msg as JobInitMessage).type === "job:init") {
+        clearTimeout(timer);
+        process.off("message", onMessage);
+        resolve((msg as JobInitMessage).data);
+      }
+    };
+    process.on("message", onMessage);
+  });
+}
+
+const job = await waitForJobInit();
+const { signalName, signalFile, runId, adapterName, adapterOptions, adapterImport } = job;
+const rawInput = job.input;
 
 if (!signalName || !signalFile || !runId || rawInput === undefined) {
-  console.error("[station-signal] Missing required env vars in spawned process");
+  console.error("[station-signal] Incomplete job:init received in spawned process");
   process.exit(1);
 }
 
@@ -141,8 +164,7 @@ try {
     if (adapterImport) {
       await import(adapterImport);
     }
-    const options = adapterOptionsRaw ? JSON.parse(adapterOptionsRaw) : {};
-    configure({ adapter: createAdapter(adapterName, options) });
+    configure({ adapter: createAdapter(adapterName, adapterOptions ?? {}) });
   } else {
     // No serializable adapter — use MemoryAdapter for in-process step tracking.
     configure({ adapter: createAdapter("memory", {}) });

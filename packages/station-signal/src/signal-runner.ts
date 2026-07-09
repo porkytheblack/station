@@ -4,10 +4,10 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isSerializableAdapter, type SignalQueueAdapter } from "./adapters/index.js";
 import { MemoryAdapter } from "./adapters/memory.js";
-import { configure } from "./config.js";
+import { configure, onLocalEnqueue } from "./config.js";
 import { parseInterval } from "./interval.js";
 import type { AnySignal } from "./signal.js";
-import type { IPCMessage, SignalSubscriber } from "./subscribers/index.js";
+import type { IPCMessage, JobInitMessage, SignalSubscriber } from "./subscribers/index.js";
 import { ConsoleSubscriber } from "./subscribers/console.js";
 import { DEFAULT_MAX_ATTEMPTS, DEFAULT_TIMEOUT_MS, type Run, type Step } from "./types.js";
 import { isSignal } from "./util.js";
@@ -47,6 +47,8 @@ interface RecurringSchedule {
   signalName: string;
   filePath: string;
   interval: string;
+  /** Parsed once at registration — parsing per tick is wasted work. */
+  intervalMs: number;
   nextRunAt: Date;
   timeout: number;
   maxAttempts: number;
@@ -65,6 +67,16 @@ export interface SignalRunnerOptions {
   signalsDir?: string;
   adapter?: SignalQueueAdapter;
   pollIntervalMs?: number;
+  /**
+   * Maximum poll interval when idle. After a tick that finds no due runs and
+   * has no active children, the runner doubles its poll interval up to this
+   * cap, and resets to `pollIntervalMs` as soon as there is work. In-process
+   * triggers wake the runner immediately, so this only adds latency for runs
+   * enqueued by *other* processes into a shared adapter.
+   * Set equal to `pollIntervalMs` to disable idle back-off.
+   * @default max(pollIntervalMs, 5000)
+   */
+  idlePollIntervalMs?: number;
   /** Default max attempts for signals that don't specify their own. */
   maxAttempts?: number;
   /** Subscribers notified of signal lifecycle events. */
@@ -102,12 +114,23 @@ export class SignalRunner {
   private stopping = false;
   private ticking = false;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
+  private idlePollIntervalMs: number;
+  private currentPollMs: number;
+  private wake: (() => void) | null = null;
+  private lastRunningSweepAt = 0;
+  /** How often to scan for orphaned "running" runs when we own no children. */
+  private static readonly ORPHAN_SWEEP_INTERVAL_MS = 30_000;
 
   constructor(options: SignalRunnerOptions = {}) {
     const adapter = options.adapter ?? new MemoryAdapter();
     configure({ adapter });
     this.adapter = adapter;
     this.pollIntervalMs = options.pollIntervalMs ?? 1000;
+    this.idlePollIntervalMs = Math.max(
+      options.idlePollIntervalMs ?? Math.max(this.pollIntervalMs, 5000),
+      this.pollIntervalMs,
+    );
+    this.currentPollMs = this.pollIntervalMs;
     this.signalsDir = options.signalsDir;
 
     if (isSerializableAdapter(adapter)) {
@@ -154,6 +177,7 @@ export class SignalRunner {
       createdAt: new Date(),
     };
     await this.adapter.addRun(run);
+    this.wakeUp();
     return id;
   }
 
@@ -301,18 +325,50 @@ export class SignalRunner {
     process.once("SIGINT", shutdown);
     process.once("SIGTERM", shutdown);
 
+    // Wake from idle back-off immediately when a run is enqueued in-process
+    // (e.g. `signal.trigger()` writing through the global adapter).
+    const unsubscribeWake = onLocalEnqueue(() => this.wakeUp());
+
     this.running = true;
     while (this.running) {
+      let busy = true;
       try {
-        await this.tick();
+        busy = await this.tick();
       } catch (err) {
         console.error("[station-signal] tick() failed:", err);
       }
-      await this.sleep(this.pollIntervalMs);
+      if (!this.running) break;
+      await this.sleep(this.nextDelay(busy));
     }
 
+    unsubscribeWake();
     process.removeListener("SIGINT", shutdown);
     process.removeListener("SIGTERM", shutdown);
+  }
+
+  /**
+   * Compute how long to sleep before the next tick. Busy ticks poll at the
+   * base cadence; idle ticks back off exponentially up to `idlePollIntervalMs`
+   * so an idle runner costs (almost) nothing in CPU and adapter queries.
+   * The delay never sleeps past the next due recurring schedule.
+   */
+  private nextDelay(busy: boolean): number {
+    if (busy) {
+      this.currentPollMs = this.pollIntervalMs;
+    } else {
+      this.currentPollMs = Math.min(this.currentPollMs * 2, this.idlePollIntervalMs);
+    }
+
+    let delay = this.currentPollMs;
+    if (delay > this.pollIntervalMs) {
+      const now = Date.now();
+      for (const schedule of this.recurringSchedules.values()) {
+        const until = schedule.nextRunAt.getTime() - now;
+        if (until < delay) delay = until;
+      }
+      delay = Math.max(delay, this.pollIntervalMs);
+    }
+    return delay;
   }
 
   /** Stop the runner and optionally wait for active children to exit. */
@@ -320,10 +376,8 @@ export class SignalRunner {
     if (this.stopping) return;
     this.stopping = true;
     this.running = false;
-    if (this.pollTimer) {
-      clearTimeout(this.pollTimer);
-      this.pollTimer = null;
-    }
+    // Resolve any in-flight sleep so the start() loop exits promptly.
+    this.wake?.();
 
     if (options?.graceful && this.childByRunId.size > 0) {
       const timeout = options.timeoutMs ?? 10_000;
@@ -387,9 +441,37 @@ export class SignalRunner {
   }
 
   private sleep(ms: number): Promise<void> {
-    return new Promise((res) => {
-      this.pollTimer = setTimeout(res, ms);
+    if (this.wakePending) {
+      this.wakePending = false;
+      return Promise.resolve();
+    }
+    return new Promise<void>((res) => {
+      const finish = () => {
+        if (this.pollTimer) {
+          clearTimeout(this.pollTimer);
+          this.pollTimer = null;
+        }
+        this.wake = null;
+        res();
+      };
+      this.wake = finish;
+      this.pollTimer = setTimeout(finish, ms);
     });
+  }
+
+  private wakePending = false;
+
+  /**
+   * Reset idle back-off and wake the poll loop. Safe to call at any time;
+   * a wake that arrives mid-tick is remembered and consumed by the next sleep.
+   */
+  private wakeUp(): void {
+    this.currentPollMs = this.pollIntervalMs;
+    if (this.wake) {
+      this.wake();
+    } else if (this.running) {
+      this.wakePending = true;
+    }
   }
 
   private async discover(dir: string): Promise<void> {
@@ -397,7 +479,13 @@ export class SignalRunner {
     try {
       const entries = await readdir(dir, { recursive: true });
       files = entries
-        .filter((f) => f.endsWith(".ts") || f.endsWith(".js"))
+        .filter((f) => (f.endsWith(".ts") || f.endsWith(".js")) && !f.endsWith(".d.ts"))
+        // Importing a file executes it — never auto-execute dependencies or
+        // hidden files that happen to live under signalsDir.
+        .filter((f) => {
+          const parts = f.split(/[\\/]/);
+          return !parts.some((p) => p === "node_modules" || p.startsWith("."));
+        })
         .map((f) => join(dir, f));
     } catch {
       console.error(`[station-signal] Cannot read signalsDir: ${dir}`);
@@ -439,6 +527,7 @@ export class SignalRunner {
       signalName: sig.name,
       filePath,
       interval: sig.interval!,
+      intervalMs: ms,
       nextRunAt: new Date(Date.now() + ms),
       timeout: sig.timeout,
       maxAttempts: sig.maxAttempts,
@@ -446,8 +535,9 @@ export class SignalRunner {
     });
   }
 
-  private async tick(): Promise<void> {
-    if (this.ticking) return;
+  /** Returns true when this tick had work (used for idle back-off). */
+  private async tick(): Promise<boolean> {
+    if (this.ticking) return true;
     this.ticking = true;
     try {
     await this.checkTimeouts();
@@ -510,6 +600,9 @@ export class SignalRunner {
       this.emit("onRunDispatched", { run: dispatchRun });
       this.dispatch(sig, dispatchRun);
     }
+    // Busy while there are due runs (including ones waiting out retry
+    // back-off) or children still executing — keep the base poll cadence.
+    return due.length > 0 || this.childByRunId.size > 0;
     } finally {
       this.ticking = false;
     }
@@ -524,8 +617,7 @@ export class SignalRunner {
       const hasPendingOrRunning = await this.adapter.hasRunWithStatus(name, ["pending", "running"]);
       if (hasPendingOrRunning) {
         // Advance schedule anyway to prevent tight-loop re-checks
-        const ms = parseInterval(schedule.interval);
-        schedule.nextRunAt = new Date(Date.now() + ms);
+        schedule.nextRunAt = new Date(Date.now() + schedule.intervalMs);
         continue;
       }
 
@@ -544,14 +636,25 @@ export class SignalRunner {
       };
       await this.adapter.addRun(run);
 
-      const ms = parseInterval(schedule.interval);
-      schedule.nextRunAt = new Date(Date.now() + ms);
+      schedule.nextRunAt = new Date(Date.now() + schedule.intervalMs);
 
       this.emit("onRunRescheduled", { run, nextRunAt: schedule.nextRunAt });
     }
   }
 
   private async checkTimeouts(): Promise<void> {
+    // When this runner owns no child processes, the only "running" runs that
+    // could exist are orphans from a crashed process — sweep for those on a
+    // slow cadence instead of querying the adapter every tick.
+    const now = Date.now();
+    if (
+      this.childByRunId.size === 0 &&
+      now - this.lastRunningSweepAt < SignalRunner.ORPHAN_SWEEP_INTERVAL_MS
+    ) {
+      return;
+    }
+    this.lastRunningSweepAt = now;
+
     const running = await this.adapter.getRunsRunning();
 
     for (const run of running) {
@@ -608,24 +711,16 @@ export class SignalRunner {
   }
 
   private dispatch(sig: RegisteredSignal, run: Run): void {
+    // Only non-sensitive identifiers go through the environment (visible via
+    // /proc/<pid>/environ to any same-user process). The run input, signal
+    // file path, and adapter config — which may contain DB credentials — are
+    // sent over the private IPC channel instead (see job:init below).
     const env: Record<string, string> = {
       ...process.env as Record<string, string>,
-      STATION_SIGNAL_FILE: sig.filePath,
-      STATION_SIGNAL_INPUT: run.input,
       STATION_SIGNAL_NAME: run.signalName,
       STATION_SIGNAL_RUN_ID: run.id,
       STATION_SIGNAL_TIMEOUT: String(run.timeout ?? DEFAULT_TIMEOUT_MS),
     };
-
-    if (this.adapterName) {
-      env.STATION_SIGNAL_ADAPTER = this.adapterName;
-      if (this.adapterOptions) {
-        env.STATION_SIGNAL_ADAPTER_OPTIONS = JSON.stringify(this.adapterOptions);
-      }
-      if (this.adapterImport) {
-        env.STATION_SIGNAL_ADAPTER_IMPORT = this.adapterImport;
-      }
-    }
 
     const tsxImport = getTsxImport();
     const nodeArgs = tsxImport ? ["--import", tsxImport, BOOTSTRAP] : [BOOTSTRAP];
@@ -633,6 +728,24 @@ export class SignalRunner {
       env,
       stdio: ["ignore", "pipe", "pipe", "ipc"],
     });
+
+    const init: JobInitMessage = {
+      type: "job:init",
+      data: {
+        runId: run.id,
+        signalName: run.signalName,
+        signalFile: sig.filePath,
+        input: run.input,
+        adapterName: this.adapterName,
+        adapterOptions: this.adapterOptions,
+        adapterImport: this.adapterImport,
+      },
+    };
+    try {
+      child.send(init);
+    } catch (err) {
+      console.error(`[station-signal] Failed to send job to child for "${sig.name}":`, err);
+    }
 
     this.childByRunId.set(run.id, child);
     let resolved = false;
@@ -741,8 +854,10 @@ export class SignalRunner {
 
       // H2: Grace period — let pending IPC message handlers resolve before we act.
       // Node can fire exit synchronously after the last IPC message, before the
-      // async message handler has run.
-      await new Promise((r) => setTimeout(r, 200));
+      // async message handler has run. Skipped when IPC already resolved the run.
+      if (!resolved) {
+        await new Promise((r) => setTimeout(r, 200));
+      }
 
       // Always decrement counters first (prevents activeCount drift)
       if (!resolved) {

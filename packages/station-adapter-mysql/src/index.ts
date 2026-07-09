@@ -5,7 +5,7 @@ export type { Pool as MysqlPool } from "mysql2/promise";
 import type { SerializableAdapter, AdapterManifest, Run, RunPatch, RunStatus, Step, StepPatch } from "station-signal";
 import { registerAdapter } from "station-signal";
 
-import { validateTableName, dateToStr, createColumnMapper, rowToObject } from "./shared.js";
+import { validateTableName, dateToStr, createColumnMapper, rowToObject, runIdempotentDdl } from "./shared.js";
 
 const MODULE_URL = import.meta.url;
 
@@ -111,16 +111,18 @@ export class MysqlAdapter implements SerializableAdapter {
       )
     `);
 
-    // Indexes for the two hot queries (getRunsDue / getRunsRunning)
-    await pool.execute(`
-      CREATE INDEX IF NOT EXISTS idx_${tableName}_status_next
-        ON ${tableName} (status, next_run_at)
-    `);
+    // Indexes for the two hot queries (getRunsDue / getRunsRunning).
+    // Stock MySQL doesn't support CREATE INDEX IF NOT EXISTS; the helper
+    // turns the duplicate-name error into a no-op.
+    await runIdempotentDdl(
+      (sql) => pool.execute(sql),
+      `CREATE INDEX idx_${tableName}_status_next ON ${tableName} (status, next_run_at)`,
+    );
 
-    await pool.execute(`
-      CREATE INDEX IF NOT EXISTS idx_${tableName}_signal_name
-        ON ${tableName} (signal_name)
-    `);
+    await runIdempotentDdl(
+      (sql) => pool.execute(sql),
+      `CREATE INDEX idx_${tableName}_signal_name ON ${tableName} (signal_name)`,
+    );
 
     // Steps table with foreign key cascade
     await pool.execute(`
@@ -139,10 +141,10 @@ export class MysqlAdapter implements SerializableAdapter {
       )
     `);
 
-    await pool.execute(`
-      CREATE INDEX IF NOT EXISTS idx_${stepsTable}_run_id
-        ON ${stepsTable} (run_id)
-    `);
+    await runIdempotentDdl(
+      (sql) => pool.execute(sql),
+      `CREATE INDEX idx_${stepsTable}_run_id ON ${stepsTable} (run_id)`,
+    );
 
     return new MysqlAdapter(pool, tableName, ownsPool, options);
   }
@@ -201,7 +203,7 @@ export class MysqlAdapter implements SerializableAdapter {
   }
 
   async getRunsDue(): Promise<Run[]> {
-    const now = new Date().toISOString();
+    const now = dateToStr(new Date());
     const [rows] = await this.pool.execute<RowDataPacket[]>(
       `SELECT * FROM ${this.tableName}
        WHERE status = 'pending'
@@ -283,7 +285,7 @@ export class MysqlAdapter implements SerializableAdapter {
   async purgeRuns(olderThan: Date, statuses: RunStatus[]): Promise<number> {
     if (statuses.length === 0) return 0;
     const placeholders = statuses.map(() => "?").join(", ");
-    const cutoff = olderThan.toISOString();
+    const cutoff = dateToStr(olderThan);
     const [result] = await this.pool.execute<ResultSetHeader>(
       `DELETE FROM ${this.tableName} WHERE status IN (${placeholders}) AND completed_at IS NOT NULL AND completed_at < ?`,
       [...statuses, cutoff],
@@ -441,15 +443,17 @@ async function initializeTables(pool: Pool, tableName: string, stepsTable: strin
     )
   `);
 
-  await pool.execute(`
-    CREATE INDEX IF NOT EXISTS idx_${tableName}_status_next
-      ON ${tableName} (status, next_run_at)
-  `);
+  // Stock MySQL doesn't support CREATE INDEX IF NOT EXISTS; the helper
+  // turns the duplicate-name error into a no-op.
+  await runIdempotentDdl(
+    (sql) => pool.execute(sql),
+    `CREATE INDEX idx_${tableName}_status_next ON ${tableName} (status, next_run_at)`,
+  );
 
-  await pool.execute(`
-    CREATE INDEX IF NOT EXISTS idx_${tableName}_signal_name
-      ON ${tableName} (signal_name)
-  `);
+  await runIdempotentDdl(
+    (sql) => pool.execute(sql),
+    `CREATE INDEX idx_${tableName}_signal_name ON ${tableName} (signal_name)`,
+  );
 
   await pool.execute(`
     CREATE TABLE IF NOT EXISTS ${stepsTable} (
@@ -467,10 +471,10 @@ async function initializeTables(pool: Pool, tableName: string, stepsTable: strin
     )
   `);
 
-  await pool.execute(`
-    CREATE INDEX IF NOT EXISTS idx_${stepsTable}_run_id
-      ON ${stepsTable} (run_id)
-  `);
+  await runIdempotentDdl(
+    (sql) => pool.execute(sql),
+    `CREATE INDEX idx_${stepsTable}_run_id ON ${stepsTable} (run_id)`,
+  );
 }
 
 /**
@@ -536,7 +540,7 @@ class LazyMysqlAdapter implements SerializableAdapter {
 
   async getRunsDue(): Promise<Run[]> {
     await this.ready();
-    const now = new Date().toISOString();
+    const now = dateToStr(new Date());
     const [rows] = await this.pool.execute<RowDataPacket[]>(
       `SELECT * FROM ${this.tableName}
        WHERE status = 'pending'
@@ -621,7 +625,7 @@ class LazyMysqlAdapter implements SerializableAdapter {
     await this.ready();
     if (statuses.length === 0) return 0;
     const placeholders = statuses.map(() => "?").join(", ");
-    const cutoff = olderThan.toISOString();
+    const cutoff = dateToStr(olderThan);
     const [result] = await this.pool.execute<ResultSetHeader>(
       `DELETE FROM ${this.tableName} WHERE status IN (${placeholders}) AND completed_at IS NOT NULL AND completed_at < ?`,
       [...statuses, cutoff],

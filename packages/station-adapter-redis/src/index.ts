@@ -237,12 +237,11 @@ export class RedisAdapter implements SerializableAdapter {
   async hasRunWithStatus(signalName: string, statuses: RunStatus[]): Promise<boolean> {
     if (statuses.length === 0) return false;
 
-    // Check each status set — return true as soon as one is non-empty
-    for (const status of statuses) {
-      const count = await this.redis.scard(statusRunsKey(this.prefix, signalName, status));
-      if (count > 0) return true;
-    }
-    return false;
+    // Redis deletes empty sets, so a single EXISTS over all status-set keys
+    // is equivalent to checking each SCARD — one round trip instead of N.
+    const keys = statuses.map((status) => statusRunsKey(this.prefix, signalName, status));
+    const count = await this.redis.exists(...keys);
+    return count > 0;
   }
 
   async purgeRuns(olderThan: Date, statuses: RunStatus[]): Promise<number> {
@@ -260,13 +259,22 @@ export class RedisAdapter implements SerializableAdapter {
 
     if (candidateIds.length === 0) return 0;
 
+    // Check all candidates' statuses in one pipeline instead of N round trips
+    const statusPipeline = this.redis.pipeline();
+    for (const id of candidateIds) {
+      statusPipeline.hget(runHashKey(this.prefix, id), "status");
+    }
+    const statusResults = await statusPipeline.exec();
+    if (!statusResults) return 0;
+
     let purged = 0;
 
-    // Check each candidate's status and delete if it matches
-    for (const id of candidateIds) {
-      const status = await this.redis.hget(runHashKey(this.prefix, id), "status");
-      if (status && statusSet.has(status as RunStatus)) {
-        await this.removeRun(id);
+    // Delete each candidate whose status matches
+    for (let i = 0; i < candidateIds.length; i++) {
+      const [err, status] = statusResults[i];
+      if (err) continue;
+      if (typeof status === "string" && statusSet.has(status as RunStatus)) {
+        await this.removeRun(candidateIds[i]);
         purged++;
       }
     }

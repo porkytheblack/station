@@ -137,8 +137,15 @@ export class FileKeyStorage implements ApiKeyStorageAdapter {
   touch(id: string, lastUsedIso: string): void {
     const r = this.records.get(id);
     if (!r) return;
+    const prev = r.lastUsed ? Date.parse(r.lastUsed) : 0;
     r.lastUsed = lastUsedIso;
-    this.flush();
+    // lastUsed is advisory. flush() rewrites and fsyncs the whole file
+    // synchronously — doing that on every authenticated request stalls the
+    // event loop, so only persist when the value moves by at least a minute.
+    // Reads stay fresh because list() serves from memory.
+    if (Date.parse(lastUsedIso) - prev >= 60_000) {
+      this.flush();
+    }
   }
 
   revoke(id: string): boolean {
@@ -264,7 +271,15 @@ export class SqliteKeyStorage implements ApiKeyStorageAdapter {
     }));
   }
 
+  /** Last persisted lastUsed per key id, to skip per-request UPDATEs. */
+  private lastTouched = new Map<string, number>();
+
   touch(id: string, lastUsedIso: string): void {
+    // lastUsed is advisory — throttle writes to once a minute per key.
+    const prev = this.lastTouched.get(id) ?? 0;
+    const next = Date.parse(lastUsedIso);
+    if (next - prev < 60_000) return;
+    this.lastTouched.set(id, next);
     this.db.prepare(`UPDATE ${this.table} SET last_used = ? WHERE id = ?`).run(lastUsedIso, id);
   }
 

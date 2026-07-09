@@ -51,6 +51,17 @@ export class BroadcastSqliteAdapter implements BroadcastQueueAdapter {
   private runsTable: string;
   private nodesTable: string;
   private definitionsTable: string;
+  /** Prepared-statement cache — better-sqlite3 recompiles on every prepare(). */
+  private stmtCache = new Map<string, Database.Statement>();
+
+  private prep(sql: string): Database.Statement {
+    let stmt = this.stmtCache.get(sql);
+    if (!stmt) {
+      stmt = this.db.prepare(sql);
+      this.stmtCache.set(sql, stmt);
+    }
+    return stmt;
+  }
 
   constructor(options: BroadcastSqliteAdapterOptions = {}) {
     const dbPath = options.dbPath ?? "station.db";
@@ -81,8 +92,8 @@ export class BroadcastSqliteAdapter implements BroadcastQueueAdapter {
     `);
 
     // Idempotent migration: add column if it's missing (DB existed before this version).
-    const existingCols = this.db
-      .prepare(`PRAGMA table_info(${this.runsTable})`)
+    const existingCols = this
+      .prep(`PRAGMA table_info(${this.runsTable})`)
       .all() as Array<{ name: string }>;
     if (!existingCols.some((c) => c.name === "definition_snapshot")) {
       this.db.exec(`ALTER TABLE ${this.runsTable} ADD COLUMN definition_snapshot TEXT`);
@@ -139,7 +150,7 @@ export class BroadcastSqliteAdapter implements BroadcastQueueAdapter {
   }
 
   async addBroadcastRun(run: BroadcastRun): Promise<void> {
-    this.db.prepare(`
+    this.prep(`
       INSERT INTO ${this.runsTable}
         (id, broadcast_name, input, status, failure_policy, timeout, interval,
          next_run_at, started_at, completed_at, created_at, error, definition_snapshot)
@@ -164,7 +175,7 @@ export class BroadcastSqliteAdapter implements BroadcastQueueAdapter {
   }
 
   async getBroadcastRun(id: string): Promise<BroadcastRun | null> {
-    const row = this.db.prepare(`SELECT * FROM ${this.runsTable} WHERE id = ?`).get(id) as Record<string, unknown> | undefined;
+    const row = this.prep(`SELECT * FROM ${this.runsTable} WHERE id = ?`).get(id) as Record<string, unknown> | undefined;
     return row ? rowToBroadcastRun(row) : null;
   }
 
@@ -190,12 +201,12 @@ export class BroadcastSqliteAdapter implements BroadcastQueueAdapter {
     }
 
     if (setClauses.length === 0) return;
-    this.db.prepare(`UPDATE ${this.runsTable} SET ${setClauses.join(", ")} WHERE id = @id`).run(values);
+    this.prep(`UPDATE ${this.runsTable} SET ${setClauses.join(", ")} WHERE id = @id`).run(values);
   }
 
   async getBroadcastRunsDue(): Promise<BroadcastRun[]> {
     const now = new Date().toISOString();
-    const rows = this.db.prepare(`
+    const rows = this.prep(`
       SELECT * FROM ${this.runsTable}
       WHERE status = 'pending'
         AND (next_run_at IS NULL OR next_run_at <= ?)
@@ -205,19 +216,19 @@ export class BroadcastSqliteAdapter implements BroadcastQueueAdapter {
   }
 
   async getBroadcastRunsRunning(): Promise<BroadcastRun[]> {
-    const rows = this.db.prepare(`SELECT * FROM ${this.runsTable} WHERE status = 'running'`).all() as Record<string, unknown>[];
+    const rows = this.prep(`SELECT * FROM ${this.runsTable} WHERE status = 'running'`).all() as Record<string, unknown>[];
     return rows.map(rowToBroadcastRun);
   }
 
   async listBroadcastRuns(broadcastName: string): Promise<BroadcastRun[]> {
-    const rows = this.db.prepare(`SELECT * FROM ${this.runsTable} WHERE broadcast_name = ? ORDER BY created_at DESC`).all(broadcastName) as Record<string, unknown>[];
+    const rows = this.prep(`SELECT * FROM ${this.runsTable} WHERE broadcast_name = ? ORDER BY created_at DESC`).all(broadcastName) as Record<string, unknown>[];
     return rows.map(rowToBroadcastRun);
   }
 
   async hasBroadcastRunWithStatus(broadcastName: string, statuses: BroadcastRunStatus[]): Promise<boolean> {
     if (statuses.length === 0) return false;
     const placeholders = statuses.map(() => "?").join(", ");
-    const row = this.db.prepare(
+    const row = this.prep(
       `SELECT 1 FROM ${this.runsTable} WHERE broadcast_name = ? AND status IN (${placeholders}) LIMIT 1`,
     ).get(broadcastName, ...statuses);
     return row !== undefined;
@@ -227,14 +238,14 @@ export class BroadcastSqliteAdapter implements BroadcastQueueAdapter {
     if (statuses.length === 0) return 0;
     const placeholders = statuses.map(() => "?").join(", ");
     const cutoff = olderThan.toISOString();
-    const result = this.db.prepare(
+    const result = this.prep(
       `DELETE FROM ${this.runsTable} WHERE status IN (${placeholders}) AND completed_at IS NOT NULL AND completed_at < ?`,
     ).run(...statuses, cutoff);
     return result.changes;
   }
 
   async addNodeRun(nodeRun: BroadcastNodeRun): Promise<void> {
-    this.db.prepare(`
+    this.prep(`
       INSERT INTO ${this.nodesTable}
         (id, broadcast_run_id, node_name, signal_name, signal_run_id,
          status, skip_reason, input, output, error, started_at, completed_at)
@@ -258,7 +269,7 @@ export class BroadcastSqliteAdapter implements BroadcastQueueAdapter {
   }
 
   async getNodeRun(id: string): Promise<BroadcastNodeRun | null> {
-    const row = this.db.prepare(`SELECT * FROM ${this.nodesTable} WHERE id = ?`).get(id) as Record<string, unknown> | undefined;
+    const row = this.prep(`SELECT * FROM ${this.nodesTable} WHERE id = ?`).get(id) as Record<string, unknown> | undefined;
     return row ? rowToNodeRun(row) : null;
   }
 
@@ -283,11 +294,11 @@ export class BroadcastSqliteAdapter implements BroadcastQueueAdapter {
     }
 
     if (setClauses.length === 0) return;
-    this.db.prepare(`UPDATE ${this.nodesTable} SET ${setClauses.join(", ")} WHERE id = @id`).run(values);
+    this.prep(`UPDATE ${this.nodesTable} SET ${setClauses.join(", ")} WHERE id = @id`).run(values);
   }
 
   async getNodeRuns(broadcastRunId: string): Promise<BroadcastNodeRun[]> {
-    const rows = this.db.prepare(`SELECT * FROM ${this.nodesTable} WHERE broadcast_run_id = ?`).all(broadcastRunId) as Record<string, unknown>[];
+    const rows = this.prep(`SELECT * FROM ${this.nodesTable} WHERE broadcast_run_id = ?`).all(broadcastRunId) as Record<string, unknown>[];
     return rows.map(rowToNodeRun);
   }
 
@@ -299,8 +310,8 @@ export class BroadcastSqliteAdapter implements BroadcastQueueAdapter {
     // possible on the same DB. The transaction wrapper handles SAVEPOINTs
     // for nested calls.
     const txn = this.db.transaction((spec: DynamicBroadcastSpec): DynamicBroadcastSpec => {
-      const row = this.db
-        .prepare(`SELECT MAX(version) AS v FROM ${this.definitionsTable} WHERE name = ?`)
+      const row = this
+        .prep(`SELECT MAX(version) AS v FROM ${this.definitionsTable} WHERE name = ?`)
         .get(spec.name) as { v: number | null } | undefined;
       const nextVersion = (row?.v ?? 0) + 1;
       const now = new Date();
@@ -311,8 +322,8 @@ export class BroadcastSqliteAdapter implements BroadcastQueueAdapter {
         updatedAt: now,
         deletedAt: undefined,
       };
-      this.db
-        .prepare(`
+      this
+        .prep(`
           INSERT INTO ${this.definitionsTable}
             (name, version, spec, failure_policy, timeout, created_at, updated_at, created_by, deleted_at)
           VALUES
@@ -336,20 +347,20 @@ export class BroadcastSqliteAdapter implements BroadcastQueueAdapter {
   async getDefinition(name: string, version?: number): Promise<DynamicBroadcastSpec | null> {
     let row: { spec: string } | undefined;
     if (version !== undefined) {
-      row = this.db
-        .prepare(`SELECT spec FROM ${this.definitionsTable} WHERE name = ? AND version = ?`)
+      row = this
+        .prep(`SELECT spec FROM ${this.definitionsTable} WHERE name = ? AND version = ?`)
         .get(name, version) as { spec: string } | undefined;
     } else {
-      row = this.db
-        .prepare(`SELECT spec FROM ${this.definitionsTable} WHERE name = ? ORDER BY version DESC LIMIT 1`)
+      row = this
+        .prep(`SELECT spec FROM ${this.definitionsTable} WHERE name = ? ORDER BY version DESC LIMIT 1`)
         .get(name) as { spec: string } | undefined;
     }
     return row ? deserializeSpec(row.spec) : null;
   }
 
   async listDefinitions(): Promise<DynamicBroadcastSpec[]> {
-    const rows = this.db
-      .prepare(`
+    const rows = this
+      .prep(`
         SELECT spec FROM ${this.definitionsTable} d1
         WHERE version = (
           SELECT MAX(version) FROM ${this.definitionsTable} d2 WHERE d2.name = d1.name
@@ -362,27 +373,27 @@ export class BroadcastSqliteAdapter implements BroadcastQueueAdapter {
   }
 
   async listDefinitionVersions(name: string): Promise<DynamicBroadcastSpec[]> {
-    const rows = this.db
-      .prepare(`SELECT spec FROM ${this.definitionsTable} WHERE name = ? ORDER BY version DESC`)
+    const rows = this
+      .prep(`SELECT spec FROM ${this.definitionsTable} WHERE name = ? ORDER BY version DESC`)
       .all(name) as Array<{ spec: string }>;
     return rows.map((r) => deserializeSpec(r.spec));
   }
 
   async deleteDefinition(name: string): Promise<boolean> {
-    const row = this.db
-      .prepare(`SELECT MAX(version) AS v FROM ${this.definitionsTable} WHERE name = ? AND deleted_at IS NULL`)
+    const row = this
+      .prep(`SELECT MAX(version) AS v FROM ${this.definitionsTable} WHERE name = ? AND deleted_at IS NULL`)
       .get(name) as { v: number | null } | undefined;
     if (!row?.v) return false;
     const now = new Date().toISOString();
     // Update the spec JSON with the deletion timestamp so consumers see it.
-    const existing = this.db
-      .prepare(`SELECT spec FROM ${this.definitionsTable} WHERE name = ? AND version = ?`)
+    const existing = this
+      .prep(`SELECT spec FROM ${this.definitionsTable} WHERE name = ? AND version = ?`)
       .get(name, row.v) as { spec: string } | undefined;
     if (!existing) return false;
     const spec = deserializeSpec(existing.spec);
     spec.deletedAt = new Date(now);
-    this.db
-      .prepare(`UPDATE ${this.definitionsTable} SET deleted_at = ?, spec = ? WHERE name = ? AND version = ?`)
+    this
+      .prep(`UPDATE ${this.definitionsTable} SET deleted_at = ?, spec = ? WHERE name = ? AND version = ?`)
       .run(now, JSON.stringify(spec), name, row.v);
     return true;
   }
@@ -393,7 +404,7 @@ export class BroadcastSqliteAdapter implements BroadcastQueueAdapter {
 
   async ping(): Promise<boolean> {
     try {
-      this.db.prepare("SELECT 1").get();
+      this.prep("SELECT 1").get();
       return true;
     } catch {
       return false;
@@ -401,6 +412,7 @@ export class BroadcastSqliteAdapter implements BroadcastQueueAdapter {
   }
 
   async close(): Promise<void> {
+    this.stmtCache.clear();
     this.db.close();
   }
 }

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { getAdapter, getTriggerAdapter } from "./config.js";
+import { getAdapter, getTriggerAdapter, notifyLocalEnqueue } from "./config.js";
 import { SignalValidationError } from "./errors.js";
 import { parseInterval } from "./interval.js";
 import { DEFAULT_MAX_ATTEMPTS, DEFAULT_TIMEOUT_MS, type Run, type StepDefinition } from "./types.js";
@@ -86,6 +86,7 @@ function buildSignal<TInput, TOutput>(config: SignalConfig<TInput, TOutput>): Si
         createdAt: new Date(),
       };
       await getAdapter().addRun(run);
+      notifyLocalEnqueue();
       return id;
     },
   };

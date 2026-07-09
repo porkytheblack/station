@@ -79,6 +79,7 @@ export class MemoryAdapter implements SignalQueueAdapter {
     if (run) {
       const rec = run as unknown as Record<string, unknown>;
       for (const [key, value] of Object.entries(patch)) {
+        if (key === "__proto__" || key === "constructor" || key === "prototype") continue;
         if (value === undefined) {
           delete rec[key];
         } else {
@@ -124,6 +125,7 @@ export class MemoryAdapter implements SignalQueueAdapter {
     if (step) {
       const rec = step as unknown as Record<string, unknown>;
       for (const [key, value] of Object.entries(patch)) {
+        if (key === "__proto__" || key === "constructor" || key === "prototype") continue;
         if (value === undefined) {
           delete rec[key];
         } else {

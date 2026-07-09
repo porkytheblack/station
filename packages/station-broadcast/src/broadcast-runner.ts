@@ -13,7 +13,7 @@ import type {
   DynamicBroadcastSpec,
   FailurePolicy,
 } from "./types.js";
-import { isBroadcast } from "./util.js";
+import { isBroadcast, topologicalSort } from "./util.js";
 import { materializeDynamic, type MaterializedDynamicBroadcast } from "./dynamic.js";
 
 interface RecurringBroadcastSchedule {
@@ -63,6 +63,13 @@ export class BroadcastRunner {
    */
   private dynamicRegistry = new Map<string, MaterializedDynamicBroadcast>();
   private signalRegistry = new Map<string, AnySignal>();
+  /**
+   * Materialized definitions for snapshot-backed runs, keyed by broadcast run
+   * id. Snapshots are immutable per run, so the materialization (including its
+   * topological sort) only needs to happen once. Entries are cleared when the
+   * run reaches a terminal state.
+   */
+  private snapshotDefinitionCache = new Map<string, BroadcastDefinition>();
   private recurringSchedules = new Map<string, RecurringBroadcastSchedule>();
   private reconcileEveryNTicks: number;
   private scheduleReconciler?: BroadcastScheduleReconciler;
@@ -225,6 +232,7 @@ export class BroadcastRunner {
       status: bRun.status,
       completedAt: bRun.completedAt,
     });
+    this.snapshotDefinitionCache.delete(broadcastRunId);
     this.emit("onBroadcastCancelled", { broadcastRun: bRun });
     return true;
   }
@@ -367,9 +375,13 @@ export class BroadcastRunner {
    */
   private resolveDefinitionForRun(bRun: BroadcastRun): BroadcastDefinition | null {
     if (bRun.definitionSnapshot) {
+      const cached = this.snapshotDefinitionCache.get(bRun.id);
+      if (cached) return cached;
       try {
         const spec = JSON.parse(bRun.definitionSnapshot) as DynamicBroadcastSpec;
-        return materializeDynamic(spec, this.signalRegistry).definition;
+        const definition = materializeDynamic(spec, this.signalRegistry).definition;
+        this.snapshotDefinitionCache.set(bRun.id, definition);
+        return definition;
       } catch (err) {
         console.error(
           `[station-broadcast] Failed to materialize snapshot for run ${bRun.id}:`,
@@ -428,6 +440,7 @@ export class BroadcastRunner {
       clearTimeout(this.pollTimer);
       this.pollTimer = null;
     }
+    this.snapshotDefinitionCache.clear();
 
     if (options?.graceful) {
       const timeout = options.timeoutMs ?? 10_000;
@@ -471,7 +484,12 @@ export class BroadcastRunner {
     try {
       const entries = await readdir(dir, { recursive: true });
       files = entries
-        .filter((f) => f.endsWith(".ts") || f.endsWith(".js"))
+        .filter((f) => {
+          if (!(f.endsWith(".ts") || f.endsWith(".js")) || f.endsWith(".d.ts")) return false;
+          // Never import from node_modules or hidden files/directories.
+          const segments = f.split(/[\\/]/);
+          return !segments.some((s) => s === "node_modules" || s.startsWith("."));
+        })
         .map((f) => join(dir, f));
     } catch {
       console.error(`[station-broadcast] Cannot read broadcastsDir: ${dir}`);
@@ -605,6 +623,7 @@ export class BroadcastRunner {
         completedAt: bRun.completedAt,
         error,
       });
+      this.snapshotDefinitionCache.delete(bRun.id);
       this.emit("onBroadcastFailed", { broadcastRun: bRun, error });
       return;
     }
@@ -646,6 +665,7 @@ export class BroadcastRunner {
         completedAt: new Date(),
         error: `Definition for "${bRun.broadcastName}" not found`,
       });
+      this.snapshotDefinitionCache.delete(bRun.id);
       return;
     }
 
@@ -677,6 +697,7 @@ export class BroadcastRunner {
           completedAt: bRun.completedAt,
           error,
         });
+        this.snapshotDefinitionCache.delete(bRun.id);
         this.emit("onBroadcastFailed", { broadcastRun: bRun, error });
         return;
       }
@@ -745,6 +766,7 @@ export class BroadcastRunner {
           completedAt: bRun.completedAt,
           error,
         });
+        this.snapshotDefinitionCache.delete(bRun.id);
         this.emit("onBroadcastFailed", { broadcastRun: bRun, error });
       } else {
         // H2: For "continue" policy, still populate error so callers can detect partial failure
@@ -758,6 +780,7 @@ export class BroadcastRunner {
           completedAt: bRun.completedAt,
           error: bRun.error,
         });
+        this.snapshotDefinitionCache.delete(bRun.id);
         this.emit("onBroadcastCompleted", { broadcastRun: bRun });
       }
     }
@@ -804,6 +827,7 @@ export class BroadcastRunner {
         completedAt: bRun.completedAt,
         error,
       });
+      this.snapshotDefinitionCache.delete(bRun.id);
       this.emit("onBroadcastFailed", { broadcastRun: bRun, error });
       return true;
     }
@@ -827,39 +851,36 @@ export class BroadcastRunner {
     nodeRunsByName: Map<string, BroadcastNodeRun>,
     bRun: BroadcastRun,
   ): Promise<void> {
-    let changed = true;
-    while (changed) {
-      changed = false;
-      for (const node of definition.nodes) {
-        const nr = nodeRunsByName.get(node.name);
-        if (!nr || nr.status !== "pending") continue;
+    // Visiting nodes in topological order means every dependency is resolved
+    // before its dependents, so propagation completes in a single pass.
+    for (const node of topologicalSort(definition.name, definition.nodes)) {
+      const nr = nodeRunsByName.get(node.name);
+      if (!nr || nr.status !== "pending") continue;
 
-        if (node.dependsOn.length > 0) {
-          // H2: Skip when ANY dep is failed or failure-skipped (not ALL)
-          const anyDepFailed = node.dependsOn.some((dep) => {
-            const depRun = nodeRunsByName.get(dep);
-            if (!depRun) return false;
-            if (depRun.status === "failed") return true;
-            // H3: Only propagate from upstream-failed skips, not guard skips
-            return depRun.status === "skipped" && depRun.skipReason === "upstream-failed";
+      if (node.dependsOn.length > 0) {
+        // H2: Skip when ANY dep is failed or failure-skipped (not ALL)
+        const anyDepFailed = node.dependsOn.some((dep) => {
+          const depRun = nodeRunsByName.get(dep);
+          if (!depRun) return false;
+          if (depRun.status === "failed") return true;
+          // H3: Only propagate from upstream-failed skips, not guard skips
+          return depRun.status === "skipped" && depRun.skipReason === "upstream-failed";
+        });
+        if (anyDepFailed) {
+          // H1: Await adapter writes instead of fire-and-forget
+          nr.status = "skipped";
+          nr.skipReason = "upstream-failed";
+          nr.completedAt = new Date();
+          await this.adapter.updateNodeRun(nr.id, {
+            status: "skipped",
+            skipReason: "upstream-failed",
+            completedAt: nr.completedAt,
           });
-          if (anyDepFailed) {
-            // H1: Await adapter writes instead of fire-and-forget
-            nr.status = "skipped";
-            nr.skipReason = "upstream-failed";
-            nr.completedAt = new Date();
-            await this.adapter.updateNodeRun(nr.id, {
-              status: "skipped",
-              skipReason: "upstream-failed",
-              completedAt: nr.completedAt,
-            });
-            this.emit("onNodeSkipped", {
-              broadcastRun: bRun,
-              nodeRun: nr,
-              reason: "Upstream dependency failed",
-            });
-            changed = true;
-          }
+          this.emit("onNodeSkipped", {
+            broadcastRun: bRun,
+            nodeRun: nr,
+            reason: "Upstream dependency failed",
+          });
         }
       }
     }
@@ -872,6 +893,12 @@ export class BroadcastRunner {
     definition: BroadcastDefinition,
     nodeRunsByName: Map<string, BroadcastNodeRun>,
   ): Promise<void> {
+    // Parse the broadcast input at most once per pass, and each upstream
+    // output at most once per pass (outputs are re-read by every dependent).
+    let broadcastInput!: Record<string, unknown>;
+    let broadcastInputParsed = false;
+    const parsedOutputs = new Map<string, unknown>();
+
     for (const node of definition.nodes) {
       const nodeRun = nodeRunsByName.get(node.name);
       if (!nodeRun || nodeRun.status !== "pending") continue;
@@ -891,11 +918,17 @@ export class BroadcastRunner {
       const upstreamOutputs: Record<string, unknown> = {};
       for (const dep of node.dependsOn) {
         const depRun = nodeRunsByName.get(dep)!;
-        upstreamOutputs[dep] = depRun.output ? JSON.parse(depRun.output) : undefined;
+        if (!parsedOutputs.has(dep)) {
+          parsedOutputs.set(dep, depRun.output ? JSON.parse(depRun.output) : undefined);
+        }
+        upstreamOutputs[dep] = parsedOutputs.get(dep);
       }
 
       // M10: when guard always receives upstreamOutputs (broadcast input for root nodes)
-      const broadcastInput = JSON.parse(bRun.input);
+      if (!broadcastInputParsed) {
+        broadcastInput = JSON.parse(bRun.input);
+        broadcastInputParsed = true;
+      }
       const guardInput = node.dependsOn.length === 0 ? broadcastInput : upstreamOutputs;
       const evalCtx = { input: broadcastInput, upstream: upstreamOutputs };
 

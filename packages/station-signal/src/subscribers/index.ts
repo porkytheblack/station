@@ -13,6 +13,25 @@ export interface IPCMessage {
 }
 
 /**
+ * Message sent from the parent (runner) to the child process right after
+ * spawn. Carries the run input and adapter configuration over the private
+ * IPC channel so they never appear in the child's environment (which is
+ * world-readable to same-user processes via /proc).
+ */
+export interface JobInitMessage {
+  type: "job:init";
+  data: {
+    runId: string;
+    signalName: string;
+    signalFile: string;
+    input: string;
+    adapterName?: string;
+    adapterOptions?: Record<string, unknown>;
+    adapterImport?: string;
+  };
+}
+
+/**
  * Subscriber interface for signal lifecycle events.
  * All methods are optional — implement only the events you care about.
  */

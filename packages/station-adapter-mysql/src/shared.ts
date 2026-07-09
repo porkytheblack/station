@@ -41,9 +41,13 @@ export async function runIdempotentDdl(
   }
 }
 
-/** Convert a Date to an ISO string for storage, or pass through null/undefined as null. */
+/**
+ * Convert a Date to a MySQL DATETIME string ("YYYY-MM-DD HH:MM:SS.mmm", UTC)
+ * for storage, or pass through null/undefined as null. Stock MySQL rejects
+ * ISO strings with a trailing "Z" in strict mode, so the suffix is dropped.
+ */
 export function dateToStr(value: unknown): string | null {
-  if (value instanceof Date) return value.toISOString();
+  if (value instanceof Date) return value.toISOString().slice(0, -1).replace("T", " ");
   if (value === undefined || value === null) return null;
   return String(value);
 }

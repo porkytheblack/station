@@ -255,7 +255,7 @@ export class BroadcastMysqlAdapter implements BroadcastQueueAdapter {
   }
 
   async getBroadcastRunsDue(): Promise<BroadcastRun[]> {
-    const now = new Date().toISOString();
+    const now = dateToStr(new Date());
     const [rows] = await this.pool.execute<RowDataPacket[]>(
       `SELECT * FROM ${this.runsTable}
        WHERE status = 'pending'
@@ -294,7 +294,7 @@ export class BroadcastMysqlAdapter implements BroadcastQueueAdapter {
   async purgeBroadcastRuns(olderThan: Date, statuses: BroadcastRunStatus[]): Promise<number> {
     if (statuses.length === 0) return 0;
     const placeholders = statuses.map(() => "?").join(", ");
-    const cutoff = olderThan.toISOString();
+    const cutoff = dateToStr(olderThan);
     const [result] = await this.pool.execute<ResultSetHeader>(
       `DELETE FROM ${this.runsTable} WHERE status IN (${placeholders}) AND completed_at IS NOT NULL AND completed_at < ?`,
       [...statuses, cutoff],
