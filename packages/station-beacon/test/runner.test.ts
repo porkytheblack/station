@@ -232,6 +232,73 @@ test("a fatal config error goes to errored and does not restart-loop", async () 
   }
 });
 
+test("a runner can be restarted after stop()", async () => {
+  const rec = makeRecorder();
+  const runner = new BeaconRunner({
+    adapter: new BeaconMemoryAdapter(),
+    pollIntervalMs: 25,
+    subscribers: [rec.sub],
+  });
+  runner.register(readyBeacon, fx("ready-beacon"));
+  runner.start().catch(() => {});
+  await rec.waitFor((es) => es.some((e) => e.type === "ready" && e.name === "ready-b"), "first ready");
+  await runner.stop({ graceful: true, timeoutMs: 3_000 });
+
+  // Restart the same runner instance — must actually supervise again, not no-op.
+  const rec2 = makeRecorder();
+  runner.subscribe(rec2.sub);
+  runner.start().catch(() => {});
+  try {
+    await rec2.waitFor((es) => es.some((e) => e.type === "ready" && e.name === "ready-b"), "ready after restart");
+    const inst = await runner.getInstance("ready-b");
+    assert.equal(inst?.status, "running");
+  } finally {
+    await runner.stop({ graceful: true, timeoutMs: 3_000 });
+  }
+});
+
+test("a bare stop() stops running beacons without marking them errored", async () => {
+  const rec = makeRecorder();
+  const runner = new BeaconRunner({
+    adapter: new BeaconMemoryAdapter(),
+    pollIntervalMs: 25,
+    subscribers: [rec.sub],
+  });
+  runner.register(readyBeacon, fx("ready-beacon"));
+  runner.start().catch(() => {});
+  await rec.waitFor((es) => es.some((e) => e.type === "ready" && e.name === "ready-b"), "ready-b ready");
+  await runner.stop(); // non-graceful: SIGKILLs the child
+  await sleep(400);
+  assert.equal(rec.count("errored", "ready-b"), 0, "shutdown must not mark beacons errored");
+});
+
+test("startBeacon during a stop window relaunches instead of stranding", async () => {
+  const rec = makeRecorder();
+  const runner = new BeaconRunner({
+    adapter: new BeaconMemoryAdapter(),
+    pollIntervalMs: 25,
+    subscribers: [rec.sub],
+  });
+  runner.register(readyBeacon, fx("ready-beacon"));
+  runner.start().catch(() => {});
+  try {
+    await rec.waitFor((es) => es.some((e) => e.type === "ready" && e.name === "ready-b"), "ready-b ready");
+    // Await stopBeacon (so stopRequested is set), then start again before the
+    // child has actually exited — the classic strand race.
+    await runner.stopBeacon("ready-b");
+    await runner.startBeacon("ready-b");
+    await rec.waitFor(
+      (es) => es.filter((e) => e.type === "ready" && e.name === "ready-b").length >= 2,
+      "ready-b relaunched (not stranded)",
+    );
+    const inst = await runner.getInstance("ready-b");
+    assert.equal(inst?.desiredState, "running");
+    assert.equal(inst?.status, "running");
+  } finally {
+    await runner.stop({ graceful: true, timeoutMs: 3_000 });
+  }
+});
+
 test("detects a heartbeat stall and restarts the beacon", async () => {
   const rec = makeRecorder();
   const runner = new BeaconRunner({

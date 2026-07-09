@@ -55,6 +55,31 @@ function sendIPC(
   }
 }
 
+/**
+ * Send a final IPC message and exit once it has flushed. `process.exit` does not
+ * flush pending IPC writes, so a plain `sendIPC(...); process.exit()` can drop
+ * the message; this waits for the send callback (with a fallback timer) so the
+ * error text reliably reaches the supervisor.
+ */
+function sendThenExit(type: "beacon:error", data: Record<string, unknown>, code: number): void {
+  if (typeof process.send !== "function") process.exit(code);
+  let exited = false;
+  const exit = () => {
+    if (exited) return;
+    exited = true;
+    process.exit(code);
+  };
+  try {
+    process.send!(
+      { type, beaconName, incarnation, timestamp: new Date().toISOString(), data },
+      exit,
+    );
+  } catch {
+    exit();
+  }
+  setTimeout(exit, 1_000).unref?.();
+}
+
 // ─── Stop coordination ────────────────────────────────────────────────
 const abortController = new AbortController();
 const stopCallbacks: Array<() => void | Promise<void>> = [];
@@ -68,6 +93,9 @@ let readySent = false;
 async function requestStop(): Promise<void> {
   if (stopping) return;
   stopping = true;
+  // Arm the exit backstop FIRST so a hanging onStop callback can't disable it.
+  const forceExit = setTimeout(() => process.exit(0), stopTimeoutMs);
+  forceExit.unref?.();
   sendIPC("beacon:stopping");
   // Aborting first lets stream iterators / fetch calls watching ctx.signal
   // unwind while the registered cleanup callbacks run.
@@ -80,9 +108,6 @@ async function requestStop(): Promise<void> {
     }
   }
   resolveStopped();
-  // Safety net: if the handler ignores the stop signal, don't hang forever.
-  const timer = setTimeout(() => process.exit(0), stopTimeoutMs);
-  timer.unref();
 }
 
 // Listening for IPC messages both delivers the parent's stop request AND keeps
@@ -95,11 +120,11 @@ process.on("message", (msg: { type?: string } | null) => {
 process.channel?.ref?.();
 
 // If the supervisor's IPC channel closes (supervisor exited or crashed), don't
-// linger as an orphan — unwind gracefully and exit.
+// linger as an orphan — unwind gracefully. requestStop() aborts and resolves
+// untilStopped() (so a well-behaved handler returns and the process exits) and
+// arms its own stopTimeout backstop for a handler that ignores the stop.
 process.on("disconnect", () => {
   void requestStop();
-  const t = setTimeout(() => process.exit(0), 500);
-  t.unref?.();
 });
 
 // Signals are a backstop for external kills (e.g. `kill <pid>`), in addition to
@@ -162,34 +187,34 @@ try {
 
   if (!target || !isBeacon(target)) {
     console.error(`[station-beacon] Beacon "${beaconName}" not found in ${beaconFile}`);
-    // Exit with the fatal code so the supervisor won't restart-loop. The IPC
-    // message is best-effort observability and may race the exit.
-    sendIPC("beacon:error", { error: `Beacon "${beaconName}" not found`, fatal: true });
-    process.exit(FATAL_EXIT_CODE);
+    // The fatal exit code (not the IPC flag) is what stops the supervisor from
+    // restart-looping; flush the message for the error text, then exit.
+    sendThenExit("beacon:error", { error: `Beacon "${beaconName}" not found`, fatal: true }, FATAL_EXIT_CODE);
+  } else {
+    const parsedConfig: unknown = rawConfig ? JSON.parse(rawConfig) : {};
+    const result = target.configSchema.safeParse(parsedConfig);
+    if (!result.success) {
+      const msg = result.error?.message ?? "Unknown config validation error";
+      console.error(`[station-beacon] Invalid config for "${beaconName}": ${msg}`);
+      // Config errors are fatal — restarting with the same config won't help.
+      sendThenExit("beacon:error", { error: msg, fatal: true }, FATAL_EXIT_CODE);
+    } else {
+      const ctx = buildContext(result.data);
+      sendIPC("beacon:started");
+
+      await target.handler(ctx);
+
+      // Handler returned. If we were asked to stop, this is a graceful stop
+      // (exit 0). Otherwise it completed on its own — still exit 0; the parent's
+      // restart policy decides whether a "clean" exit should be relaunched.
+      process.exit(0);
+    }
   }
-
-  const parsedConfig: unknown = rawConfig ? JSON.parse(rawConfig) : {};
-  const result = target.configSchema.safeParse(parsedConfig);
-  if (!result.success) {
-    const msg = result.error?.message ?? "Unknown config validation error";
-    console.error(`[station-beacon] Invalid config for "${beaconName}": ${msg}`);
-    // Config errors are fatal — restarting with the same config won't help.
-    sendIPC("beacon:error", { error: msg, fatal: true });
-    process.exit(FATAL_EXIT_CODE);
-  }
-
-  const ctx = buildContext(result.data);
-  sendIPC("beacon:started");
-
-  await target.handler(ctx);
-
-  // Handler returned. If we were asked to stop, this is a graceful stop (exit 0).
-  // Otherwise the handler completed on its own — still exit 0; the parent's
-  // restart policy decides whether a "clean" exit should be relaunched.
-  process.exit(0);
 } catch (err) {
   const errorMsg = err instanceof Error ? err.message : String(err);
   console.error(`[station-beacon] Beacon "${beaconName}" threw:`, err);
-  sendIPC("beacon:error", { error: errorMsg });
-  process.exit(1);
+  // Flush the error text before exiting so the supervisor records the crash
+  // reason (a plain send + exit can drop the message). Non-fatal exit code (1)
+  // means the restart policy applies.
+  sendThenExit("beacon:error", { error: errorMsg }, 1);
 }

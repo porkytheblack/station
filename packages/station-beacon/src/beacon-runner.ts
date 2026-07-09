@@ -130,8 +130,13 @@ export class BeaconRunner {
 
   // ─── Registration / discovery ──────────────────────────────────────
 
-  /** Register a beacon explicitly (alternative to auto-discovery). */
+  /** Register a beacon explicitly (alternative to auto-discovery). Call before start(). */
   register(beacon: AnyBeacon, filePath: string): this {
+    if (this.running) {
+      console.warn(
+        `[station-beacon] register("${beacon.name}") called after start() — it will not be seeded or supervised. Register beacons before start().`,
+      );
+    }
     if (this.registry.has(beacon.name)) {
       console.warn(`[station-beacon] Duplicate beacon name "${beacon.name}" — overwriting.`);
     }
@@ -171,7 +176,9 @@ export class BeaconRunner {
 
   /** Current instance record for a beacon (status, desired state, counters). */
   async getInstance(name: string): Promise<BeaconInstance | null> {
-    return this.instances.get(name) ?? this.adapter.getInstance(name);
+    const local = this.instances.get(name);
+    if (local) return { ...local }; // copy — never leak the live internal record
+    return this.adapter.getInstance(name);
   }
 
   /** All known instance records. */
@@ -220,6 +227,10 @@ export class BeaconRunner {
     if (this.running) {
       throw new Error("[station-beacon] Runner is already started");
     }
+    // Clear the stop latch so a runner can be restarted after stop(). Without
+    // this, a second start() would run with reconcile()/spawnBeacon() short-
+    // circuiting on `stopping`, silently supervising nothing.
+    this.stopping = false;
 
     if (this.beaconsDir) {
       await this.discover(resolve(this.beaconsDir));
@@ -246,6 +257,7 @@ export class BeaconRunner {
       } catch (err) {
         console.error("[station-beacon] tick() failed:", err);
       }
+      if (!this.running) break; // don't arm a trailing sleep timer after stop()
       await this.sleep(this.pollIntervalMs);
     }
 
@@ -324,12 +336,18 @@ export class BeaconRunner {
     if (opts && "config" in opts) {
       patch.config = opts.config !== undefined ? JSON.stringify(opts.config) : undefined;
     }
-    // If nothing is live, schedule an immediate (re)start and clear any error.
-    if (!this.supervised.get(name)?.child) {
+    const sup = this.supervised.get(name);
+    if (!sup?.child) {
+      // Nothing live — schedule an immediate (re)start and clear any error.
       patch.status = "backoff";
       patch.nextRestartAt = new Date();
       patch.restartCount = 0;
       patch.lastError = undefined;
+    } else if (sup.stopRequested) {
+      // A start requested while the current incarnation is stopping. It will
+      // exit with reason "stopped" (which no policy restarts), so mark it for a
+      // forced relaunch — otherwise it would strand at desired=running/stopped.
+      sup.forceRestart = true;
     }
     await this.patch(name, patch);
   }
@@ -374,6 +392,14 @@ export class BeaconRunner {
           restartCount: 0,
           pid: undefined,
         });
+      } else if (
+        existing.status === "running" ||
+        existing.status === "starting" ||
+        existing.status === "stopping"
+      ) {
+        // Desired-stopped but the record shows an active status — a crash left
+        // it stale (no process is actually live on boot). Normalize to stopped.
+        await this.patch(beacon.name, { status: "stopped", pid: undefined });
       }
       this.supervised.set(beacon.name, this.freshSupervised());
       return;
@@ -615,7 +641,7 @@ export class BeaconRunner {
 
     const reason: ExitReason = sup.stalled
       ? "stalled"
-      : sup.stopRequested
+      : sup.stopRequested || this.stopping
         ? "stopped"
         : code === 0
           ? "clean"

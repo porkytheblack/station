@@ -153,6 +153,19 @@ optional event log) lives behind a `BeaconStateAdapter`. The default
 desired state from each beacon's `autoStart` flag. Implement `BeaconStateAdapter`
 against SQLite/Postgres/etc. for durable state across supervisor restarts.
 
+## Notes & limitations
+
+- **Exit code 78 is reserved.** Fatal errors (invalid config, beacon not found)
+  exit with `FATAL_EXIT_CODE` (78) so the supervisor parks them in `errored`
+  without restart-looping. A handler that itself exits with 78 is treated as
+  fatal.
+- **No startup timeout yet.** Heartbeat stall detection covers the *running*
+  state; a beacon that hangs *before* reporting started (e.g. a module import
+  that never resolves) stays in `starting`. Add a health/heartbeat once running,
+  or supervise boot externally.
+- **Register before start.** `register()` after `start()` is not seeded or
+  supervised (it warns). Use `beaconsDir` discovery or register up front.
+
 ## License
 
 MIT
