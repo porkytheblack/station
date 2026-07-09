@@ -1,6 +1,6 @@
 {
   "name": "station-tauri",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Run Station as a Tauri sidecar — auto-provisioned auth, localhost-only API",
   "type": "module",
   "engines": {
