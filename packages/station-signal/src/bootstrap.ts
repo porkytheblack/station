@@ -15,7 +15,7 @@ import { SignalNotFoundError, SignalValidationError } from "./errors.js";
 import type { AnySignal } from "./signal.js";
 import type { JobInitMessage } from "./subscribers/index.js";
 import type { Step } from "./types.js";
-import { isSignal } from "./util.js";
+import { isReservedEnvKey, isSignal } from "./util.js";
 
 /**
  * The run input, signal file, and adapter configuration (which may contain
@@ -50,6 +50,23 @@ const rawInput = job.input;
 if (!signalName || !signalFile || !runId || rawInput === undefined) {
   console.error("[station-signal] Incomplete job:init received in spawned process");
   process.exit(1);
+}
+
+// Apply store-managed env vars before the signal file is imported, so both
+// module-level code and the handler read them via process.env as usual.
+// Delivered over IPC (not the spawn env) to keep secrets out of /proc.
+// Defense-in-depth: the env store already rejects process-control keys, but a
+// var that entered storage by another route (hand-edited file, direct DB row,
+// custom adapter) must not be able to inject PATH / NODE_OPTIONS / LD_PRELOAD
+// etc. into the child, so re-check each key here at the trust boundary.
+if (job.env) {
+  for (const [key, value] of Object.entries(job.env)) {
+    if (isReservedEnvKey(key)) {
+      console.warn(`[station-signal] Ignoring reserved injected env key "${key}"`);
+      continue;
+    }
+    process.env[key] = value;
+  }
 }
 
 /**

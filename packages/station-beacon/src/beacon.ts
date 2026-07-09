@@ -10,6 +10,7 @@ import {
 import { BEACON_BRAND } from "./util.js";
 
 const VALID_NAME = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
+const VALID_ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /** Accept either an interval string ("1s", "30s", "5m") or a raw millisecond count. */
 function toMs(value: string | number): number {
@@ -68,6 +69,8 @@ export interface Beacon<TConfig = unknown> {
   readonly heartbeatTimeoutMs?: number;
   /** Whether the supervisor starts this beacon automatically on discovery. */
   readonly autoStart: boolean;
+  /** Env var keys that must be present (store-managed or process env) for the beacon to launch. */
+  readonly requiredEnv?: string[];
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -83,6 +86,7 @@ interface BuilderOpts<TConfig> {
   heartbeatIntervalMs?: number;
   heartbeatTimeoutMs?: number;
   autoStart: boolean;
+  requiredEnv?: string[];
 }
 
 /**
@@ -185,6 +189,26 @@ export class BeaconBuilder<TConfig = Record<string, never>> {
     return this._clone({ autoStart: false });
   }
 
+  /**
+   * Declare env vars this beacon needs. Before each launch, the supervisor
+   * verifies each key is available — from its env provider (the Station env
+   * store) or the host process env — and marks the beacon `errored` instead
+   * of spawning when any is missing. Provided vars are injected into the
+   * child process env, so handlers read them via `process.env.KEY` as usual.
+   */
+  env(...keys: string[]): BeaconBuilder<TConfig> {
+    for (const key of keys) {
+      if (!VALID_ENV_KEY.test(key)) {
+        throw new BeaconDefinitionError(
+          this._name,
+          `invalid env key "${key}" — keys must start with a letter or underscore and contain only letters, digits, and underscores`,
+        );
+      }
+    }
+    const merged = [...(this._opts.requiredEnv ?? []), ...keys];
+    return this._clone({ requiredEnv: Array.from(new Set(merged)) });
+  }
+
   private _finalize(
     mode: "run" | "poll",
     handler: BeaconHandler<TConfig>,
@@ -207,6 +231,7 @@ export class BeaconBuilder<TConfig = Record<string, never>> {
       heartbeatIntervalMs: this._opts.heartbeatIntervalMs,
       heartbeatTimeoutMs: this._opts.heartbeatTimeoutMs,
       autoStart: this._opts.autoStart,
+      requiredEnv: this._opts.requiredEnv,
     };
   }
 

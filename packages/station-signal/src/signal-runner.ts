@@ -71,6 +71,16 @@ export interface SignalScheduleReconciler {
   tick(): Promise<void>;
 }
 
+/**
+ * Source of runtime-managed env vars for signal/beacon runs. Decoupled so
+ * `station-signal` doesn't depend on `station-env` — the `EnvStore` from
+ * `station-env` satisfies this structurally.
+ */
+export interface EnvProvider {
+  /** The env map to inject into a run of the given target. */
+  resolveFor(target: { kind: "signal" | "beacon"; name: string }): Promise<Record<string, string>>;
+}
+
 export interface SignalRunnerOptions {
   signalsDir?: string;
   adapter?: SignalQueueAdapter;
@@ -98,6 +108,13 @@ export interface SignalRunnerOptions {
    * the same cadence as run discovery. Wire `station-schedules` here.
    */
   scheduleReconciler?: SignalScheduleReconciler;
+  /**
+   * Optional source of runtime-managed env vars (wire `station-env`'s
+   * `EnvStore` here). Resolved vars are sent to the child over IPC and
+   * applied to its process.env before the signal file is imported; they are
+   * also what satisfies `.env()` requirements, alongside the host process env.
+   */
+  envProvider?: EnvProvider;
 }
 
 export class SignalRunner {
@@ -114,6 +131,7 @@ export class SignalRunner {
   private subscribers: SignalSubscriber[];
   private maxConcurrent: number;
   private scheduleReconciler?: SignalScheduleReconciler;
+  private envProvider?: EnvProvider;
   private activeCount = 0;
   private activePerSignal = new Map<string, number>();
   /** Map runId → child process for cancel/timeout kill. */
@@ -153,6 +171,7 @@ export class SignalRunner {
     this.subscribers = options.subscribers ? [...options.subscribers] : [];
     this.maxConcurrent = options.maxConcurrent ?? 5;
     this.scheduleReconciler = options.scheduleReconciler;
+    this.envProvider = options.envProvider;
   }
 
   /**
@@ -204,9 +223,9 @@ export class SignalRunner {
   }
 
   /** List all registered signals with metadata. */
-  listRegistered(): Array<{ name: string; filePath: string; maxConcurrency?: number }> {
-    return Array.from(this.registry.values()).map(({ name, filePath, maxConcurrency }) => ({
-      name, filePath, maxConcurrency,
+  listRegistered(): Array<{ name: string; filePath: string; maxConcurrency?: number; requiredEnv?: string[] }> {
+    return Array.from(this.registry.values()).map(({ name, filePath, maxConcurrency, signal }) => ({
+      name, filePath, maxConcurrency, requiredEnv: signal?.requiredEnv,
     }));
   }
 
@@ -607,6 +626,48 @@ export class SignalRunner {
         if (elapsed < backoffMs) continue;
       }
 
+      // Resolve store-managed env vars and enforce `.env()` requirements
+      // before spending a child process on a run that cannot succeed.
+      let injectedEnv: Record<string, string> | undefined;
+      let envProviderErrored = false;
+      if (this.envProvider) {
+        try {
+          injectedEnv = await this.envProvider.resolveFor({ kind: "signal", name: run.signalName });
+        } catch (err) {
+          envProviderErrored = true;
+          console.error(`[station-signal] Env provider failed for "${run.signalName}":`, err);
+        }
+      }
+      const requiredEnv = sig.signal?.requiredEnv;
+      if (requiredEnv && requiredEnv.length > 0) {
+        const missing = requiredEnv.filter(
+          (key) => !(injectedEnv && key in injectedEnv) && process.env[key] === undefined,
+        );
+        if (missing.length > 0) {
+          if (envProviderErrored) {
+            // The env store was unreachable, so we can't tell whether these
+            // keys are actually undefined or just temporarily unresolvable.
+            // Leave the run pending and retry on a later tick instead of
+            // failing it with a misleading "not defined" error.
+            this.emit("onRunSkipped", {
+              run,
+              reason: `Env store unreachable while resolving required vars for "${run.signalName}" — will retry`,
+            });
+            continue;
+          }
+          const error =
+            `Missing required environment variable${missing.length > 1 ? "s" : ""} for "${run.signalName}": ` +
+            `${missing.join(", ")}. Define ${missing.length > 1 ? "them" : "it"} in the Station env store or the host environment.`;
+          this.emit("onRunFailed", { run, error });
+          await this.adapter.updateRun(run.id, {
+            status: "failed",
+            completedAt: new Date(),
+            error,
+          });
+          continue;
+        }
+      }
+
       // Mark as running — runner is single authority for run status (H1)
       await this.adapter.updateRun(run.id, {
         status: "running",
@@ -620,7 +681,7 @@ export class SignalRunner {
       this.incrementPerSignal(run.signalName);
       const dispatchRun = freshRun ?? run;
       this.emit("onRunDispatched", { run: dispatchRun });
-      this.dispatch(sig, dispatchRun);
+      this.dispatch(sig, dispatchRun, injectedEnv);
     }
     // Busy while there are due runs (including ones waiting out retry
     // back-off) or children still executing — keep the base poll cadence.
@@ -732,11 +793,12 @@ export class SignalRunner {
     }
   }
 
-  private dispatch(sig: RegisteredSignal, run: Run): void {
+  private dispatch(sig: RegisteredSignal, run: Run, injectedEnv?: Record<string, string>): void {
     // Only non-sensitive identifiers go through the environment (visible via
     // /proc/<pid>/environ to any same-user process). The run input, signal
-    // file path, and adapter config — which may contain DB credentials — are
-    // sent over the private IPC channel instead (see job:init below).
+    // file path, adapter config, and store-managed env vars — which may
+    // contain credentials — are sent over the private IPC channel instead
+    // (see job:init below).
     const env: Record<string, string> = {
       ...process.env as Record<string, string>,
       STATION_SIGNAL_NAME: run.signalName,
@@ -761,6 +823,7 @@ export class SignalRunner {
         adapterName: this.adapterName,
         adapterOptions: this.adapterOptions,
         adapterImport: this.adapterImport,
+        env: injectedEnv && Object.keys(injectedEnv).length > 0 ? injectedEnv : undefined,
       },
     };
     try {

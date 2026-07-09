@@ -17,6 +17,7 @@ import {
   type Schedule,
   type ScheduleAdapter,
 } from "station-schedules";
+import { EnvStore, FileEnvStorage } from "station-env";
 import type { StationConfig } from "../config/schema.js";
 import { ensureStationDir } from "../station-dir.js";
 import { WebSocketHub } from "./ws.js";
@@ -44,6 +45,7 @@ import { v1AuthRoutes } from "./routes/v1/auth.js";
 import { v1EventRoutes } from "./routes/v1/events.js";
 import { v1DefinitionRoutes, v1DefinitionReadRoutes } from "./routes/v1/definitions.js";
 import { v1ScheduleRoutes, v1ScheduleReadRoutes } from "./routes/v1/schedules.js";
+import { v1EnvRoutes, v1EnvReadRoutes } from "./routes/v1/env.js";
 import { v1ExpressionRoutes } from "./routes/v1/expressions.js";
 
 export {
@@ -98,6 +100,13 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
       filePath: resolve(dataDir, "station-logs.jsonl"),
       onError: (err) => console.error("[station] log write failed:", err),
     }),
+  );
+
+  // Runtime env store: defaults to a JSON file so `.env()` requirements and
+  // dashboard-defined variables work out of the box. Pass a durable adapter
+  // via `envStorage` for multi-process deployments.
+  const envStore = new EnvStore(
+    config.envStorage ?? new FileEnvStorage({ filePath: resolve(dataDir, "station-env.json") }),
   );
 
   // Auth: create KeyStore and SessionConfig if auth is configured
@@ -174,6 +183,7 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
       retryBackoffMs: config.runner.retryBackoffMs,
       subscribers: [stationSignalSub],
       scheduleReconciler: signalScheduleReconciler,
+      envProvider: envStore,
     });
 
     if (broadcastsDir || broadcastAdapter) {
@@ -205,6 +215,7 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
         adapter: beaconAdapter ?? new BeaconMemoryAdapter(),
         signalRunner, // beacons can trigger signals into the shared queue
         subscribers: [stationBeaconSub],
+        envProvider: envStore,
       });
     }
   }
@@ -324,6 +335,8 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
   readRoutes.route("/", v1ExpressionRoutes());
   // Schedule GET + preview are read-scoped; mutating routes are mounted under admin below.
   readRoutes.route("/", v1ScheduleReadRoutes({ scheduleAdapter }));
+  // Env GET is read-scoped (secret values redacted); mutations are admin-only below.
+  readRoutes.route("/", v1EnvReadRoutes({ envStore }));
   readRoutes.route("/", v1DefinitionReadRoutes({
     broadcastRunner,
     broadcastAdapter,
@@ -371,6 +384,7 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
     signalSubscriber: stationSignalSub,
   }));
   adminRoutes.route("/", v1ScheduleRoutes({ scheduleAdapter }));
+  adminRoutes.route("/", v1EnvRoutes({ envStore }));
   v1.route("/", guarded("admin", adminRoutes));
 
   app.route("/api/v1", v1);
@@ -499,6 +513,7 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
       sseHub.close();
       await logStore.close();
       await keyStore?.close();
+      await envStore.close();
       if (httpServer) {
         httpServer.close();
       }

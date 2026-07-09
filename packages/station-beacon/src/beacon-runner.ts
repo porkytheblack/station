@@ -3,6 +3,7 @@ import { readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  type EnvProvider,
   type SignalQueueAdapter,
   type SignalRunner,
   isSerializableAdapter,
@@ -80,6 +81,13 @@ export interface BeaconRunnerOptions {
   signalRunner?: SignalRunner;
   /** Alternatively, pass a signal queue adapter directly (advanced). */
   signalAdapter?: SignalQueueAdapter;
+  /**
+   * Optional source of runtime-managed env vars (wire `station-env`'s
+   * `EnvStore` here). Resolved vars are sent to each child over IPC and
+   * applied to its process.env before the beacon file is imported; they also
+   * satisfy `.env()` requirements, alongside the host process env.
+   */
+  envProvider?: EnvProvider;
 }
 
 /**
@@ -101,6 +109,7 @@ export class BeaconRunner {
   private signalAdapterName?: string;
   private signalAdapterOptions?: Record<string, unknown>;
   private signalAdapterImport?: string;
+  private envProvider?: EnvProvider;
 
   private running = false;
   private stopping = false;
@@ -121,6 +130,7 @@ export class BeaconRunner {
       this.signalAdapterOptions = manifest.options;
       this.signalAdapterImport = manifest.moduleUrl;
     }
+    this.envProvider = options.envProvider;
   }
 
   static create(
@@ -158,6 +168,7 @@ export class BeaconRunner {
     mode: "run" | "poll";
     restartPolicy: string;
     autoStart: boolean;
+    requiredEnv?: string[];
   }> {
     return Array.from(this.registry.values()).map(({ beacon, filePath }) => ({
       name: beacon.name,
@@ -165,6 +176,7 @@ export class BeaconRunner {
       mode: beacon.mode,
       restartPolicy: beacon.restartPolicy,
       autoStart: beacon.autoStart,
+      requiredEnv: beacon.requiredEnv,
     }));
   }
 
@@ -525,6 +537,53 @@ export class BeaconRunner {
     const inst = this.instances.get(beacon.name)!;
     const incarnation = inst.incarnation + 1;
 
+    // Resolve store-managed env vars and enforce `.env()` requirements before
+    // spending a process on a beacon that cannot come up. Missing vars are a
+    // config problem — restarting won't fix them — so mark the instance
+    // errored (terminal) instead of entering a restart loop. startBeacon()
+    // clears the error, so the operator can retry after defining the var.
+    let injectedEnv: Record<string, string> | undefined;
+    let envProviderErrored = false;
+    if (this.envProvider) {
+      try {
+        injectedEnv = await this.envProvider.resolveFor({ kind: "beacon", name: beacon.name });
+      } catch (err) {
+        envProviderErrored = true;
+        console.error(`[station-beacon] Env provider failed for "${beacon.name}":`, err);
+      }
+    }
+    if (beacon.requiredEnv && beacon.requiredEnv.length > 0) {
+      const missing = beacon.requiredEnv.filter(
+        (key) => !(injectedEnv && key in injectedEnv) && process.env[key] === undefined,
+      );
+      if (missing.length > 0) {
+        if (envProviderErrored) {
+          // The env store was unreachable — this is transient, not a
+          // misconfiguration, so reschedule a backoff retry rather than going
+          // terminally errored (which would keep the beacon down until an
+          // operator manually restarted it after the store recovered).
+          const delayMs = beacon.backoff.baseMs;
+          const nextRestartAt = new Date(Date.now() + delayMs);
+          const reason = `Env store unreachable while resolving required vars for "${beacon.name}" — will retry`;
+          await this.patch(beacon.name, { status: "backoff", nextRestartAt, lastError: reason });
+          this.emit("onBeaconRestartScheduled", {
+            instance: { ...this.instances.get(beacon.name)! },
+            delayMs,
+            nextRestartAt,
+          });
+          await this.addEvent(beacon.name, inst.incarnation, "restart-scheduled", reason);
+          return;
+        }
+        const error =
+          `Missing required environment variable${missing.length > 1 ? "s" : ""} for "${beacon.name}": ` +
+          `${missing.join(", ")}. Define ${missing.length > 1 ? "them" : "it"} in the Station env store or the host environment.`;
+        await this.patch(beacon.name, { status: "errored", lastError: error, nextRestartAt: undefined });
+        this.emit("onBeaconErrored", { instance: { ...this.instances.get(beacon.name)! }, error });
+        await this.addEvent(beacon.name, inst.incarnation, "errored", error);
+        return;
+      }
+    }
+
     await this.patch(beacon.name, {
       status: "starting",
       incarnation,
@@ -565,6 +624,7 @@ export class BeaconRunner {
         signalAdapterName: this.signalAdapterName,
         signalAdapterOptions: this.signalAdapterOptions,
         signalAdapterImport: this.signalAdapterImport,
+        env: injectedEnv && Object.keys(injectedEnv).length > 0 ? injectedEnv : undefined,
       },
     };
     try {

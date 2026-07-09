@@ -70,6 +70,26 @@ export interface SignalMeta {
   maxConcurrency: number | null;
   hasSteps: boolean;
   stepNames: string[];
+  requiredEnv?: string[];
+}
+
+export type EnvTargetKind = "signal" | "beacon";
+
+export interface EnvTarget {
+  kind: EnvTargetKind;
+  name: string;
+}
+
+export interface EnvVar {
+  id: string;
+  key: string;
+  /** Null when the variable is secret (write-only). */
+  value: string | null;
+  secret: boolean;
+  targets: EnvTarget[];
+  createdAt: string;
+  updatedAt: string;
+  createdBy?: string;
 }
 
 export interface BroadcastMeta {
@@ -109,6 +129,7 @@ export interface BeaconListItem {
   mode: "run" | "poll";
   restartPolicy: string;
   autoStart: boolean;
+  requiredEnv?: string[];
   instance: BeaconInstance | null;
 }
 
@@ -295,6 +316,15 @@ export function useApi() {
         method: "POST",
         body: JSON.stringify({ source }),
       }),
+
+    // Environment variables (v1 — GET is read-scoped, mutations admin-scoped)
+    getEnvVars: () => fetchApi<EnvVar[]>("/v1/env"),
+    createEnvVar: (input: { key: string; value: string; secret?: boolean; targets?: EnvTarget[] }) =>
+      fetchApi<EnvVar>("/v1/env", { method: "POST", body: JSON.stringify(input) }),
+    updateEnvVar: (id: string, patch: Partial<{ value: string; secret: boolean; targets: EnvTarget[] }>) =>
+      fetchApi<EnvVar>(`/v1/env/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+    deleteEnvVar: (id: string) =>
+      fetchApi<{ deleted: boolean }>(`/v1/env/${id}`, { method: "DELETE" }),
 
     // API Keys (v1 admin routes — session cookie provides admin scope)
     getApiKeys: () => fetchApi<Array<{ id: string; name: string; keyPrefix: string; scopes: string[]; createdAt: string; lastUsed: string | null; expiresAt: string | null; revoked: boolean }>>("/v1/keys"),

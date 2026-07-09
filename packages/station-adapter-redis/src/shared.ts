@@ -57,6 +57,10 @@ export const scheduleDueKey = (prefix: string) => key(prefix, "schedules", "due"
 export const scheduleAllKey = (prefix: string) => key(prefix, "schedules", "all");
 export const scheduleByKindKey = (prefix: string, kind: string) => key(prefix, "schedules", "by-kind", kind);
 
+// Env var keys (one hash per var, plus a global set of ids).
+export const envVarHashKey = (prefix: string, id: string) => key(prefix, "env", id);
+export const envVarAllKey = (prefix: string) => key(prefix, "env", "all");
+
 // ---------------------------------------------------------------------------
 // Date / number serialization
 // ---------------------------------------------------------------------------

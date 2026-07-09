@@ -20,6 +20,11 @@
       "import": "./dist/schedules.js",
       "default": "./dist/schedules.js"
     },
+    "./env": {
+      "types": "./dist/env.d.ts",
+      "import": "./dist/env.js",
+      "default": "./dist/env.js"
+    },
     "./beacon": {
       "types": "./dist/beacon.d.ts",
       "import": "./dist/beacon.js",
@@ -49,13 +54,17 @@
     "station-signal": "workspace:*",
     "station-broadcast": "workspace:*",
     "station-schedules": "workspace:*",
-    "station-beacon": "workspace:*"
+    "station-beacon": "workspace:*",
+    "station-env": "workspace:*"
   },
   "peerDependenciesMeta": {
     "station-schedules": {
       "optional": true
     },
     "station-beacon": {
+      "optional": true
+    },
+    "station-env": {
       "optional": true
     }
   }

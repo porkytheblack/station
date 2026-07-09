@@ -24,6 +24,8 @@ export interface SignalMeta {
   maxConcurrency: number | null;
   hasSteps: boolean;
   stepNames: string[];
+  /** Env var keys this signal requires (declared via `.env()`). */
+  requiredEnv: string[];
 }
 
 export interface BroadcastMeta {

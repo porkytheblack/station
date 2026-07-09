@@ -1,4 +1,5 @@
 import { Metadata } from "next";
+import Link from "next/link";
 import { Code } from "../../components/Code";
 
 export const metadata: Metadata = {
@@ -213,6 +214,27 @@ const sendEmail = signal("sendEmail")
   .run(async (input) => {
     const report = await generateReport(input.reportType);
     await sendReport(report, input.recipients);
+  });`}</Code>
+
+      <h4>
+        <code>.env(...keys)</code>
+      </h4>
+      <p>
+        Declares environment variables the signal requires. Before dispatching a
+        run, the runner checks each key against the{" "}
+        <Link href="/docs/environment">env store</Link> and the host{" "}
+        <code>process.env</code>; if any is missing the run{" "}
+        <strong>fails fast</strong> with a clear error instead of spawning a
+        child that can&apos;t succeed. Provided values are injected into the
+        child&apos;s <code>process.env</code>, so the handler reads them the
+        usual way.
+      </p>
+      <Code>{`const charge = signal("charge")
+  .input(z.object({ amount: z.number() }))
+  .env("STRIPE_API_KEY")   // run fails fast if this is unset
+  .run(async (input) => {
+    const stripe = new Stripe(process.env.STRIPE_API_KEY!);
+    await stripe.charges.create({ amount: input.amount });
   });`}</Code>
 
       <h4>

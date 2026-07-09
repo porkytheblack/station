@@ -106,6 +106,7 @@ export class StationSignalSubscriber implements SignalSubscriber {
             maxConcurrency: sig.maxConcurrency ?? null,
             hasSteps: Array.isArray(sig.steps) && sig.steps.length > 0,
             stepNames: sig.steps?.map((s: { name: string }) => s.name) ?? [],
+            requiredEnv: Array.isArray(sig.requiredEnv) ? sig.requiredEnv : [],
           });
           break;
         }
