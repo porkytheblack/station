@@ -26,7 +26,7 @@ Triggers include:
 3. **Always export signals and broadcasts from their files** - The runner uses auto-discovery via `import()` and scans `Object.values(mod)` for branded signal/broadcast objects.
 4. **Use `.js` extension in import paths** - Even when importing `.ts` files. This is required for ESM resolution with Node.js.
 5. **Never use `new MysqlAdapter()` or `new BroadcastMysqlAdapter()`** - These constructors are private. Always use the static `MysqlAdapter.create()` / `BroadcastMysqlAdapter.create()` factory methods (async).
-6. **Broadcast adapters use subpath imports** - Import from `station-adapter-sqlite/broadcast`, `station-adapter-postgres/broadcast`, `station-adapter-mysql/broadcast`, or `station-adapter-redis/broadcast`.
+6. **Broadcast and beacon adapters use subpath imports** - Import broadcast adapters from `station-adapter-{sqlite,postgres,mysql,redis}/broadcast` and beacon adapters from `station-adapter-{sqlite,postgres,mysql,redis}/beacon`. The MySQL beacon adapter, like the others, is constructed via the async `BeaconMysqlAdapter.create()` factory (private constructor).
 7. **Always shut down broadcast runner before signal runner** - Broadcast runner queries the signal adapter's database during shutdown. Stopping signal first closes the DB connection.
 8. **`.retries(n)` sets retry count, not total attempts** - `.retries(2)` means 3 total attempts (1 initial + 2 retries). Internally stored as `maxAttempts = n + 1`.
 11. **pnpm 10+ requires `onlyBuiltDependencies` for SQLite — only when you opt into it** - station-kit no longer pulls in `better-sqlite3` as a hard dependency (default key + log storage are pure-JS file backends). You only need `"pnpm": { "onlyBuiltDependencies": ["better-sqlite3"] }` in the consumer's `package.json` if you explicitly install `better-sqlite3` (e.g. to use `SqliteKeyStorage` or `station-adapter-sqlite`).
@@ -300,6 +300,18 @@ process.on("SIGINT", async () => {
 | PostgreSQL | `station-adapter-postgres/broadcast` | `new BroadcastPostgresAdapter({ connectionString: "..." })` |
 | MySQL | `station-adapter-mysql/broadcast` | `await BroadcastMysqlAdapter.create({ connectionString: "..." })` |
 | Redis | `station-adapter-redis/broadcast` | `new BroadcastRedisAdapter({ url: "redis://localhost:6379" })` |
+
+## Beacon Adapter Reference
+
+Durable `BeaconStateAdapter` implementations (instance state + lifecycle event log). Imported from the `/beacon` subpath. Pass to `defineConfig({ beaconAdapter })` or `new BeaconRunner({ adapter })`.
+
+| Adapter | Import path | Constructor |
+|---------|-------------|-------------|
+| In-memory | `station-beacon` | `new BeaconMemoryAdapter()` |
+| SQLite | `station-adapter-sqlite/beacon` | `new BeaconSqliteAdapter({ dbPath: "./jobs.db" })` |
+| PostgreSQL | `station-adapter-postgres/beacon` | `new BeaconPostgresAdapter({ connectionString: "..." })` |
+| MySQL | `station-adapter-mysql/beacon` | `await BeaconMysqlAdapter.create({ connectionString: "..." })` |
+| Redis | `station-adapter-redis/beacon` | `new BeaconRedisAdapter({ url: "redis://localhost:6379" })` |
 
 ## Remote Triggers
 

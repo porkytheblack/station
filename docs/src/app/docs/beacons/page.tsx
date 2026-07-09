@@ -674,11 +674,23 @@ export default defineConfig({
 
       <h3>Persistence</h3>
       <p>
-        Supervision state lives behind a <code>BeaconStateAdapter</code>. The
-        default <code>BeaconMemoryAdapter</code> is single-process; on restart the
+        Supervision state (the instance record + lifecycle event log) lives
+        behind a <code>BeaconStateAdapter</code>. The default{" "}
+        <code>BeaconMemoryAdapter</code> is single-process; on restart the
         supervisor re-derives desired state from each beacon&apos;s{" "}
-        <code>autoStart</code> flag. Implement the adapter against
-        SQLite/Postgres/etc. for durable state across supervisor restarts.
+        <code>autoStart</code> flag. For durable state across restarts, use a{" "}
+        <code>/beacon</code> subpath adapter:
+      </p>
+      <Code>{`import { BeaconSqliteAdapter } from "station-adapter-sqlite/beacon";
+// or /postgres/beacon, /mysql/beacon (async .create()), /redis/beacon
+
+const adapter = new BeaconSqliteAdapter({ dbPath: "./station.db" });
+// new BeaconRunner({ beaconsDir, adapter })
+// or defineConfig({ beaconsDir, beaconAdapter: adapter })`}</Code>
+      <p>
+        Each adapter persists both the instance record and the lifecycle event
+        log, so a supervisor restart resumes desired state and the dashboard
+        keeps its history.
       </p>
     </>
   );

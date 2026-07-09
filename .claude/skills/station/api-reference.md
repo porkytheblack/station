@@ -2374,7 +2374,7 @@ interface BeaconStateAdapter {
 }
 ```
 
-Built-in: `BeaconMemoryAdapter` (single-process; state lost on restart — the supervisor re-derives desired state from each beacon's `autoStart` flag). Implement the interface against SQLite/Postgres/etc. for durable state.
+Built-in: `BeaconMemoryAdapter` (single-process; state lost on restart — the supervisor re-derives desired state from each beacon's `autoStart` flag). Durable implementations ship as `/beacon` subpath exports of the adapter packages: `BeaconSqliteAdapter` (`station-adapter-sqlite/beacon`), `BeaconPostgresAdapter` (`station-adapter-postgres/beacon`), `BeaconMysqlAdapter` (`station-adapter-mysql/beacon`, async `.create()`), `BeaconRedisAdapter` (`station-adapter-redis/beacon`). Each persists both the instance record and the lifecycle event log.
 
 ### `BeaconSubscriber`
 
@@ -2407,6 +2407,12 @@ import { BroadcastSqliteAdapter } from "station-adapter-sqlite/broadcast";
 import { BroadcastPostgresAdapter } from "station-adapter-postgres/broadcast";
 import { BroadcastMysqlAdapter } from "station-adapter-mysql/broadcast";
 import { BroadcastRedisAdapter } from "station-adapter-redis/broadcast";
+
+// Beacon adapters (subpath)
+import { BeaconSqliteAdapter } from "station-adapter-sqlite/beacon";
+import { BeaconPostgresAdapter } from "station-adapter-postgres/beacon";
+import { BeaconMysqlAdapter } from "station-adapter-mysql/beacon";
+import { BeaconRedisAdapter } from "station-adapter-redis/beacon";
 
 // Tauri sidecar
 import { createTauriStation } from "station-tauri";

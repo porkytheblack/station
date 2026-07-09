@@ -150,8 +150,18 @@ const beaconRunner = new BeaconRunner({ beaconsDir: "./beacons", signalRunner })
 Supervision state (per-beacon status, desired state, restart counters, and an
 optional event log) lives behind a `BeaconStateAdapter`. The default
 `BeaconMemoryAdapter` is single-process; on restart the supervisor re-derives
-desired state from each beacon's `autoStart` flag. Implement `BeaconStateAdapter`
-against SQLite/Postgres/etc. for durable state across supervisor restarts.
+desired state from each beacon's `autoStart` flag. For durable state across
+restarts, use a `/beacon` subpath adapter:
+
+```ts
+import { BeaconSqliteAdapter } from "station-adapter-sqlite/beacon";
+const adapter = new BeaconSqliteAdapter({ dbPath: "./station.db" });
+new BeaconRunner({ beaconsDir: "./beacons", adapter });
+```
+
+`BeaconPostgresAdapter` (`/postgres/beacon`), `BeaconMysqlAdapter`
+(`/mysql/beacon`, async `.create()`), and `BeaconRedisAdapter`
+(`/redis/beacon`) are also available.
 
 ## Notes & limitations
 
