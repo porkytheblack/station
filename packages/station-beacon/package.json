@@ -1,6 +1,6 @@
 {
   "name": "station-beacon",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Long-running, supervised process primitive for station-signal — servers, pollers, and clients",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
