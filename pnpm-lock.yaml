@@ -264,11 +264,30 @@ importers:
         specifier: ^4.21.0
         version: 4.21.0
 
+  examples/15-beacon:
+    dependencies:
+      station-beacon:
+        specifier: workspace:*
+        version: link:../../packages/station-beacon
+      station-signal:
+        specifier: workspace:*
+        version: link:../../packages/station-signal
+    devDependencies:
+      station-kit:
+        specifier: workspace:*
+        version: link:../../packages/station-kit
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
+
   packages/station-adapter-mysql:
     dependencies:
       mysql2:
         specifier: ^3.12.0
         version: 3.18.2(@types/node@25.3.0)
+      station-beacon:
+        specifier: workspace:*
+        version: link:../station-beacon
       station-broadcast:
         specifier: workspace:*
         version: link:../station-broadcast
@@ -284,6 +303,9 @@ importers:
       pg:
         specifier: ^8.13.1
         version: 8.19.0
+      station-beacon:
+        specifier: workspace:*
+        version: link:../station-beacon
       station-broadcast:
         specifier: workspace:*
         version: link:../station-broadcast
@@ -303,6 +325,9 @@ importers:
       ioredis:
         specifier: ^5.4.2
         version: 5.10.0
+      station-beacon:
+        specifier: workspace:*
+        version: link:../station-beacon
       station-broadcast:
         specifier: workspace:*
         version: link:../station-broadcast
@@ -318,6 +343,9 @@ importers:
       better-sqlite3:
         specifier: ^11.9.1
         version: 11.10.0
+      station-beacon:
+        specifier: workspace:*
+        version: link:../station-beacon
       station-broadcast:
         specifier: workspace:*
         version: link:../station-broadcast
@@ -331,6 +359,21 @@ importers:
       '@types/better-sqlite3':
         specifier: ^7.6.13
         version: 7.6.13
+
+  packages/station-beacon:
+    devDependencies:
+      '@types/node':
+        specifier: ^25.3.0
+        version: 25.3.0
+      station-signal:
+        specifier: workspace:*
+        version: link:../station-signal
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
 
   packages/station-broadcast:
     dependencies:
@@ -408,6 +451,9 @@ importers:
       station-adapter-sqlite:
         specifier: workspace:*
         version: link:../station-adapter-sqlite
+      station-beacon:
+        specifier: workspace:*
+        version: link:../station-beacon
       station-broadcast:
         specifier: workspace:*
         version: link:../station-broadcast

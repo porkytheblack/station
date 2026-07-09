@@ -65,6 +65,18 @@ function DagIcon() {
   );
 }
 
+function BeaconIcon() {
+  return (
+    <svg className="feature-icon" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="16" cy="7" r="2.5" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M16 9.5V26" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <path d="M11 26L16 20L21 26" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+      <path d="M9 7C7.5 8 7 9.5 7 11" stroke="currentColor" strokeWidth="1.2" opacity="0.5" strokeLinecap="round" />
+      <path d="M23 7C24.5 8 25 9.5 25 11" stroke="currentColor" strokeWidth="1.2" opacity="0.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function GridIcon() {
   return (
     <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
@@ -114,6 +126,11 @@ const features = [
     icon: DagIcon,
     name: "Workflow DAGs",
     desc: "Chain signals into directed acyclic graphs with broadcasts. Fan-out to parallel nodes, fan-in with data aggregation, conditional execution via guard functions.",
+  },
+  {
+    icon: BeaconIcon,
+    name: "Long-running beacons",
+    desc: "Supervise long-lived processes — servers, pollers, and clients — with restart policies, exponential backoff, heartbeat stall detection, and graceful shutdown.",
   },
 ];
 

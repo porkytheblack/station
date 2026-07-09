@@ -1914,6 +1914,105 @@ await store.close();
 
 ---
 
+## 24. Beacon -- Server, Poller, Client
+
+Long-running, supervised processes. Each beacon runs in its own child process; the `BeaconRunner` keeps it alive per its restart policy.
+
+```ts
+// beacons/health-server.ts -- SERVER mode
+import { beacon, z } from "station-beacon";
+import { createServer } from "node:http";
+
+export const healthServer = beacon("health-server")
+  .config(z.object({ port: z.number().default(8099) }))
+  .withConfig({ port: 8099 })
+  .restart("always")               // a server should always be brought back up
+  .backoff("1s", { max: "10s" })
+  .run(async (ctx) => {
+    let hits = 0;
+    const server = createServer((_req, res) => {
+      hits++;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true, hits }));
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(ctx.config.port, resolve);
+    });
+    ctx.log(`listening on :${ctx.config.port}`);
+    ctx.ready();
+    ctx.onStop(async () => { await new Promise<void>((r) => server.close(() => r())); });
+    await ctx.untilStopped();
+  });
+```
+
+```ts
+// beacons/uptime-poller.ts -- POLLER mode (triggers a signal on failure)
+import { beacon } from "station-beacon";
+import { pageOncall } from "../signals/page-oncall.js";
+
+export const uptimePoller = beacon("uptime-poller").poll("15s", async (ctx) => {
+  try {
+    const res = await fetch("http://localhost:8099/", { signal: ctx.signal });
+    if (!res.ok) await pageOncall.trigger({ status: res.status });
+  } catch (err) {
+    if (ctx.signal.aborted) return;             // stopping -- ignore
+    await pageOncall.trigger({ status: 0, error: (err as Error).message });
+  }
+});
+```
+
+```ts
+// beacons/stream-client.ts -- CLIENT mode (reconnects with backoff + heartbeat)
+import { beacon } from "station-beacon";
+
+export const streamClient = beacon("stream-client")
+  .restart("on-failure")
+  .backoff("500ms", { factor: 2, max: "8s" })
+  .heartbeat("10s")
+  .run(async (ctx) => {
+    const conn = await connect();                // throws on failure -> supervised reconnect
+    ctx.ready();
+    ctx.onStop(() => conn.close());
+    for await (const msg of conn.stream({ signal: ctx.signal })) {
+      ctx.heartbeat();
+      await ingest.trigger(msg);
+    }
+  });
+```
+
+```ts
+// runner.ts -- wire signals + beacons so beacons can trigger signals
+import path from "node:path";
+import { SignalRunner } from "station-signal";
+import { SqliteAdapter } from "station-adapter-sqlite";
+import { BeaconRunner, ConsoleBeaconSubscriber } from "station-beacon";
+
+const signalRunner = new SignalRunner({
+  signalsDir: path.join(import.meta.dirname, "signals"),
+  adapter: new SqliteAdapter({ dbPath: "./jobs.db" }),   // persistent -> triggers cross the child boundary
+});
+
+const beaconRunner = new BeaconRunner({
+  beaconsDir: path.join(import.meta.dirname, "beacons"),
+  subscribers: [new ConsoleBeaconSubscriber()],
+  signalRunner,
+});
+
+await signalRunner.start();
+await beaconRunner.start();
+
+// Runtime control (e.g. from an API handler):
+// await beaconRunner.stopBeacon("stream-client");
+// await beaconRunner.startBeacon("stream-client", { config: { url: "wss://..." } });
+// await beaconRunner.restartBeacon("stream-client");
+// const inst = await beaconRunner.getInstance("stream-client");
+```
+
+**Notes:** invalid config or a missing beacon is a fatal error (goes to `errored`, never restart-looped, even under `restart("always")`). Triggering signals from a beacon requires a **persistent** signal adapter — the default in-memory adapter does not cross the child-process boundary. See `examples/15-beacon` for a runnable, dependency-light version (no signals).
+
+---
+
 ## Quick Reference
 
 | Concept | Syntax |
@@ -1935,6 +2034,14 @@ await store.close();
 | With options | `.then(sig, { as, after, map, when })` |
 | Failure policy | `.onFailure("fail-fast" \| "skip-downstream" \| "continue")` |
 | Build broadcast | `.build()` |
+| Define a beacon | `beacon("name")` |
+| Server/client body | `.run(async (ctx) => { ...; ctx.ready(); await ctx.untilStopped(); })` |
+| Poller body | `.poll("30s", async (ctx) => { ... })` |
+| Restart policy | `.restart("always" \| "on-failure" \| "never")` |
+| Restart backoff | `.backoff("1s", { factor, max, resetAfter })` |
+| Heartbeat/stall | `.heartbeat("10s")` + `ctx.heartbeat()` |
+| Supervise beacons | `new BeaconRunner({ beaconsDir, signalRunner }).start()` |
+| Control a beacon | `runner.startBeacon / stopBeacon / restartBeacon(name)` |
 
 ### Import paths
 

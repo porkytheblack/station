@@ -2,11 +2,30 @@ import { isSignal } from "station-signal";
 import { isBroadcast } from "station-broadcast";
 import type { SignalSubscriber, Run, Step } from "station-signal";
 import type { BroadcastSubscriber, BroadcastRun, BroadcastNodeRun } from "station-broadcast";
+import type { BeaconSubscriber, BeaconInstance, ExitReason } from "station-beacon";
 import type { WebSocketHub } from "./ws.js";
 import type { SSEHub } from "./sse.js";
 import type { LogBuffer } from "./log-buffer.js";
 import type { LogStore } from "./log-store.js";
 import { serializeZodSchema, type SignalMeta, type BroadcastMeta } from "./metadata.js";
+
+/** LogStore/LogBuffer key under which a beacon's log lines are stored. */
+export function beaconLogKey(beaconName: string): string {
+  return `beacon:${beaconName}`;
+}
+
+function serializeInstance(inst: BeaconInstance): Record<string, unknown> {
+  return {
+    ...inst,
+    startedAt: inst.startedAt?.toISOString(),
+    readyAt: inst.readyAt?.toISOString(),
+    lastHeartbeatAt: inst.lastHeartbeatAt?.toISOString(),
+    lastExitAt: inst.lastExitAt?.toISOString(),
+    nextRestartAt: inst.nextRestartAt?.toISOString(),
+    createdAt: inst.createdAt?.toISOString(),
+    updatedAt: inst.updatedAt?.toISOString(),
+  };
+}
 
 function serializeRun(run: Run): Record<string, unknown> {
   return {
@@ -283,6 +302,97 @@ export class StationBroadcastSubscriber implements BroadcastSubscriber {
       broadcastRun: serializeBroadcastRun(event.broadcastRun),
       nodeRun: serializeNodeRun(event.nodeRun),
       reason: event.reason,
+    });
+  }
+}
+
+export class StationBeaconSubscriber implements BeaconSubscriber {
+  private logBuffer?: LogBuffer;
+  private logStore?: LogStore;
+  private sseHub?: SSEHub;
+  private discovered = new Map<string, { beaconName: string; filePath: string }>();
+
+  constructor(private hub: WebSocketHub, logBuffer?: LogBuffer, logStore?: LogStore) {
+    this.logBuffer = logBuffer;
+    this.logStore = logStore;
+  }
+
+  /** Attach an SSE hub so events are also pushed to SSE clients. */
+  setSSEHub(sseHub: SSEHub): void {
+    this.sseHub = sseHub;
+  }
+
+  private emit(type: string, data: Record<string, unknown>): void {
+    const event = { type, timestamp: new Date().toISOString(), data };
+    this.hub.broadcast(event);
+    this.sseHub?.broadcast(event);
+  }
+
+  private emitInstance(type: string, inst: BeaconInstance, extra?: Record<string, unknown>): void {
+    this.emit(type, { instance: serializeInstance(inst), ...extra });
+  }
+
+  onBeaconDiscovered(event: { beaconName: string; filePath: string }): void {
+    this.discovered.set(event.beaconName, event);
+    this.emit("beacon:discovered", event);
+  }
+
+  onBeaconStarting(event: { instance: BeaconInstance }): void {
+    this.emitInstance("beacon:starting", event.instance);
+  }
+
+  onBeaconStarted(event: { instance: BeaconInstance }): void {
+    this.emitInstance("beacon:started", event.instance);
+  }
+
+  onBeaconReady(event: { instance: BeaconInstance }): void {
+    this.emitInstance("beacon:ready", event.instance);
+  }
+
+  onBeaconHeartbeat(event: { instance: BeaconInstance }): void {
+    this.emitInstance("beacon:heartbeat", event.instance);
+  }
+
+  onBeaconExited(event: { instance: BeaconInstance; reason: ExitReason; code: number | null }): void {
+    this.emitInstance("beacon:exited", event.instance, { reason: event.reason, code: event.code });
+  }
+
+  onBeaconRestartScheduled(event: { instance: BeaconInstance; delayMs: number; nextRestartAt: Date }): void {
+    this.emitInstance("beacon:restart-scheduled", event.instance, {
+      delayMs: event.delayMs,
+      nextRestartAt: event.nextRestartAt.toISOString(),
+    });
+  }
+
+  onBeaconStopped(event: { instance: BeaconInstance }): void {
+    this.emitInstance("beacon:stopped", event.instance);
+  }
+
+  onBeaconErrored(event: { instance: BeaconInstance; error?: string }): void {
+    this.emitInstance("beacon:errored", event.instance, { error: event.error ?? "" });
+  }
+
+  onBeaconStalled(event: { instance: BeaconInstance }): void {
+    this.emitInstance("beacon:stalled", event.instance);
+  }
+
+  onBeaconLog(event: { instance: BeaconInstance; level: "log" | "stdout" | "stderr"; message: string }): void {
+    const timestamp = new Date().toISOString();
+    const entry = {
+      runId: beaconLogKey(event.instance.beaconName),
+      signalName: event.instance.beaconName,
+      level: event.level === "stderr" ? ("stderr" as const) : ("stdout" as const),
+      message: event.message,
+      timestamp,
+    };
+    this.logBuffer?.add(entry);
+    this.logStore?.add(entry);
+    this.emit("beacon:log", {
+      beaconName: event.instance.beaconName,
+      incarnation: event.instance.incarnation,
+      level: event.level,
+      message: event.message,
+      timestamp,
     });
   }
 }

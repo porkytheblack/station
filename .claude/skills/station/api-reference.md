@@ -2237,6 +2237,160 @@ The `station-sidecar` bin is the standalone entry point for Tauri's sidecar spaw
 
 ---
 
+## 13. station-beacon
+
+The long-running, supervised process primitive. Where a signal runs to completion and exits, a **beacon** stays up — a server, a poller, or a client. The `BeaconRunner` supervises each beacon in its own child process: restart policy, exponential backoff, startup-timeout and heartbeat stall detection, graceful shutdown, and per-beacon desired-state reconciliation. `station-beacon` has `station-signal` as a **peer dependency** (used for `z`, `parseInterval`, and passing the signal adapter manifest to children). Import `beacon` and `z` from `station-beacon`.
+
+### `beacon(name)` builder
+
+```ts
+import { beacon, z } from "station-beacon";
+
+export const webhookServer = beacon("webhook-server")
+  .config(z.object({ port: z.number().default(8080) })) // Zod config schema
+  .withConfig({ port: 8080 })                            // default config
+  .restart("always")                                     // restart policy
+  .backoff("1s", { factor: 2, max: "30s", resetAfter: "60s" })
+  .startupTimeout("30s")                                 // ready() deadline (opt-in)
+  .heartbeat("10s", { timeout: "45s" })                  // stall detection (opt-in)
+  .stopTimeout("10s")                                    // grace before SIGKILL
+  .run(async (ctx) => { /* long-running handler */ });
+```
+
+Two terminals finalize a beacon:
+
+- `.run(handler)` — a general long-running handler; runs until it returns, throws, or `ctx.signal` aborts.
+- `.poll(interval, fn)` — the framework calls `fn` every `interval` until stopped, marking ready on the first tick.
+
+| Method | Description |
+|--------|-------------|
+| `.config(schema)` | Zod schema for config; validated (with defaults) in the child before each start. Invalid config is **fatal** (→ `errored`, no restart). |
+| `.withConfig(data)` | Default config when started without an override. |
+| `.restart(policy)` | `"always"` \| `"on-failure"` (default) \| `"never"`. |
+| `.backoff(base, opts?)` | Exponential backoff. `base`: interval string or ms. `opts`: `{ factor=2, max="30s", resetAfter="60s" }`. |
+| `.heartbeat(interval, opts?)` | Opt into stall detection. `opts.timeout` defaults to 3× interval. Handler must call `ctx.heartbeat()`. |
+| `.startupTimeout(value)` | Deadline from spawn to reach ready (`ctx.ready()`). Missing it kills+restarts with reason `startup-timeout` (per policy). Off by default; handler must call `ctx.ready()`. |
+| `.stopTimeout(value)` | Grace period after a stop request before force-kill. Default `"10s"`. |
+| `.manualStart()` | Don't auto-start on discovery. |
+| `.run(handler)` / `.poll(interval, fn)` | Finalize. |
+
+Intervals accept `"100ms"`, `"30s"`, `"5m"`, `"1h"`, `"1d"`, `"1w"`, or a raw millisecond number.
+
+### `BeaconContext`
+
+Passed to every handler:
+
+```ts
+interface BeaconContext<TConfig> {
+  readonly name: string;
+  readonly config: TConfig;         // validated, defaults applied
+  readonly incarnation: number;     // 1 on first start, +1 per restart
+  readonly signal: AbortSignal;     // aborts on stop — pass to fetch / stream iterators
+  ready(): void;                    // mark healthy (records readyAt)
+  heartbeat(): void;                // report liveness (required if .heartbeat() declared)
+  log(message: string): void;       // structured log line to subscribers
+  onStop(fn: () => void | Promise<void>): void; // cleanup on stop
+  untilStopped(): Promise<void>;    // resolves when signal aborts
+}
+```
+
+Idiomatic server tail: start the thing, `ctx.ready()`, `ctx.onStop(cleanup)`, then `await ctx.untilStopped()`.
+
+### `BeaconRunner`
+
+```ts
+import { BeaconRunner, ConsoleBeaconSubscriber } from "station-beacon";
+
+const runner = new BeaconRunner({
+  beaconsDir: "./beacons",          // auto-discovery (or use register())
+  adapter,                          // BeaconStateAdapter (default: BeaconMemoryAdapter)
+  subscribers: [new ConsoleBeaconSubscriber()],
+  signalRunner,                     // optional — lets beacons trigger signals
+  pollIntervalMs: 1000,             // reconcile cadence
+});
+await runner.start();               // blocks until stop()
+```
+
+| Constructor option | Type | Default | Notes |
+|---|---|---|---|
+| `beaconsDir` | `string` | — | Recursive auto-discovery of exported beacons. |
+| `adapter` | `BeaconStateAdapter` | `BeaconMemoryAdapter` | Supervision state + optional event log. |
+| `signalRunner` | `SignalRunner` | — | Beacons can `signal.trigger()` into its queue (adapter manifest passed to children). |
+| `signalAdapter` | `SignalQueueAdapter` | — | Alternative to `signalRunner`. |
+| `subscribers` | `BeaconSubscriber[]` | `[]` | Lifecycle event listeners. |
+| `pollIntervalMs` | `number` | `1000` | Milliseconds between reconcile ticks. |
+
+Methods: `start()`, `stop({ graceful?, timeoutMs? })`, `startBeacon(name, { config? })`, `stopBeacon(name)`, `restartBeacon(name)`, `getInstance(name)`, `listInstances()`, `register(beacon, filePath)`, `listRegistered()`, `subscribe(sub)`, `getBeacon(name)`, `hasBeacon(name)`, `static create(beaconsDir, opts?)`.
+
+Runtime control is desired-state based — the supervisor reconciles toward it every tick, including stopping a live child whose desired state became `stopped`:
+
+```ts
+await runner.stopBeacon("consumer");                       // desired = stopped
+await runner.startBeacon("consumer", { config: { ... } }); // desired = running (+ config override)
+await runner.restartBeacon("consumer");                    // graceful stop, then relaunch
+```
+
+### `BeaconInstance` and status model
+
+One record per beacon, mirrored in-memory and written through to the adapter.
+
+```ts
+type BeaconStatus = "stopped" | "starting" | "running" | "stopping" | "backoff" | "errored";
+type DesiredState = "running" | "stopped";
+type ExitReason = "clean" | "failure" | "stopped" | "stalled" | "startup-timeout";
+type RestartPolicy = "always" | "on-failure" | "never";
+
+interface BeaconInstance {
+  beaconName: string;
+  status: BeaconStatus;        // backoff = scheduled to (re)start at nextRestartAt; errored = terminal
+  desiredState: DesiredState;
+  incarnation: number;         // total starts
+  restartCount: number;        // consecutive restarts since last healthy
+  pid?: number;
+  config?: string;             // JSON of the resolved config for this incarnation
+  startedAt?: Date; readyAt?: Date; lastHeartbeatAt?: Date;
+  lastExitAt?: Date; lastExitReason?: ExitReason; lastError?: string;
+  nextRestartAt?: Date;        // when, in backoff, the next restart fires
+  createdAt: Date; updatedAt: Date;
+}
+```
+
+Restart decision (`shouldRestart`, exported from `station-beacon`): never restart when `desiredState==="stopped"` or the stop was operator-initiated; `never` never restarts; `on-failure` restarts on `failure`/`stalled`/`startup-timeout`; `always` restarts on any non-operator exit. Backoff: `computeBackoffMs(attempt, cfg) = min(max, base × factor^attempt)`; `shouldResetBackoff(uptimeMs, cfg)` resets the attempt counter after the process stays up past `resetAfterMs`.
+
+### `BeaconStateAdapter`
+
+Parent-only (the supervisor is the sole authority — no cross-process reconstruction).
+
+```ts
+interface BeaconStateAdapter {
+  upsertInstance(instance: BeaconInstance): Promise<void>;
+  getInstance(beaconName: string): Promise<BeaconInstance | null>;
+  updateInstance(beaconName: string, patch: BeaconInstancePatch): Promise<void>;
+  listInstances(): Promise<BeaconInstance[]>;
+  removeInstance(beaconName: string): Promise<void>;
+  addEvent?(event: BeaconEvent): Promise<void>;                 // optional lifecycle log
+  listEvents?(beaconName: string, limit?: number): Promise<BeaconEvent[]>;
+  generateId(): string;
+  ping(): Promise<boolean>;
+  close?(): Promise<void>;
+}
+```
+
+Built-in: `BeaconMemoryAdapter` (single-process; state lost on restart — the supervisor re-derives desired state from each beacon's `autoStart` flag). Durable implementations ship as `/beacon` subpath exports of the adapter packages: `BeaconSqliteAdapter` (`station-adapter-sqlite/beacon`), `BeaconPostgresAdapter` (`station-adapter-postgres/beacon`), `BeaconMysqlAdapter` (`station-adapter-mysql/beacon`, async `.create()`), `BeaconRedisAdapter` (`station-adapter-redis/beacon`). Each persists both the instance record and the lifecycle event log.
+
+### `BeaconSubscriber`
+
+All optional; errors are caught and logged. `onBeaconDiscovered`, `onBeaconStarting`, `onBeaconStarted`, `onBeaconReady`, `onBeaconHeartbeat`, `onBeaconExited` (`{ instance, reason, code }`), `onBeaconRestartScheduled` (`{ instance, delayMs, nextRestartAt }`), `onBeaconStopped`, `onBeaconErrored` (`{ instance, error }`), `onBeaconStalled`, `onBeaconLog` (`{ instance, level, message }`). Built-in `ConsoleBeaconSubscriber`.
+
+### Notes
+
+- **Fatal errors** (invalid config, beacon not found) exit with `FATAL_EXIT_CODE` (78, exported) and go to `errored` without restarting — the sentinel exit code is authoritative so a bad config never restart-loops, even under `restart("always")`.
+- Child processes are `unref`'d and self-exit on IPC `disconnect`, so a dying supervisor never leaves orphans.
+- Triggering signals from a beacon requires a **persistent** signal adapter (SQLite/Postgres/…) wired via `signalRunner`; the default in-memory adapter does not cross the child-process boundary.
+- **Dashboard**: set `beaconsDir` (and optionally `beaconAdapter`) in `station-kit`'s `defineConfig` to supervise beacons and surface them on the dashboard `/beacons` page (live status, logs, lifecycle events, start/stop/restart controls). REST surface: `GET /api/beacons`, `GET /api/beacons/:name/{events,logs}`, `POST /api/beacons/:name/{start,stop,restart}`.
+
+---
+
 ## Quick Reference: Import Patterns
 
 ### Adapter subpath imports
@@ -2255,6 +2409,12 @@ import { BroadcastSqliteAdapter } from "station-adapter-sqlite/broadcast";
 import { BroadcastPostgresAdapter } from "station-adapter-postgres/broadcast";
 import { BroadcastMysqlAdapter } from "station-adapter-mysql/broadcast";
 import { BroadcastRedisAdapter } from "station-adapter-redis/broadcast";
+
+// Beacon adapters (subpath)
+import { BeaconSqliteAdapter } from "station-adapter-sqlite/beacon";
+import { BeaconPostgresAdapter } from "station-adapter-postgres/beacon";
+import { BeaconMysqlAdapter } from "station-adapter-mysql/beacon";
+import { BeaconRedisAdapter } from "station-adapter-redis/beacon";
 
 // Tauri sidecar
 import { createTauriStation } from "station-tauri";

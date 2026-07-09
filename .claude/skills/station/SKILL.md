@@ -13,6 +13,7 @@ You are an expert Station developer specializing in building type-safe backgroun
 Triggers include:
 
 - Defining or triggering signals / file-defined broadcasts.
+- "Run a server / poller / long-running client", "keep something alive", "supervise a process", "restart on crash", "daemon", "beacon" — the long-running primitive. See **Beacon Pattern** below and `examples/15-beacon`.
 - "Create a dynamic broadcast" / "edit a broadcast at runtime" / "validate a broadcast spec" — runtime-editable broadcasts persisted via the v1 API. See **Dynamic broadcasts** below and `api-reference.md` §9, `examples.md` §20.
 - "Schedule a signal", "schedule a broadcast", "edit a schedule", "preview next fire times" — runtime schedules, distinct from `.every()` in code. See **Schedules** below and `api-reference.md` §10, `examples.md` §21.
 - "Write an expression", "validate this expression", "what does `input.foo` mean" — Station's expression language used inside dynamic broadcasts. See **Expressions** below and `api-reference.md` §11, `examples.md` §22.
@@ -25,7 +26,7 @@ Triggers include:
 3. **Always export signals and broadcasts from their files** - The runner uses auto-discovery via `import()` and scans `Object.values(mod)` for branded signal/broadcast objects.
 4. **Use `.js` extension in import paths** - Even when importing `.ts` files. This is required for ESM resolution with Node.js.
 5. **Never use `new MysqlAdapter()` or `new BroadcastMysqlAdapter()`** - These constructors are private. Always use the static `MysqlAdapter.create()` / `BroadcastMysqlAdapter.create()` factory methods (async).
-6. **Broadcast adapters use subpath imports** - Import from `station-adapter-sqlite/broadcast`, `station-adapter-postgres/broadcast`, `station-adapter-mysql/broadcast`, or `station-adapter-redis/broadcast`.
+6. **Broadcast and beacon adapters use subpath imports** - Import broadcast adapters from `station-adapter-{sqlite,postgres,mysql,redis}/broadcast` and beacon adapters from `station-adapter-{sqlite,postgres,mysql,redis}/beacon`. The MySQL beacon adapter, like the others, is constructed via the async `BeaconMysqlAdapter.create()` factory (private constructor).
 7. **Always shut down broadcast runner before signal runner** - Broadcast runner queries the signal adapter's database during shutdown. Stopping signal first closes the DB connection.
 8. **`.retries(n)` sets retry count, not total attempts** - `.retries(2)` means 3 total attempts (1 initial + 2 retries). Internally stored as `maxAttempts = n + 1`.
 11. **pnpm 10+ requires `onlyBuiltDependencies` for SQLite — only when you opt into it** - station-kit no longer pulls in `better-sqlite3` as a hard dependency (default key + log storage are pure-JS file backends). You only need `"pnpm": { "onlyBuiltDependencies": ["better-sqlite3"] }` in the consumer's `package.json` if you explicitly install `better-sqlite3` (e.g. to use `SqliteKeyStorage` or `station-adapter-sqlite`).
@@ -39,6 +40,8 @@ Triggers include:
 17. **`KeyStore` methods are async** — `create`, `verify`, `list`, `revoke`, `close` all return Promises. Anyone calling them directly must `await`. The `new KeyStore("path/to/file")` string constructor still works but now constructs a `FileKeyStorage` (JSON file, no native deps). A `.db` extension is silently rewritten to `.json`; old SQLite-backed `station-keys.db` files are NOT auto-migrated — see the legacy-files startup warning emitted by `createStation`.
 
 18. **`LogStore` is adapter-based** — `LogStorageAdapter` (`add`, `get`, optional `close`) wraps any backend. Default in `createStation` is `FileLogStorage` (append-only JSONL at `<dataDir>/station-logs.jsonl`, single-process only). Pass `logStorage` in `StationConfig` for Postgres / MySQL / Redis / S3 in production. `LogStore.get(runId)` returns `Promise<LogEntry[]>` — callers must await.
+
+19. **Beacons are the long-running primitive — import `beacon`/`z` from `station-beacon`.** A beacon is a supervised process (server/poller/client), not a job: it isn't triggered, it's started/stopped/restarted by the `BeaconRunner`, which keeps it alive per a restart policy. Use `.run(handler)` for a general long-running handler or `.poll(interval, fn)` for an interval loop — never both. One beacon per file, exported for auto-discovery. Long-running `.run()` handlers should watch `ctx.signal` and end with `await ctx.untilStopped()` (or their own loop); returning early is treated as a clean completion. `station-beacon` has `station-signal` as a peer dependency.
 
 ## Signal Pattern
 
@@ -170,6 +173,80 @@ export const pipeline = broadcast("etl-pipeline")
   .build();
 ```
 
+## Beacon Pattern (long-running primitive)
+
+A **beacon** is a long-running, supervised process — a server, a poller, or a
+client to something. Where a signal runs to completion and exits, a beacon stays
+up. The `BeaconRunner` supervises each beacon in its own child process: restart
+policy, exponential backoff, heartbeat stall detection, and graceful shutdown.
+Import `beacon` and `z` from `station-beacon`.
+
+Two terminals: `.run(handler)` for a general long-running handler, and
+`.poll(interval, fn)` for a framework-managed interval loop.
+
+```ts
+import { beacon, z } from "station-beacon";
+import { createServer } from "node:http";
+
+// SERVER — stays alive until asked to stop
+export const webhookServer = beacon("webhook-server")
+  .config(z.object({ port: z.number().default(8080) }))
+  .restart("always")
+  .run(async (ctx) => {
+    const server = createServer(handler).listen(ctx.config.port);
+    ctx.ready();
+    ctx.onStop(() => server.close());
+    await ctx.untilStopped();
+  });
+
+// POLLER — fn runs every interval; can trigger signals
+export const priceWatcher = beacon("price-watcher")
+  .poll("30s", async (ctx) => {
+    const price = await fetchPrice({ signal: ctx.signal });
+    if (price > 100) await priceAlert.trigger({ price });
+  });
+
+// CLIENT — reconnects on failure with backoff + startup + heartbeat liveness
+export const streamConsumer = beacon("stream-consumer")
+  .restart("on-failure")
+  .backoff("1s", { max: "30s" })
+  .startupTimeout("30s")  // must connect (ctx.ready()) within 30s or get restarted
+  .heartbeat("10s")       // ...and keep reporting liveness once connected
+  .run(async (ctx) => {
+    const conn = await connect();
+    ctx.ready();
+    for await (const msg of conn.stream({ signal: ctx.signal })) {
+      ctx.heartbeat();
+      await ingest.trigger(msg);
+    }
+  });
+```
+
+The handler `ctx`: `config`, `name`, `incarnation`, `signal` (AbortSignal that
+fires on stop), `ready()`, `heartbeat()`, `log(msg)`, `onStop(fn)`,
+`untilStopped()`.
+
+### Beacon Runner Setup
+
+```ts
+import path from "node:path";
+import { BeaconRunner, ConsoleBeaconSubscriber } from "station-beacon";
+
+const beaconRunner = new BeaconRunner({
+  beaconsDir: path.join(import.meta.dirname, "beacons"),
+  subscribers: [new ConsoleBeaconSubscriber()],
+  signalRunner, // optional: lets beacons trigger signals into the shared queue
+});
+
+await beaconRunner.start();
+
+// Runtime control — the supervisor reconciles toward desired state
+await beaconRunner.startBeacon("stream-consumer");   // or { config }
+await beaconRunner.stopBeacon("stream-consumer");
+await beaconRunner.restartBeacon("stream-consumer");
+const instance = await beaconRunner.getInstance("stream-consumer");
+```
+
 ## Runner Setup
 
 ```ts
@@ -225,6 +302,18 @@ process.on("SIGINT", async () => {
 | MySQL | `station-adapter-mysql/broadcast` | `await BroadcastMysqlAdapter.create({ connectionString: "..." })` |
 | Redis | `station-adapter-redis/broadcast` | `new BroadcastRedisAdapter({ url: "redis://localhost:6379" })` |
 
+## Beacon Adapter Reference
+
+Durable `BeaconStateAdapter` implementations (instance state + lifecycle event log). Imported from the `/beacon` subpath. Pass to `defineConfig({ beaconAdapter })` or `new BeaconRunner({ adapter })`.
+
+| Adapter | Import path | Constructor |
+|---------|-------------|-------------|
+| In-memory | `station-beacon` | `new BeaconMemoryAdapter()` |
+| SQLite | `station-adapter-sqlite/beacon` | `new BeaconSqliteAdapter({ dbPath: "./jobs.db" })` |
+| PostgreSQL | `station-adapter-postgres/beacon` | `new BeaconPostgresAdapter({ connectionString: "..." })` |
+| MySQL | `station-adapter-mysql/beacon` | `await BeaconMysqlAdapter.create({ connectionString: "..." })` |
+| Redis | `station-adapter-redis/beacon` | `new BeaconRedisAdapter({ url: "redis://localhost:6379" })` |
+
 ## Remote Triggers
 
 ```ts
@@ -256,6 +345,7 @@ export default defineConfig({
   port: 4400,
   signalsDir: "./signals",
   broadcastsDir: "./broadcasts",
+  beaconsDir: "./beacons", // supervises beacons + surfaces them on the dashboard
   adapter: new SqliteAdapter({ dbPath: "./jobs.db" }),
   broadcastAdapter: new BroadcastSqliteAdapter({ dbPath: "./jobs.db" }),
   auth: { username: "admin", password: "changeme" },
@@ -351,6 +441,23 @@ docker run -p 4400:4400 \
 | `.withInput(data)` | Default recurring input |
 | `.build()` | Finalize broadcast definition |
 
+## Beacon Builder Methods
+
+| Method | Description |
+|--------|-------------|
+| `.config(schema)` | Zod schema for config (validated before each start) |
+| `.withConfig(data)` | Default config when started without an override |
+| `.restart(policy)` | `"always"`, `"on-failure"` (default), `"never"` |
+| `.backoff(base, opts?)` | Exponential restart backoff; `opts`: `{ factor, max, resetAfter }` |
+| `.heartbeat(interval, opts?)` | Stall detection — restart if no `ctx.heartbeat()` within `opts.timeout` (default 3× interval) |
+| `.startupTimeout(ms)` | Deadline from spawn to reach ready (`ctx.ready()`) — restart if it never comes up. Off by default |
+| `.stopTimeout(ms)` | Grace period before force-kill on stop (default `10s`) |
+| `.manualStart()` | Don't auto-start on discovery |
+| `.run(handler)` | Finalize with a long-running handler |
+| `.poll(interval, fn)` | Finalize as a poller — `fn` runs every `interval` |
+
+Beacon runner controls: `startBeacon(name, { config? })`, `stopBeacon(name)`, `restartBeacon(name)`, `getInstance(name)`, `listInstances()`, `register(beacon, filePath)`.
+
 ## Subscriber Interfaces
 
 Signal subscribers implement any subset of:
@@ -358,6 +465,9 @@ Signal subscribers implement any subset of:
 
 Broadcast subscribers implement any subset of:
 `onBroadcastDiscovered`, `onBroadcastQueued`, `onBroadcastStarted`, `onBroadcastCompleted`, `onBroadcastFailed`, `onBroadcastCancelled`, `onNodeTriggered`, `onNodeCompleted`, `onNodeFailed`, `onNodeSkipped`
+
+Beacon subscribers implement any subset of:
+`onBeaconDiscovered`, `onBeaconStarting`, `onBeaconStarted`, `onBeaconReady`, `onBeaconHeartbeat`, `onBeaconExited`, `onBeaconRestartScheduled`, `onBeaconStopped`, `onBeaconErrored`, `onBeaconStalled`, `onBeaconLog`
 
 ## Dynamic Broadcasts
 

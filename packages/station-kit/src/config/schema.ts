@@ -1,5 +1,6 @@
 import type { SignalQueueAdapter } from "station-signal";
 import type { BroadcastQueueAdapter } from "station-broadcast";
+import type { BeaconStateAdapter } from "station-beacon";
 import type { ScheduleAdapter } from "station-schedules";
 import type { ApiKeyStorageAdapter } from "../server/auth/keys.js";
 import type { LogStorageAdapter } from "../server/log-store.js";
@@ -38,6 +39,12 @@ export interface StationConfig {
   adapter?: SignalQueueAdapter;
   broadcastAdapter?: BroadcastQueueAdapter;
   /**
+   * Optional beacon supervision-state adapter. When provided (or when
+   * `beaconsDir` is set), the dashboard supervises long-running beacons and
+   * exposes them under `/api/beacons`.
+   */
+  beaconAdapter?: BeaconStateAdapter;
+  /**
    * Optional schedule storage adapter. When provided, runtime-editable
    * schedules are persisted here and reconciled by both runners.
    */
@@ -52,6 +59,7 @@ export interface StationConfig {
   logStorage?: LogStorageAdapter;
   signalsDir?: string;
   broadcastsDir?: string;
+  beaconsDir?: string;
   stationDir: string;
   runner: RunnerConfig;
   broadcastRunner: BroadcastRunnerConfig;
@@ -108,10 +116,12 @@ export function resolveConfig(input: StationUserConfig): StationConfig {
     host: input.host ?? envHost ?? DEFAULTS.host,
     adapter: input.adapter,
     broadcastAdapter: input.broadcastAdapter,
+    beaconAdapter: input.beaconAdapter,
     scheduleAdapter: input.scheduleAdapter,
     logStorage: input.logStorage,
     signalsDir: input.signalsDir,
     broadcastsDir: input.broadcastsDir,
+    beaconsDir: input.beaconsDir,
     stationDir: input.stationDir ?? DEFAULTS.stationDir,
     runner: {
       pollIntervalMs: input.runner?.pollIntervalMs ?? DEFAULTS.runner.pollIntervalMs,
