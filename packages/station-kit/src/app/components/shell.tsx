@@ -99,6 +99,16 @@ function IconSchedules() {
   );
 }
 
+function IconEnvironment() {
+  /* Key — environment variables / secrets */
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="4.5" cy="4.5" r="2.5" />
+      <path d="M6.3 6.3 12 12M9.5 9.5l1.2-1.2M11 11l1.2-1.2" />
+    </svg>
+  );
+}
+
 function IconPlayground() {
   /* Beaker — experiment / playground */
   return (
@@ -169,6 +179,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           <NavLink href="/broadcasts" label="Broadcasts" section="broadcasts" icon={<IconBroadcasts />} />
           <NavLink href="/beacons" label="Beacons" section="beacons" icon={<IconBeacon />} />
           <NavLink href="/schedules" label="Schedules" section="schedules" icon={<IconSchedules />} />
+          <NavLink href="/environment" label="Environment" section="environment" icon={<IconEnvironment />} />
           <div className="station-sidebar-nav-label" style={{ marginTop: "1rem" }}>Tools</div>
           <NavLink href="/playground/expression" label="Expressions" section="playground" icon={<IconPlayground />} />
           <div className="station-sidebar-nav-label" style={{ marginTop: "1rem" }}>Admin</div>

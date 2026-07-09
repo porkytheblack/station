@@ -47,6 +47,7 @@
     "next": "^15",
     "react": "^19",
     "react-dom": "^19",
+    "station-env": "workspace:*",
     "station-expressions": "workspace:*",
     "station-schedules": "workspace:*",
     "tsx": "^4.21.0",

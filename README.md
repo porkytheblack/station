@@ -68,6 +68,7 @@ await sendEmail.trigger({
 | [`station-signal`](./packages/station-signal) | Core framework — signals, runner, queue, adapters |
 | [`station-broadcast`](./packages/station-broadcast) | DAG workflow orchestration for signals |
 | [`station-beacon`](./packages/station-beacon) | Long-running supervised processes — servers, pollers, clients |
+| [`station-env`](./packages/station-env) | Runtime-managed environment variables injected into signal/beacon runs |
 | [`station-adapter-sqlite`](./packages/station-adapter-sqlite) | SQLite adapter (better-sqlite3) |
 | [`station-adapter-postgres`](./packages/station-adapter-postgres) | PostgreSQL adapter (pg) |
 | [`station-adapter-mysql`](./packages/station-adapter-mysql) | MySQL adapter (mysql2) |

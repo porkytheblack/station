@@ -6,6 +6,7 @@ import { DEFAULT_MAX_ATTEMPTS, DEFAULT_TIMEOUT_MS, type Run, type StepDefinition
 import { SIGNAL_BRAND } from "./util.js";
 
 const VALID_NAME = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
+const VALID_ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export interface Signal<TInput = unknown, TOutput = void> {
   readonly [SIGNAL_BRAND]: true;
@@ -20,6 +21,8 @@ export interface Signal<TInput = unknown, TOutput = void> {
   readonly maxAttempts: number;
   readonly maxConcurrency?: number;
   readonly recurringInput?: TInput;
+  /** Env var keys that must be present (store-managed or process env) for a run to dispatch. */
+  readonly requiredEnv?: string[];
   trigger(input: TInput): Promise<string>;
 }
 
@@ -38,13 +41,14 @@ interface SignalConfig<TInput, TOutput> {
   maxAttempts: number;
   maxConcurrency?: number;
   recurringInput?: TInput;
+  requiredEnv?: string[];
 }
 
 function buildSignal<TInput, TOutput>(config: SignalConfig<TInput, TOutput>): Signal<TInput, TOutput> {
   const {
     name, inputSchema, outputSchema, handler, steps,
     onCompleteHandler, interval, timeout, maxAttempts,
-    maxConcurrency, recurringInput,
+    maxConcurrency, recurringInput, requiredEnv,
   } = config;
 
   return {
@@ -60,6 +64,7 @@ function buildSignal<TInput, TOutput>(config: SignalConfig<TInput, TOutput>): Si
     maxAttempts,
     maxConcurrency,
     recurringInput,
+    requiredEnv,
     async trigger(input: TInput): Promise<string> {
       const result = inputSchema.safeParse(input);
       if (!result.success) {
@@ -105,13 +110,14 @@ export class StepBuilder<TInput, TLast> {
   private _maxAttempts: number;
   private _maxConcurrency?: number;
   private _recurringInput?: TInput;
+  private _requiredEnv?: string[];
 
   /** @internal */
   constructor(
     name: string,
     inputSchema: z.ZodType<TInput>,
     steps: StepDefinition[],
-    opts: { interval?: string; timeout: number; maxAttempts: number; maxConcurrency?: number; recurringInput?: TInput },
+    opts: { interval?: string; timeout: number; maxAttempts: number; maxConcurrency?: number; recurringInput?: TInput; requiredEnv?: string[] },
   ) {
     this._name = name;
     this._inputSchema = inputSchema;
@@ -121,6 +127,7 @@ export class StepBuilder<TInput, TLast> {
     this._maxAttempts = opts.maxAttempts;
     this._maxConcurrency = opts.maxConcurrency;
     this._recurringInput = opts.recurringInput;
+    this._requiredEnv = opts.requiredEnv;
   }
 
   step<TNext>(name: string, fn: (prev: TLast) => Promise<TNext>): StepBuilder<TInput, TNext> {
@@ -128,7 +135,7 @@ export class StepBuilder<TInput, TLast> {
       this._name,
       this._inputSchema,
       [...this._steps, { name, fn: fn as unknown as (prev: unknown) => Promise<unknown> }],
-      { interval: this._interval, timeout: this._timeout, maxAttempts: this._maxAttempts, maxConcurrency: this._maxConcurrency, recurringInput: this._recurringInput },
+      { interval: this._interval, timeout: this._timeout, maxAttempts: this._maxAttempts, maxConcurrency: this._maxConcurrency, recurringInput: this._recurringInput, requiredEnv: this._requiredEnv },
     );
   }
 
@@ -143,6 +150,7 @@ export class StepBuilder<TInput, TLast> {
       maxAttempts: this._maxAttempts,
       maxConcurrency: this._maxConcurrency,
       recurringInput: this._recurringInput,
+      requiredEnv: this._requiredEnv,
     });
   }
 
@@ -156,6 +164,7 @@ export class StepBuilder<TInput, TLast> {
       maxAttempts: this._maxAttempts,
       maxConcurrency: this._maxConcurrency,
       recurringInput: this._recurringInput,
+      requiredEnv: this._requiredEnv,
     });
   }
 }
@@ -176,6 +185,7 @@ export class SignalBuilder<TInput = unknown, TOutput = void> {
   private _maxAttempts: number = DEFAULT_MAX_ATTEMPTS;
   private _maxConcurrency?: number;
   private _recurringInput?: TInput;
+  private _requiredEnv?: string[];
 
   constructor(name: string) {
     if (!VALID_NAME.test(name)) {
@@ -198,6 +208,7 @@ export class SignalBuilder<TInput = unknown, TOutput = void> {
     b._maxAttempts = this._maxAttempts;
     b._maxConcurrency = this._maxConcurrency;
     b._recurringInput = this._recurringInput;
+    b._requiredEnv = this._requiredEnv;
     return b;
   }
 
@@ -209,6 +220,7 @@ export class SignalBuilder<TInput = unknown, TOutput = void> {
     b._timeout = this._timeout;
     b._maxAttempts = this._maxAttempts;
     b._maxConcurrency = this._maxConcurrency;
+    b._requiredEnv = this._requiredEnv;
     return b;
   }
 
@@ -221,6 +233,7 @@ export class SignalBuilder<TInput = unknown, TOutput = void> {
     b._maxAttempts = this._maxAttempts;
     b._maxConcurrency = this._maxConcurrency;
     b._recurringInput = this._recurringInput as unknown as TInput | undefined;
+    b._requiredEnv = this._requiredEnv;
     return b;
   }
 
@@ -255,6 +268,27 @@ export class SignalBuilder<TInput = unknown, TOutput = void> {
     return b;
   }
 
+  /**
+   * Declare env vars this signal needs. Before dispatching a run, the runner
+   * verifies each key is available — from the runner's env provider (the
+   * Station env store) or the host process env — and fails the run with a
+   * clear error when any is missing. Provided vars are injected into the
+   * child process env, so handlers read them via `process.env.KEY` as usual.
+   */
+  env(...keys: string[]): SignalBuilder<TInput, TOutput> {
+    for (const key of keys) {
+      if (!VALID_ENV_KEY.test(key)) {
+        throw new Error(
+          `Invalid env key "${key}" for signal "${this._name}". Keys must start with a letter or underscore and contain only letters, digits, and underscores.`,
+        );
+      }
+    }
+    const b = this._clone();
+    const merged = [...(this._requiredEnv ?? []), ...keys];
+    b._requiredEnv = Array.from(new Set(merged));
+    return b;
+  }
+
   private _config(): Omit<SignalConfig<TInput, TOutput>, "handler" | "steps" | "onCompleteHandler"> {
     return {
       name: this._name,
@@ -265,6 +299,7 @@ export class SignalBuilder<TInput = unknown, TOutput = void> {
       maxAttempts: this._maxAttempts,
       maxConcurrency: this._maxConcurrency,
       recurringInput: this._recurringInput,
+      requiredEnv: this._requiredEnv,
     };
   }
 
@@ -285,7 +320,7 @@ export class SignalBuilder<TInput = unknown, TOutput = void> {
       this._name,
       cfg.inputSchema,
       [{ name, fn: fn as unknown as (prev: unknown) => Promise<unknown> }],
-      { interval: cfg.interval, timeout: cfg.timeout, maxAttempts: cfg.maxAttempts, maxConcurrency: cfg.maxConcurrency, recurringInput: cfg.recurringInput },
+      { interval: cfg.interval, timeout: cfg.timeout, maxAttempts: cfg.maxAttempts, maxConcurrency: cfg.maxConcurrency, recurringInput: cfg.recurringInput, requiredEnv: cfg.requiredEnv },
     );
   }
 }

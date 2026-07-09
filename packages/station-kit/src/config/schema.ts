@@ -2,6 +2,7 @@ import type { SignalQueueAdapter } from "station-signal";
 import type { BroadcastQueueAdapter } from "station-broadcast";
 import type { BeaconStateAdapter } from "station-beacon";
 import type { ScheduleAdapter } from "station-schedules";
+import type { EnvStorageAdapter } from "station-env";
 import type { ApiKeyStorageAdapter } from "../server/auth/keys.js";
 import type { LogStorageAdapter } from "../server/log-store.js";
 
@@ -49,6 +50,15 @@ export interface StationConfig {
    * schedules are persisted here and reconciled by both runners.
    */
   scheduleAdapter?: ScheduleAdapter;
+  /**
+   * Pluggable storage backend for runtime environment variables. Defaults to a
+   * JSON file at `<dataDir>/station-env.json` (no native dependencies). When
+   * set — or by default — signals/beacons can require env vars via `.env()`,
+   * and variables defined here (globally or scoped to specific targets) are
+   * injected into runs. For multi-process deployments pass a durable adapter
+   * from a `station-adapter-*` package's `/env` subpath.
+   */
+  envStorage?: EnvStorageAdapter;
   /**
    * Pluggable storage backend for run logs. Defaults to a `FileLogStorage`
    * (append-only JSONL file at `<dataDir>/station-logs.jsonl`, no native
@@ -118,6 +128,7 @@ export function resolveConfig(input: StationUserConfig): StationConfig {
     broadcastAdapter: input.broadcastAdapter,
     beaconAdapter: input.beaconAdapter,
     scheduleAdapter: input.scheduleAdapter,
+    envStorage: input.envStorage,
     logStorage: input.logStorage,
     signalsDir: input.signalsDir,
     broadcastsDir: input.broadcastsDir,

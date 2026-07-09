@@ -18,6 +18,7 @@ Triggers include:
 - "Schedule a signal", "schedule a broadcast", "edit a schedule", "preview next fire times" — runtime schedules, distinct from `.every()` in code. See **Schedules** below and `api-reference.md` §10, `examples.md` §21.
 - "Write an expression", "validate this expression", "what does `input.foo` mean" — Station's expression language used inside dynamic broadcasts. See **Expressions** below and `api-reference.md` §11, `examples.md` §22.
 - "Use Postgres / MySQL / Redis for API keys" or "configure custom API key storage" — pluggable `ApiKeyStorageAdapter`. See **KeyStore** below and `api-reference.md` §7.5.
+- "Environment variables", "require an env var for a signal/beacon", "set env vars from the dashboard", "manage secrets", "Vercel-like environments", ".env()" — runtime-managed env vars injected into runs. See **Environment Variables (station-env)** below and `api-reference.md` §14, `examples.md` §25.
 
 ## Critical Rules
 
@@ -423,6 +424,7 @@ docker run -p 4400:4400 \
 | `.concurrency(n)` | Max concurrent runs for this signal |
 | `.every(interval)` | Recurring schedule: `"100ms"`, `"30s"`, `"5m"`, `"1h"`, `"1d"`, `"1w"` |
 | `.withInput(data)` | Default input for recurring signals |
+| `.env(...keys)` | Require env var keys — a run won't dispatch unless each is present in the env store or the host env |
 | `.run(handler)` | Single handler function (returns signal) |
 | `.step(name, fn)` | Add pipeline step (returns StepBuilder) |
 | `.build()` | Finalize multi-step signal (on StepBuilder) |
@@ -452,6 +454,7 @@ docker run -p 4400:4400 \
 | `.heartbeat(interval, opts?)` | Stall detection — restart if no `ctx.heartbeat()` within `opts.timeout` (default 3× interval) |
 | `.startupTimeout(ms)` | Deadline from spawn to reach ready (`ctx.ready()`) — restart if it never comes up. Off by default |
 | `.stopTimeout(ms)` | Grace period before force-kill on stop (default `10s`) |
+| `.env(...keys)` | Require env var keys — the supervisor marks the beacon `errored` instead of spawning if any is missing |
 | `.manualStart()` | Don't auto-start on discovery |
 | `.run(handler)` | Finalize with a long-running handler |
 | `.poll(interval, fn)` | Finalize as a poller — `fn` runs every `interval` |
@@ -562,6 +565,40 @@ export default defineConfig({
 ```
 
 The `ApiKeyStorageAdapter` interface is `{ insert, findByHash, list, touch, revoke, close? }`. Methods may be sync or async — `KeyStore` awaits them either way. All `KeyStore` methods (`create`, `verify`, `list`, `revoke`, `close`) are async; callers must `await`. The `new KeyStore("path/to/keys.json")` string overload constructs a `FileKeyStorage`; a `.db` path is silently rewritten to `.json` for backwards compatibility, but old SQLite-backed `station-keys.db` files are NOT auto-migrated (a startup warning is emitted if one is detected). See `api-reference.md` §7.5 for the interface and `examples.md` §23 for a custom adapter skeleton.
+
+## Environment Variables (station-env)
+
+Runtime-managed env vars — define them once (globally or scoped to specific signals/beacons) instead of exporting everything into the Station process, require presence for a run, and edit values from the dashboard while Station is running (Vercel-like environments). Vars are injected into each run's `process.env` over the private IPC channel (never the spawn env), so secrets don't leak via `/proc/<pid>/environ`.
+
+Import `signal`/`z` from `station-signal` as usual; the only builder addition is `.env()`.
+
+```ts
+import { signal, z } from "station-signal";
+
+export const charge = signal("charge")
+  .input(z.object({ amount: z.number() }))
+  .env("STRIPE_API_KEY")          // required — run fails fast if absent
+  .run(async (input) => {
+    await stripe(process.env.STRIPE_API_KEY!).charge(input.amount);
+  });
+```
+
+- **Requiring a var**: `.env("KEY", ...)` on a signal or beacon. Before dispatch the runner checks each key against the env store **and** the host `process.env`; a signal run **fails** with a clear error listing the missing keys, a beacon is marked **errored** (terminal — no restart loop; `startBeacon` clears it so you can retry after defining the var). Reserved keys (`PATH`, `NODE_OPTIONS`, `LD_PRELOAD`, `STATION_*`, …) are rejected — they change how the child executes, not what the handler reads.
+- **Scoping (resolution model)**: a var with no targets is **global** (injected into every signal and beacon); a var with `targets` applies only to those and **overrides** a global var of the same key. Two vars may share a key only if their scopes can't both apply to one target (resolution stays deterministic) — the store rejects a conflicting definition.
+- **Secrets**: mark a var `secret` and its value becomes write-only — the API/dashboard return `value: null`, but the real value is still injected at run time. A secret can't be downgraded to non-secret.
+- **Storage (pluggable)**: default is `FileEnvStorage` — a JSON file at `<dataDir>/station-env.json` (fsync'd tmp + rename, `0o600`, no native deps, single-process). Pass `envStorage` in `StationConfig` for a durable adapter from a `station-adapter-{sqlite,postgres,mysql,redis}/env` subpath in multi-process deployments. `EnvStore` methods (`create`, `update`, `delete`, `resolveFor`, `listPublic`, `close`) are async.
+- **Dashboard**: the **Environment** page defines vars, marks them secret, sets scope (global or specific targets), and flags any required-but-undefined vars. Hand-rolled runners: pass `envProvider` (an `EnvStore`) to `SignalRunner` / `BeaconRunner`.
+- **v1 API**: `GET /api/v1/env` (read scope, secrets redacted), `POST /api/v1/env`, `PATCH /api/v1/env/:id`, `DELETE /api/v1/env/:id` (admin scope). See `api-reference.md` §14.
+
+```ts
+// station.config.ts — durable env storage for production
+import { defineConfig } from "station-kit";
+import { EnvPostgresAdapter } from "station-adapter-postgres/env";
+
+export default defineConfig({
+  envStorage: new EnvPostgresAdapter({ connectionString: process.env.DATABASE_URL }),
+});
+```
 
 ## Run Log Storage (pluggable)
 

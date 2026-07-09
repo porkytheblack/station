@@ -190,6 +190,15 @@ try {
   const job = await waitForJobInit();
   const rawConfig = job.config;
 
+  // Apply store-managed env vars before the beacon file is imported, so both
+  // module-level code and the handler read them via process.env as usual.
+  // Delivered over IPC (not the spawn env) to keep secrets out of /proc.
+  if (job.env) {
+    for (const [key, value] of Object.entries(job.env)) {
+      process.env[key] = value;
+    }
+  }
+
   // Reconstruct the signal adapter (if provided) so beacon handlers can trigger
   // signals into the shared queue rather than an isolated in-child adapter.
   if (job.signalAdapterName) {

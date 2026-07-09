@@ -28,6 +28,12 @@ export interface JobInitMessage {
     adapterName?: string;
     adapterOptions?: Record<string, unknown>;
     adapterImport?: string;
+    /**
+     * Store-managed env vars applied to the child's process.env before the
+     * signal file is imported. Sent over IPC (not the spawn env) so secret
+     * values are not exposed via /proc/<pid>/environ.
+     */
+    env?: Record<string, string>;
   };
 }
 

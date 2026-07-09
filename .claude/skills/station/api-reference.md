@@ -2391,6 +2391,90 @@ All optional; errors are caught and logged. `onBeaconDiscovered`, `onBeaconStart
 
 ---
 
+## 14. station-env
+
+Runtime-managed environment variables injected into signal/beacon runs. Values live behind a pluggable `EnvStorageAdapter`; `EnvStore` adds validation, secret masking, conflict detection, and Vercel-style resolution.
+
+### Exports (`station-env`)
+
+```ts
+import {
+  EnvStore, EnvValidationError,
+  MemoryEnvStorage, FileEnvStorage,
+  type EnvStorageAdapter, type EnvVar, type EnvVarPublic, type EnvTarget,
+  validateEnvKey, missingEnvKeys,
+} from "station-env";
+```
+
+### `EnvStorageAdapter`
+
+```ts
+interface EnvStorageAdapter {
+  add(envVar: EnvVar): Promise<void>;
+  get(id: string): Promise<EnvVar | null>;
+  list(): Promise<EnvVar[]>;
+  update(id: string, patch: EnvVarPatch): Promise<void>;
+  delete(id: string): Promise<boolean>;
+  generateId(): string;
+  ping(): Promise<boolean>;
+  close?(): Promise<void>;
+}
+```
+
+Built-ins: `MemoryEnvStorage` (tests), `FileEnvStorage` (default — JSON at `<dataDir>/station-env.json`, fsync'd tmp+rename, `0o600`, single-process). Durable adapters: `station-adapter-{sqlite,postgres,mysql,redis}/env` (`EnvSqliteAdapter`, `EnvPostgresAdapter`, `EnvMysqlAdapter.create()`, `EnvRedisAdapter`). The MySQL adapter uses the async `create()` factory (private constructor); the rest are plain `new`.
+
+### `EnvVar` / `EnvTarget`
+
+```ts
+interface EnvTarget { kind: "signal" | "beacon"; name: string; }
+
+interface EnvVar {
+  id: string;
+  key: string;               // POSIX-style; reserved keys (PATH, NODE_OPTIONS, STATION_*, …) rejected
+  value: string;
+  secret: boolean;           // secret ⇒ value redacted (null) on read, still injected at run time
+  targets: EnvTarget[];      // empty ⇒ global; else scoped (overrides a global of the same key)
+  createdAt: Date;
+  updatedAt: Date;
+  createdBy?: string;
+}
+```
+
+### `EnvStore`
+
+```ts
+const store = new EnvStore(adapter, { cacheTtlMs: 1000 });
+
+await store.create({ key: "STRIPE_API_KEY", value: "sk_live_…", secret: true });     // global
+await store.create({ key: "DB_URL", value: "…", targets: [{ kind: "signal", name: "charge" }] });
+await store.update(id, { value: "…" });               // secret can't be downgraded to non-secret
+await store.delete(id);
+await store.listPublic();                             // redacted (secrets → value: null)
+await store.resolveFor({ kind: "signal", name: "charge" });  // Record<string,string> to inject
+```
+
+- **Resolution**: global vars first, then vars scoped to the target (scoped wins on key collisions).
+- **Conflicts**: `create`/`update` throw `EnvValidationError` if two vars would both apply to one target with the same key.
+- `EnvStore` structurally satisfies the runner `EnvProvider` interface — pass it as `envProvider` to `SignalRunner`/`BeaconRunner`, or set `envStorage` in `station-kit`'s `defineConfig` (station-kit wires the `EnvStore` and injects it into both runners automatically).
+
+### Requiring env vars
+
+`.env(...keys)` on a signal or beacon marks keys required. Before dispatch the runner checks each key against the resolved store map **and** the host `process.env`. A signal run **fails** with a missing-keys error; a beacon is marked **errored** (terminal until `startBeacon` retries). Provided vars are applied to the child's `process.env` (over IPC, not the spawn env) before the file is imported.
+
+### v1 API Endpoints
+
+| Method | Path | Scope | Notes |
+|--------|------|-------|-------|
+| `GET` | `/api/v1/env` | read | Secret values redacted (`value: null`). |
+| `GET` | `/api/v1/env/:id` | read | Redacted. |
+| `POST` | `/api/v1/env` | admin | Body `{ key, value, secret?, targets? }`. 400 on invalid/reserved/conflicting key. |
+| `PATCH` | `/api/v1/env/:id` | admin | Body `{ value?, secret?, targets? }`. |
+| `DELETE` | `/api/v1/env/:id` | admin | |
+
+Dashboard: the **Environment** page manages vars and flags required-but-undefined keys per signal/beacon.
+
+---
+
 ## Quick Reference: Import Patterns
 
 ### Adapter subpath imports
@@ -2415,6 +2499,12 @@ import { BeaconSqliteAdapter } from "station-adapter-sqlite/beacon";
 import { BeaconPostgresAdapter } from "station-adapter-postgres/beacon";
 import { BeaconMysqlAdapter } from "station-adapter-mysql/beacon";
 import { BeaconRedisAdapter } from "station-adapter-redis/beacon";
+
+// Env adapters (subpath)
+import { EnvSqliteAdapter } from "station-adapter-sqlite/env";
+import { EnvPostgresAdapter } from "station-adapter-postgres/env";
+import { EnvMysqlAdapter } from "station-adapter-mysql/env";   // async: await EnvMysqlAdapter.create(...)
+import { EnvRedisAdapter } from "station-adapter-redis/env";
 
 // Tauri sidecar
 import { createTauriStation } from "station-tauri";

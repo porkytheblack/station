@@ -2013,6 +2013,88 @@ await beaconRunner.start();
 
 ---
 
+## 25. Environment Variables
+
+Require env vars for a signal, then define and change them from the dashboard while Station runs.
+
+### 25.1 Require a var in signal code
+
+```ts
+// signals/charge.ts
+import { signal, z } from "station-signal";
+
+export const charge = signal("charge")
+  .input(z.object({ amount: z.number() }))
+  .env("STRIPE_API_KEY")   // required — the run fails fast if this is unset
+  .run(async (input) => {
+    const key = process.env.STRIPE_API_KEY!;   // injected at run time
+    // ... call Stripe with `key` ...
+    return { charged: input.amount };
+  });
+```
+
+If `STRIPE_API_KEY` is defined in neither the env store nor the host process env, the run fails with:
+`Missing required environment variable for "charge": STRIPE_API_KEY. Define it in the Station env store or the host environment.`
+
+### 25.2 Configure durable env storage
+
+```ts
+// station.config.ts
+import { defineConfig } from "station-kit";
+import { EnvPostgresAdapter } from "station-adapter-postgres/env";
+
+export default defineConfig({
+  signalsDir: "./signals",
+  // ... signal / broadcast adapters ...
+  envStorage: new EnvPostgresAdapter({ connectionString: process.env.DATABASE_URL }),
+});
+```
+
+Omit `envStorage` to use the default `FileEnvStorage` (`<dataDir>/station-env.json`).
+
+### 25.3 Define / scope / rotate vars via the API
+
+```bash
+# Global var — injected into every signal and beacon (admin scope).
+curl -X POST https://station.example.com/api/v1/env \
+  -H "Authorization: Bearer sk_live_admin" -H "Content-Type: application/json" \
+  -d '{"key":"STRIPE_API_KEY","value":"sk_live_…","secret":true}'
+
+# Var scoped to a single signal — overrides a global of the same key for that signal only.
+curl -X POST https://station.example.com/api/v1/env \
+  -H "Authorization: Bearer sk_live_admin" -H "Content-Type: application/json" \
+  -d '{"key":"DB_URL","value":"postgres://…","targets":[{"kind":"signal","name":"charge"}]}'
+
+# Rotate a value (PATCH); secret values never come back on GET.
+curl -X PATCH https://station.example.com/api/v1/env/<id> \
+  -H "Authorization: Bearer sk_live_admin" -H "Content-Type: application/json" \
+  -d '{"value":"sk_live_new"}'
+
+# List (secret values redacted to null) — read scope.
+curl https://station.example.com/api/v1/env -H "Authorization: Bearer sk_live_read"
+```
+
+Or use the dashboard **Environment** page: add a variable, toggle **Secret**, choose **Global** or **Specific targets**, and it flags any required-but-undefined vars per signal/beacon. Changes take effect on the next run — no restart of the Station process.
+
+### 25.4 Programmatic store use (hand-rolled runner)
+
+```ts
+import { SignalRunner } from "station-signal";
+import { EnvStore } from "station-env";
+import { EnvSqliteAdapter } from "station-adapter-sqlite/env";
+
+const envStore = new EnvStore(new EnvSqliteAdapter({ dbPath: "./jobs.db" }));
+await envStore.create({ key: "API_TOKEN", value: "…", secret: true });
+
+const runner = new SignalRunner({
+  signalsDir: "./signals",
+  adapter,
+  envProvider: envStore,   // resolves + injects env, and backs `.env()` enforcement
+});
+```
+
+---
+
 ## Quick Reference
 
 | Concept | Syntax |

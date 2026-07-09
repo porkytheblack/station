@@ -52,6 +52,15 @@ if (!signalName || !signalFile || !runId || rawInput === undefined) {
   process.exit(1);
 }
 
+// Apply store-managed env vars before the signal file is imported, so both
+// module-level code and the handler read them via process.env as usual.
+// Delivered over IPC (not the spawn env) to keep secrets out of /proc.
+if (job.env) {
+  for (const [key, value] of Object.entries(job.env)) {
+    process.env[key] = value;
+  }
+}
+
 /**
  * Send a lifecycle event to the parent runner via IPC (if available).
  * Returns a promise that resolves once the message is flushed (H4).
