@@ -16,7 +16,9 @@ test("applies sensible defaults", () => {
   assert.equal(b.name, "defaults");
   assert.equal(b.mode, "run");
   assert.equal(b.restartPolicy, "on-failure");
+  assert.equal(b.startMode, "auto");
   assert.equal(b.autoStart, true);
+  assert.equal(b.maxInstances, undefined, "unset means the runner's default cap applies");
   assert.equal(b.stopTimeoutMs, DEFAULT_STOP_TIMEOUT_MS);
   assert.deepEqual(b.backoff, DEFAULT_BACKOFF);
   assert.equal(b.heartbeatIntervalMs, undefined);
@@ -41,7 +43,30 @@ test("restart / stopTimeout / manualStart are recorded", () => {
     .run(async () => {});
   assert.equal(b.restartPolicy, "always");
   assert.equal(b.stopTimeoutMs, 2_000);
+  assert.equal(b.startMode, "manual");
   assert.equal(b.autoStart, false);
+});
+
+test("start modes select how instances come into existence", () => {
+  const auto = beacon("m-auto").run(async () => {});
+  const manual = beacon("m-manual").manualStart().run(async () => {});
+  const onDemand = beacon("m-demand").onDemand().run(async () => {});
+  assert.deepEqual(
+    [auto.startMode, manual.startMode, onDemand.startMode],
+    ["auto", "manual", "on-demand"],
+  );
+  // autoStart stays available as the derived boolean.
+  assert.deepEqual([auto.autoStart, manual.autoStart, onDemand.autoStart], [true, false, false]);
+
+  // .startMode() is the general form the shorthands delegate to.
+  assert.equal(beacon("m-x").startMode("on-demand").run(async () => {}).startMode, "on-demand");
+});
+
+test("maxInstances is recorded and must be a positive integer", () => {
+  assert.equal(beacon("cap").maxInstances(5).run(async () => {}).maxInstances, 5);
+  assert.throws(() => beacon("cap2").maxInstances(0), /positive integer/);
+  assert.throws(() => beacon("cap3").maxInstances(2.5), /positive integer/);
+  assert.throws(() => beacon("cap4").maxInstances(-1), /positive integer/);
 });
 
 test("backoff parses intervals and validates factor", () => {

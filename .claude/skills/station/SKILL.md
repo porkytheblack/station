@@ -44,6 +44,8 @@ Triggers include:
 
 19. **Beacons are the long-running primitive — import `beacon`/`z` from `station-beacon`.** A beacon is a supervised process (server/poller/client), not a job: it isn't triggered, it's started/stopped/restarted by the `BeaconRunner`, which keeps it alive per a restart policy. Use `.run(handler)` for a general long-running handler or `.poll(interval, fn)` for an interval loop — never both. One beacon per file, exported for auto-discovery. Long-running `.run()` handlers should watch `ctx.signal` and end with `await ctx.untilStopped()` (or their own loop); returning early is treated as a clean completion. `station-beacon` has `station-signal` as a peer dependency.
 
+20. **One beacon definition can run many instances.** Each instance is supervised independently with its own id, config, status, and logs. `.manualStart()` seeds one instance but leaves it stopped; `.onDemand()` seeds none, so instances exist only when created at runtime via `runner.createInstance()` or `POST /api/beacons/:name/instances`. The definition-owned instance's id **is** the beacon name (so `startBeacon`/`stopBeacon` still work and old single-instance state carries over); runtime-created ones get their own ids and can be deleted. `start()` never settles while supervising — `await runner.whenReady()` before creating instances at boot.
+
 ## Signal Pattern
 
 ```ts
@@ -207,6 +209,18 @@ export const priceWatcher = beacon("price-watcher")
     if (price > 100) await priceAlert.trigger({ price });
   });
 
+// ON-DEMAND — one definition, many instances, each created via the API with
+// its own config (per tenant / queue / stream). Nothing starts on discovery.
+export const queueWorker = beacon("queue-worker")
+  .config(z.object({ queue: z.string() }))
+  .onDemand()
+  .maxInstances(8)
+  .run(async (ctx) => {
+    ctx.log(`instance ${ctx.instanceId} draining ${ctx.config.queue}`);
+    ctx.ready();
+    await ctx.untilStopped();
+  });
+
 // CLIENT — reconnects on failure with backoff + startup + heartbeat liveness
 export const streamConsumer = beacon("stream-consumer")
   .restart("on-failure")
@@ -223,9 +237,9 @@ export const streamConsumer = beacon("stream-consumer")
   });
 ```
 
-The handler `ctx`: `config`, `name`, `incarnation`, `signal` (AbortSignal that
-fires on stop), `ready()`, `heartbeat()`, `log(msg)`, `onStop(fn)`,
-`untilStopped()`.
+The handler `ctx`: `config`, `name`, `instanceId`, `incarnation`, `signal`
+(AbortSignal that fires on stop), `ready()`, `heartbeat()`, `log(msg)`,
+`onStop(fn)`, `untilStopped()`.
 
 ### Beacon Runner Setup
 
@@ -239,13 +253,37 @@ const beaconRunner = new BeaconRunner({
   signalRunner, // optional: lets beacons trigger signals into the shared queue
 });
 
-await beaconRunner.start();
+beaconRunner.start().catch(console.error);   // only settles when the supervisor stops
+await beaconRunner.whenReady();              // discovery + instance hydration done
 
-// Runtime control — the supervisor reconciles toward desired state
+// Definition-level control — acts on the beacon's definition-owned instance
 await beaconRunner.startBeacon("stream-consumer");   // or { config }
 await beaconRunner.stopBeacon("stream-consumer");
 await beaconRunner.restartBeacon("stream-consumer");
 const instance = await beaconRunner.getInstance("stream-consumer");
+
+// Many instances of one beacon, each with its own config
+const worker = await beaconRunner.createInstance("queue-worker", {
+  id: "worker-acme",                  // optional — generated when omitted
+  label: "acme",
+  config: { queue: "acme" },          // validated against the config schema
+});                                   // starts immediately; pass start: false to stage it
+await beaconRunner.stopInstance(worker.id);
+await beaconRunner.updateInstance(worker.id, { config: { queue: "acme2" }, restart: true });
+await beaconRunner.deleteInstance(worker.id);        // stops, then removes the record
+await beaconRunner.listInstances({ beaconName: "queue-worker" });
+```
+
+Over HTTP (dashboard API; the v1 API mirrors it under `/api/v1` with
+create/start on `trigger`, stop on `cancel`, patch/delete on `admin`):
+
+```
+POST   /api/beacons/:name/instances                 { id?, label?, config?, start? }
+GET    /api/beacons/:name/instances
+POST   /api/beacons/:name/instances/:id/{start,stop,restart}
+PATCH  /api/beacons/:name/instances/:id             { config?, label?, restart? }
+DELETE /api/beacons/:name/instances/:id
+POST   /api/beacons/:name/stop?all=true             stop every instance
 ```
 
 ## Runner Setup
@@ -455,11 +493,14 @@ docker run -p 4400:4400 \
 | `.startupTimeout(ms)` | Deadline from spawn to reach ready (`ctx.ready()`) — restart if it never comes up. Off by default |
 | `.stopTimeout(ms)` | Grace period before force-kill on stop (default `10s`) |
 | `.env(...keys)` | Require env var keys — the supervisor marks the beacon `errored` instead of spawning if any is missing |
-| `.manualStart()` | Don't auto-start on discovery |
+| `.startMode(mode)` | `"auto"` (default), `"manual"`, or `"on-demand"` |
+| `.manualStart()` | Seed one instance but leave it stopped until started |
+| `.onDemand()` | Seed nothing — instances are created at runtime via the API |
+| `.maxInstances(n)` | Cap concurrent instances (default: the runner's `maxInstancesPerBeacon`, 100) |
 | `.run(handler)` | Finalize with a long-running handler |
 | `.poll(interval, fn)` | Finalize as a poller — `fn` runs every `interval` |
 
-Beacon runner controls: `startBeacon(name, { config? })`, `stopBeacon(name)`, `restartBeacon(name)`, `getInstance(name)`, `listInstances()`, `register(beacon, filePath)`.
+Beacon runner controls — definition-level: `startBeacon(name, { config? })`, `stopBeacon(name)`, `restartBeacon(name)`, `stopAllInstances(name)`. Per-instance: `createInstance(name, opts)`, `startInstance(id)`, `stopInstance(id)`, `restartInstance(id)`, `updateInstance(id, opts)`, `deleteInstance(id)`, `getInstance(id)`, `listInstances({ beaconName? })`. Setup: `register(beacon, filePath)`, `whenReady()`.
 
 ## Subscriber Interfaces
 
