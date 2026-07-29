@@ -962,6 +962,22 @@ a:hover {
   border-color: var(--patina);
 }
 
+.input-text {
+  width: 100%;
+  padding: 0.4rem 0.55rem;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--code-text);
+  background: var(--code-bg);
+  border: var(--border-width) solid var(--wire);
+  border-radius: 4px;
+  outline: none;
+}
+
+.input-text:focus {
+  border-color: var(--patina);
+}
+
 /* ─── Log Container ──────────────────────────────────────── */
 
 .log-container {
@@ -1220,6 +1236,12 @@ a:hover {
 
 .station-table tr.clickable-row:hover td {
   background: var(--concrete-dark);
+}
+
+/* Marks the row whose detail pane is currently shown (e.g. a beacon instance). */
+.station-table tr.is-selected td {
+  background: var(--concrete-dark);
+  box-shadow: inset 2px 0 0 var(--patina);
 }
 
 /* ─── Page Header ────────────────────────────────────────── */

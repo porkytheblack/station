@@ -9,9 +9,14 @@ import type { LogBuffer } from "./log-buffer.js";
 import type { LogStore } from "./log-store.js";
 import { serializeZodSchema, type SignalMeta, type BroadcastMeta } from "./metadata.js";
 
-/** LogStore/LogBuffer key under which a beacon's log lines are stored. */
-export function beaconLogKey(beaconName: string): string {
-  return `beacon:${beaconName}`;
+/**
+ * LogStore/LogBuffer key under which a beacon instance's log lines are stored.
+ * Keyed per instance, since a beacon can have several running at once. For a
+ * beacon's definition-owned instance the id is the beacon name, so existing
+ * keys are unchanged.
+ */
+export function beaconLogKey(instanceId: string): string {
+  return `beacon:${instanceId}`;
 }
 
 function serializeInstance(inst: BeaconInstance): Record<string, unknown> {
@@ -338,6 +343,14 @@ export class StationBeaconSubscriber implements BeaconSubscriber {
     this.emit("beacon:discovered", event);
   }
 
+  onBeaconInstanceCreated(event: { instance: BeaconInstance }): void {
+    this.emitInstance("beacon:instance-created", event.instance);
+  }
+
+  onBeaconInstanceRemoved(event: { instance: BeaconInstance }): void {
+    this.emitInstance("beacon:instance-removed", event.instance);
+  }
+
   onBeaconStarting(event: { instance: BeaconInstance }): void {
     this.emitInstance("beacon:starting", event.instance);
   }
@@ -380,7 +393,7 @@ export class StationBeaconSubscriber implements BeaconSubscriber {
   onBeaconLog(event: { instance: BeaconInstance; level: "log" | "stdout" | "stderr"; message: string }): void {
     const timestamp = new Date().toISOString();
     const entry = {
-      runId: beaconLogKey(event.instance.beaconName),
+      runId: beaconLogKey(event.instance.id),
       signalName: event.instance.beaconName,
       level: event.level === "stderr" ? ("stderr" as const) : ("stdout" as const),
       message: event.message,
@@ -390,6 +403,7 @@ export class StationBeaconSubscriber implements BeaconSubscriber {
     this.logStore?.add(entry);
     this.emit("beacon:log", {
       beaconName: event.instance.beaconName,
+      instanceId: event.instance.id,
       incarnation: event.instance.incarnation,
       level: event.level,
       message: event.message,

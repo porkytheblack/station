@@ -3,6 +3,7 @@ import Database from "better-sqlite3";
 import type {
   BeaconStateAdapter,
   BeaconInstance,
+  BeaconInstanceFilter,
   BeaconInstancePatch,
   BeaconEvent,
 } from "station-beacon";
@@ -14,7 +15,7 @@ export interface BeaconSqliteAdapterOptions {
   tableName?: string;
   /** Table name for the lifecycle event log. @default "beacon_events" */
   eventsTableName?: string;
-  /** Max lifecycle events retained per beacon. @default 1000 */
+  /** Max lifecycle events retained per instance. @default 1000 */
   maxEventsPerBeacon?: number;
 }
 
@@ -46,7 +47,10 @@ export class BeaconSqliteAdapter implements BeaconStateAdapter {
 
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS ${this.table} (
-        beacon_name        TEXT PRIMARY KEY,
+        id                 TEXT PRIMARY KEY,
+        beacon_name        TEXT NOT NULL,
+        label              TEXT,
+        origin             TEXT NOT NULL DEFAULT 'definition',
         status             TEXT NOT NULL,
         desired_state      TEXT NOT NULL,
         incarnation        INTEGER NOT NULL DEFAULT 0,
@@ -68,6 +72,7 @@ export class BeaconSqliteAdapter implements BeaconStateAdapter {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS ${this.eventsTable} (
         id          TEXT PRIMARY KEY,
+        instance_id TEXT NOT NULL,
         beacon_name TEXT NOT NULL,
         incarnation INTEGER NOT NULL,
         type        TEXT NOT NULL,
@@ -77,26 +82,76 @@ export class BeaconSqliteAdapter implements BeaconStateAdapter {
       )
     `);
 
-    // Monotonic sequence so events for a beacon list newest-first even when the
-    // `at` timestamps collide (same-millisecond bursts).
+    this.migrateToMultiInstance();
+
+    // Monotonic sequence so events list newest-first even when the `at`
+    // timestamps collide (same-millisecond bursts).
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_${this.eventsTable}_instance
+        ON ${this.eventsTable} (instance_id, seq)
+    `);
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_${this.eventsTable}_beacon
         ON ${this.eventsTable} (beacon_name, seq)
     `);
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_${this.table}_beacon
+        ON ${this.table} (beacon_name)
+    `);
+  }
+
+  private columns(table: string): Set<string> {
+    const rows = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    return new Set(rows.map((r) => r.name));
+  }
+
+  /**
+   * Bring a pre-multi-instance database forward. The old layout keyed instances
+   * by `beacon_name`; the new one keys them by instance id, and a beacon's
+   * definition-owned instance uses the beacon name as its id — so the migration
+   * is a rename plus a backfill, and every existing row keeps its identity,
+   * desired state, and restart counters.
+   */
+  private migrateToMultiInstance(): void {
+    if (!this.columns(this.table).has("id")) {
+      // The old primary key column becomes the instance id, so the row keeps
+      // its identity (and the PK constraint follows the rename).
+      this.db.exec(`ALTER TABLE ${this.table} RENAME COLUMN beacon_name TO id`);
+      this.db.exec(`ALTER TABLE ${this.table} ADD COLUMN beacon_name TEXT`);
+      this.db.exec(`UPDATE ${this.table} SET beacon_name = id WHERE beacon_name IS NULL`);
+    }
+    if (!this.columns(this.table).has("label")) {
+      this.db.exec(`ALTER TABLE ${this.table} ADD COLUMN label TEXT`);
+    }
+    if (!this.columns(this.table).has("origin")) {
+      this.db.exec(
+        `ALTER TABLE ${this.table} ADD COLUMN origin TEXT NOT NULL DEFAULT 'definition'`,
+      );
+    }
+
+    if (!this.columns(this.eventsTable).has("instance_id")) {
+      this.db.exec(`ALTER TABLE ${this.eventsTable} ADD COLUMN instance_id TEXT`);
+      this.db.exec(
+        `UPDATE ${this.eventsTable} SET instance_id = beacon_name WHERE instance_id IS NULL`,
+      );
+    }
   }
 
   async upsertInstance(instance: BeaconInstance): Promise<void> {
     this.prep(`
       INSERT OR REPLACE INTO ${this.table}
-        (beacon_name, status, desired_state, incarnation, restart_count, pid, config,
+        (id, beacon_name, label, origin, status, desired_state, incarnation, restart_count, pid, config,
          started_at, ready_at, last_heartbeat_at, last_exit_at, last_exit_reason,
          last_error, next_restart_at, created_at, updated_at)
       VALUES
-        (@beacon_name, @status, @desired_state, @incarnation, @restart_count, @pid, @config,
+        (@id, @beacon_name, @label, @origin, @status, @desired_state, @incarnation, @restart_count, @pid, @config,
          @started_at, @ready_at, @last_heartbeat_at, @last_exit_at, @last_exit_reason,
          @last_error, @next_restart_at, @created_at, @updated_at)
     `).run({
+      id: instance.id,
       beacon_name: instance.beaconName,
+      label: instance.label ?? null,
+      origin: instance.origin,
       status: instance.status,
       desired_state: instance.desiredState,
       incarnation: instance.incarnation,
@@ -115,15 +170,16 @@ export class BeaconSqliteAdapter implements BeaconStateAdapter {
     });
   }
 
-  async getInstance(beaconName: string): Promise<BeaconInstance | null> {
-    const row = this.prep(`SELECT * FROM ${this.table} WHERE beacon_name = ?`).get(beaconName) as
+  async getInstance(instanceId: string): Promise<BeaconInstance | null> {
+    const row = this.prep(`SELECT * FROM ${this.table} WHERE id = ?`).get(instanceId) as
       | Record<string, unknown>
       | undefined;
     return row ? rowToInstance(row) : null;
   }
 
-  async updateInstance(beaconName: string, patch: BeaconInstancePatch): Promise<void> {
+  async updateInstance(instanceId: string, patch: BeaconInstancePatch): Promise<void> {
     const map: Record<string, { col: string; kind: "str" | "num" | "date" }> = {
+      label: { col: "label", kind: "str" },
       status: { col: "status", kind: "str" },
       desiredState: { col: "desired_state", kind: "str" },
       incarnation: { col: "incarnation", kind: "num" },
@@ -141,7 +197,7 @@ export class BeaconSqliteAdapter implements BeaconStateAdapter {
     };
 
     const setClauses: string[] = [];
-    const values: Record<string, unknown> = { beacon_name: beaconName };
+    const values: Record<string, unknown> = { id: instanceId };
     let touched = false;
 
     for (const [key, value] of Object.entries(patch)) {
@@ -166,25 +222,31 @@ export class BeaconSqliteAdapter implements BeaconStateAdapter {
     }
 
     if (setClauses.length === 0) return;
-    this.prep(`UPDATE ${this.table} SET ${setClauses.join(", ")} WHERE beacon_name = @beacon_name`).run(values);
+    this.prep(`UPDATE ${this.table} SET ${setClauses.join(", ")} WHERE id = @id`).run(values);
   }
 
-  async listInstances(): Promise<BeaconInstance[]> {
-    const rows = this.prep(`SELECT * FROM ${this.table} ORDER BY beacon_name ASC`).all() as Record<string, unknown>[];
+  async listInstances(filter?: BeaconInstanceFilter): Promise<BeaconInstance[]> {
+    const rows = filter?.beaconName
+      ? (this.prep(
+          `SELECT * FROM ${this.table} WHERE beacon_name = ? ORDER BY id ASC`,
+        ).all(filter.beaconName) as Record<string, unknown>[])
+      : (this.prep(`SELECT * FROM ${this.table} ORDER BY id ASC`).all() as Record<string, unknown>[]);
     return rows.map(rowToInstance);
   }
 
-  async removeInstance(beaconName: string): Promise<void> {
-    this.prep(`DELETE FROM ${this.table} WHERE beacon_name = ?`).run(beaconName);
+  async removeInstance(instanceId: string): Promise<void> {
+    this.prep(`DELETE FROM ${this.table} WHERE id = ?`).run(instanceId);
+    this.prep(`DELETE FROM ${this.eventsTable} WHERE instance_id = ?`).run(instanceId);
   }
 
   async addEvent(event: BeaconEvent): Promise<void> {
     const seq = (this.prep(`SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM ${this.eventsTable}`).get() as { next: number }).next;
     this.prep(`
-      INSERT INTO ${this.eventsTable} (id, beacon_name, incarnation, type, message, at, seq)
-      VALUES (@id, @beacon_name, @incarnation, @type, @message, @at, @seq)
+      INSERT INTO ${this.eventsTable} (id, instance_id, beacon_name, incarnation, type, message, at, seq)
+      VALUES (@id, @instance_id, @beacon_name, @incarnation, @type, @message, @at, @seq)
     `).run({
       id: event.id,
+      instance_id: event.instanceId,
       beacon_name: event.beaconName,
       incarnation: event.incarnation,
       type: event.type,
@@ -192,21 +254,29 @@ export class BeaconSqliteAdapter implements BeaconStateAdapter {
       at: dateToStr(event.at),
       seq,
     });
-    // Prune this beacon's oldest events beyond the retention cap. The subquery
+    // Prune this instance's oldest events beyond the retention cap. The subquery
     // returns the seq of the maxEvents-th newest row (via LIMIT 1 OFFSET
-    // maxEvents); rows at/below it are deleted. When the beacon has <= maxEvents
-    // rows the subquery yields no row → NULL → `seq <= NULL` deletes nothing.
+    // maxEvents); rows at/below it are deleted. When the instance has <=
+    // maxEvents rows the subquery yields no row → NULL → `seq <= NULL` deletes
+    // nothing.
     this.prep(
       `DELETE FROM ${this.eventsTable}
-       WHERE beacon_name = ?
+       WHERE instance_id = ?
          AND seq <= (
            SELECT seq FROM ${this.eventsTable}
-           WHERE beacon_name = ? ORDER BY seq DESC LIMIT 1 OFFSET ?
+           WHERE instance_id = ? ORDER BY seq DESC LIMIT 1 OFFSET ?
          )`,
-    ).run(event.beaconName, event.beaconName, this.maxEvents);
+    ).run(event.instanceId, event.instanceId, this.maxEvents);
   }
 
-  async listEvents(beaconName: string, limit = 100): Promise<BeaconEvent[]> {
+  async listEvents(instanceId: string, limit = 100): Promise<BeaconEvent[]> {
+    const rows = this.prep(
+      `SELECT * FROM ${this.eventsTable} WHERE instance_id = ? ORDER BY seq DESC LIMIT ?`,
+    ).all(instanceId, limit) as Record<string, unknown>[];
+    return rows.map(rowToEvent);
+  }
+
+  async listBeaconEvents(beaconName: string, limit = 100): Promise<BeaconEvent[]> {
     const rows = this.prep(
       `SELECT * FROM ${this.eventsTable} WHERE beacon_name = ? ORDER BY seq DESC LIMIT ?`,
     ).all(beaconName, limit) as Record<string, unknown>[];
@@ -234,7 +304,10 @@ export class BeaconSqliteAdapter implements BeaconStateAdapter {
 
 function rowToInstance(row: Record<string, unknown>): BeaconInstance {
   return {
-    beaconName: row.beacon_name as string,
+    id: row.id as string,
+    beaconName: (row.beacon_name as string | null) ?? (row.id as string),
+    label: (row.label as string | null) ?? undefined,
+    origin: ((row.origin as string | null) ?? "definition") as BeaconInstance["origin"],
     status: row.status as BeaconInstance["status"],
     desiredState: row.desired_state as BeaconInstance["desiredState"],
     incarnation: Number(row.incarnation),
@@ -256,6 +329,7 @@ function rowToInstance(row: Record<string, unknown>): BeaconInstance {
 function rowToEvent(row: Record<string, unknown>): BeaconEvent {
   return {
     id: row.id as string,
+    instanceId: ((row.instance_id as string | null) ?? (row.beacon_name as string)) ?? "",
     beaconName: row.beacon_name as string,
     incarnation: Number(row.incarnation),
     type: row.type as BeaconEvent["type"],

@@ -85,11 +85,47 @@ export const DEFAULT_STOP_TIMEOUT_MS = 10_000;
 export const FATAL_EXIT_CODE = 78;
 
 /**
- * The supervised record for a beacon. Exactly one exists per beacon name; the
- * supervisor updates it as incarnations start, become ready, and exit.
+ * How a beacon definition comes to have running instances.
+ *
+ * - `auto`      — the supervisor seeds one instance and starts it on discovery.
+ * - `manual`    — the supervisor seeds one instance but leaves it stopped until
+ *                 someone starts it (dashboard or API).
+ * - `on-demand` — no instance is seeded at all. Instances are created at runtime
+ *                 through the API, each with its own config, and are removed
+ *                 when they are deleted.
+ */
+export type StartMode = "auto" | "manual" | "on-demand";
+
+/**
+ * Where an instance record came from.
+ *
+ * - `definition` — seeded by the supervisor from the beacon file. There is at
+ *                  most one per beacon, its id is the beacon name, and it can
+ *                  be stopped but not deleted.
+ * - `api`        — created at runtime (dashboard / API). Fully removable.
+ */
+export type BeaconInstanceOrigin = "definition" | "api";
+
+/**
+ * A supervised instance of a beacon definition. A definition may have many:
+ * the one seeded from the file (`origin: "definition"`, id === beacon name)
+ * plus any number created at runtime with their own config. The supervisor
+ * drives each one independently between its desired state and its observed
+ * lifecycle status.
  */
 export interface BeaconInstance {
+  /**
+   * Unique instance id — the key everything else hangs off. The
+   * definition-owned instance uses the beacon name as its id, so pre-existing
+   * single-instance records keep working unchanged.
+   */
+  id: string;
+  /** Name of the beacon definition this instance runs. */
   beaconName: string;
+  /** Optional human-readable label for runtime-created instances. */
+  label?: string;
+  /** Whether this instance came from the beacon file or was created at runtime. */
+  origin: BeaconInstanceOrigin;
   status: BeaconStatus;
   desiredState: DesiredState;
   /** Total number of incarnations started over this instance's lifetime. */
@@ -118,11 +154,14 @@ export interface BeaconInstance {
   updatedAt: Date;
 }
 
-/** Identity fields (beaconName, createdAt) are immutable; everything else is patchable. */
-export type BeaconInstancePatch = Partial<Omit<BeaconInstance, "beaconName" | "createdAt">>;
+/** Identity fields (id, beaconName, origin, createdAt) are immutable; everything else is patchable. */
+export type BeaconInstancePatch = Partial<
+  Omit<BeaconInstance, "id" | "beaconName" | "origin" | "createdAt">
+>;
 
 /** Lifecycle event kinds recorded to the optional event log. */
 export type BeaconEventType =
+  | "created"
   | "starting"
   | "ready"
   | "heartbeat"
@@ -135,9 +174,21 @@ export type BeaconEventType =
 /** An append-only lifecycle event, for run history / dashboards. */
 export interface BeaconEvent {
   id: string;
+  /** The instance the event belongs to. */
+  instanceId: string;
+  /** The beacon definition the instance runs — lets a definition-wide timeline be queried directly. */
   beaconName: string;
   incarnation: number;
   type: BeaconEventType;
   message?: string;
   at: Date;
 }
+
+/**
+ * Instance ids appear in URLs and adapter primary keys. Runtime-created ids are
+ * caller-supplied, so they're constrained to an unambiguous, path-safe subset.
+ */
+export const VALID_INSTANCE_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/;
+
+/** Upper bound on an instance id, so a caller can't blow past adapter column widths. */
+export const MAX_INSTANCE_ID_LENGTH = 128;

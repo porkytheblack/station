@@ -1,4 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,18 +11,29 @@ import {
 } from "station-signal";
 import type { AnyBeacon } from "./beacon.js";
 import { computeBackoffMs, shouldResetBackoff, shouldRestart } from "./backoff.js";
-import type { BeaconStateAdapter } from "./adapters/index.js";
+import type { BeaconInstanceFilter, BeaconStateAdapter } from "./adapters/index.js";
 import { BeaconMemoryAdapter } from "./adapters/memory.js";
+import {
+  BeaconInstanceExistsError,
+  BeaconInstanceLimitError,
+  BeaconInstanceNotFoundError,
+  BeaconValidationError,
+} from "./errors.js";
 import type { BeaconIPCMessage, BeaconJobInitMessage, BeaconSubscriber } from "./subscribers/index.js";
 import {
   type BeaconInstance,
   type BeaconInstancePatch,
   type ExitReason,
   FATAL_EXIT_CODE,
+  MAX_INSTANCE_ID_LENGTH,
+  VALID_INSTANCE_ID,
 } from "./types.js";
 import { isBeacon } from "./util.js";
 
 const BOOTSTRAP = fileURLToPath(new URL("./bootstrap.js", import.meta.url));
+
+/** Fallback cap on instances per beacon when the definition doesn't set its own. */
+const DEFAULT_MAX_INSTANCES_PER_BEACON = 100;
 
 let _tsxImport: string | undefined;
 function getTsxImport(): string | undefined {
@@ -44,7 +56,7 @@ interface RegisteredBeacon {
   filePath: string;
 }
 
-/** Volatile, in-process supervision state for the live incarnation of a beacon. */
+/** Volatile, in-process supervision state for the live incarnation of an instance. */
 interface Supervised {
   child?: ChildProcess;
   /** The supervisor asked this incarnation to stop (SIGTERM sent). */
@@ -57,6 +69,11 @@ interface Supervised {
   fatal?: boolean;
   /** After this incarnation exits, restart it immediately regardless of policy. */
   forceRestart: boolean;
+  /**
+   * The instance is being deleted — exit handling must not schedule a restart
+   * or resurrect the record that `deleteInstance` is about to remove.
+   */
+  removing?: boolean;
   /** Guards against handling both 'error' and 'exit' for one incarnation. */
   exitHandled: boolean;
   /** When the child was spawned — used for uptime / backoff-reset math. */
@@ -66,6 +83,32 @@ interface Supervised {
   lastHeartbeatMs?: number;
   /** SIGKILL escalation timer armed when a stop was requested. */
   killTimer?: ReturnType<typeof setTimeout>;
+}
+
+/** Options for creating a beacon instance at runtime. */
+export interface CreateInstanceOptions {
+  /**
+   * Instance id. Must be unique across all beacons, and is what the API and
+   * dashboard address the instance by. Generated from the beacon name when
+   * omitted.
+   */
+  id?: string;
+  /** Optional human-readable label. */
+  label?: string;
+  /** Config for this instance — validated against the beacon's config schema. */
+  config?: unknown;
+  /** Start the instance immediately. @default true */
+  start?: boolean;
+}
+
+/** Options for patching an existing instance. */
+export interface UpdateInstanceOptions {
+  /** Replace the instance's config. Takes effect on the next start. */
+  config?: unknown;
+  /** Replace the instance's label. */
+  label?: string;
+  /** Restart a running instance so the new config takes effect now. @default false */
+  restart?: boolean;
 }
 
 export interface BeaconRunnerOptions {
@@ -88,13 +131,25 @@ export interface BeaconRunnerOptions {
    * satisfy `.env()` requirements, alongside the host process env.
    */
   envProvider?: EnvProvider;
+  /**
+   * Default cap on concurrent instances per beacon, applied to beacons that
+   * don't declare their own `.maxInstances()`. Bounds how many processes a
+   * runtime caller can spawn. @default 100
+   */
+  maxInstancesPerBeacon?: number;
 }
 
 /**
- * Supervises long-running beacon processes. Each enabled beacon runs in its own
- * child process; the supervisor keeps it alive per its restart policy, applies
- * exponential backoff between restarts, detects heartbeat stalls, and reconciles
- * a per-beacon desired state (running/stopped) you can flip at runtime.
+ * Supervises long-running beacon processes. Each running beacon instance gets
+ * its own child process; the supervisor keeps it alive per its restart policy,
+ * applies exponential backoff between restarts, detects heartbeat stalls, and
+ * reconciles a per-instance desired state (running/stopped) you can flip at
+ * runtime.
+ *
+ * A beacon definition can back many instances. Beacons with start mode `auto`
+ * or `manual` get one instance seeded from the file (its id is the beacon
+ * name); any beacon can additionally have instances created at runtime via
+ * {@link BeaconRunner.createInstance}, each with its own config.
  */
 export class BeaconRunner {
   private adapter: BeaconStateAdapter;
@@ -102,9 +157,10 @@ export class BeaconRunner {
   private pollIntervalMs: number;
   private subscribers: BeaconSubscriber[];
   private registry = new Map<string, RegisteredBeacon>();
-  /** Authoritative working copy of instance records; write-through to the adapter. */
+  /** Authoritative working copy of instance records, keyed by instance id. */
   private instances = new Map<string, BeaconInstance>();
   private supervised = new Map<string, Supervised>();
+  private maxInstancesPerBeacon: number;
 
   private signalAdapterName?: string;
   private signalAdapterOptions?: Record<string, unknown>;
@@ -116,12 +172,17 @@ export class BeaconRunner {
   private ticking = false;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private pollResolve: (() => void) | null = null;
+  /** Resolves once start() has finished discovery, hydration, and seeding. */
+  private readyPromise: Promise<void>;
+  private markReady!: () => void;
 
   constructor(options: BeaconRunnerOptions = {}) {
     this.adapter = options.adapter ?? new BeaconMemoryAdapter();
     this.beaconsDir = options.beaconsDir;
     this.pollIntervalMs = options.pollIntervalMs ?? 1000;
     this.subscribers = options.subscribers ? [...options.subscribers] : [];
+    this.maxInstancesPerBeacon =
+      options.maxInstancesPerBeacon ?? DEFAULT_MAX_INSTANCES_PER_BEACON;
 
     const signalAdapter = options.signalAdapter ?? options.signalRunner?.getAdapter();
     if (signalAdapter && isSerializableAdapter(signalAdapter)) {
@@ -131,6 +192,24 @@ export class BeaconRunner {
       this.signalAdapterImport = manifest.moduleUrl;
     }
     this.envProvider = options.envProvider;
+    this.readyPromise = this.armReady();
+  }
+
+  private armReady(): Promise<void> {
+    return new Promise<void>((resolve) => {
+      this.markReady = resolve;
+    });
+  }
+
+  /**
+   * Resolves once `start()` has discovered beacons, hydrated persisted
+   * instances, and seeded definition-owned ones — i.e. once `listInstances()`
+   * and the instance controls see the full picture. `start()` itself never
+   * settles while the supervisor is running, so callers that serve an API on
+   * top of the runner should await this instead.
+   */
+  whenReady(): Promise<void> {
+    return this.readyPromise;
   }
 
   static create(
@@ -167,7 +246,9 @@ export class BeaconRunner {
     filePath: string;
     mode: "run" | "poll";
     restartPolicy: string;
+    startMode: string;
     autoStart: boolean;
+    maxInstances: number;
     requiredEnv?: string[];
   }> {
     return Array.from(this.registry.values()).map(({ beacon, filePath }) => ({
@@ -175,7 +256,9 @@ export class BeaconRunner {
       filePath,
       mode: beacon.mode,
       restartPolicy: beacon.restartPolicy,
+      startMode: beacon.startMode,
       autoStart: beacon.autoStart,
+      maxInstances: beacon.maxInstances ?? this.maxInstancesPerBeacon,
       requiredEnv: beacon.requiredEnv,
     }));
   }
@@ -188,16 +271,41 @@ export class BeaconRunner {
     return this.registry.get(name)?.beacon;
   }
 
-  /** Current instance record for a beacon (status, desired state, counters). */
-  async getInstance(name: string): Promise<BeaconInstance | null> {
-    const local = this.instances.get(name);
+  /**
+   * An instance record by id (status, desired state, counters). The
+   * definition-owned instance of a beacon uses the beacon name as its id.
+   */
+  async getInstance(instanceId: string): Promise<BeaconInstance | null> {
+    const local = this.instances.get(instanceId);
     if (local) return { ...local }; // copy — never leak the live internal record
-    return this.adapter.getInstance(name);
+    return this.adapter.getInstance(instanceId);
   }
 
-  /** All known instance records. */
-  async listInstances(): Promise<BeaconInstance[]> {
-    return Array.from(this.instances.values()).map((i) => ({ ...i }));
+  /** All known instance records, optionally narrowed to one beacon. */
+  async listInstances(filter?: BeaconInstanceFilter): Promise<BeaconInstance[]> {
+    const all = Array.from(this.instances.values());
+    const scoped = filter?.beaconName
+      ? all.filter((i) => i.beaconName === filter.beaconName)
+      : all;
+    return scoped.map((i) => ({ ...i }));
+  }
+
+  /** Lifecycle events for one instance, newest first. */
+  async listInstanceEvents(instanceId: string, limit = 100) {
+    return this.adapter.listEvents?.(instanceId, limit) ?? [];
+  }
+
+  /** Lifecycle events across every instance of a beacon, newest first. */
+  async listBeaconEvents(beaconName: string, limit = 100) {
+    if (this.adapter.listBeaconEvents) return this.adapter.listBeaconEvents(beaconName, limit);
+    // Older adapters only index by instance — merge each instance's slice.
+    if (!this.adapter.listEvents) return [];
+    const ids = (await this.listInstances({ beaconName })).map((i) => i.id);
+    const batches = await Promise.all(ids.map((id) => this.adapter.listEvents!(id, limit)));
+    return batches
+      .flat()
+      .sort((a, b) => b.at.getTime() - a.at.getTime())
+      .slice(0, limit);
   }
 
   private async discover(dir: string): Promise<void> {
@@ -251,15 +359,33 @@ export class BeaconRunner {
     // this, a second start() would run with reconcile()/spawnBeacon() short-
     // circuiting on `stopping`, silently supervising nothing.
     this.stopping = false;
+    // Re-arm readiness so a caller awaiting whenReady() after a restart waits
+    // for this boot's seeding, not the previous one's.
+    this.readyPromise = this.armReady();
 
     if (this.beaconsDir) {
       await this.discover(resolve(this.beaconsDir));
     }
 
-    // Seed or resume instance records for every registered beacon.
+    // Rebuild the instance world from the adapter on every boot. Dropping the
+    // in-memory copies first matters when a runner is restarted in-process:
+    // the stale records would otherwise shadow what hydrate() loads, and a
+    // volatile adapter (which forgets everything on close) could never re-seed
+    // from the definitions.
+    this.instances.clear();
+    this.supervised.clear();
+
+    // Adopt every persisted instance — including ones created at runtime in a
+    // previous supervisor lifetime, which have no counterpart in any file.
+    await this.hydrate();
+
+    // Seed the definition-owned instance for beacons that have one.
     for (const { beacon } of this.registry.values()) {
-      await this.seedOrResume(beacon);
+      if (beacon.startMode === "on-demand") continue;
+      await this.seedOrResumeDefinitionInstance(beacon);
     }
+
+    this.markReady();
 
     const shutdown = () => {
       console.log("[station-beacon] Received shutdown signal, stopping...");
@@ -294,6 +420,9 @@ export class BeaconRunner {
     if (this.stopping) return;
     this.stopping = true;
     this.running = false;
+    // Never leave a whenReady() awaiter hanging on a runner that is shutting
+    // down (or was stopped before it ever started).
+    this.markReady();
     // Wake the poll loop immediately so start()'s promise settles cleanly
     // instead of being abandoned mid-sleep (which surfaces as an unsettled
     // top-level await warning in callers that `await runner.start()`).
@@ -314,8 +443,8 @@ export class BeaconRunner {
     }
 
     if (options?.graceful) {
-      for (const [name, sup] of this.supervised) {
-        if (sup.child) this.initiateStop(name);
+      for (const [id, sup] of this.supervised) {
+        if (sup.child) this.initiateStop(id);
       }
       const timeout = options.timeoutMs ?? 10_000;
       const deadline = Date.now() + timeout;
@@ -341,22 +470,175 @@ export class BeaconRunner {
     }
   }
 
+  // ─── Instance management ───────────────────────────────────────────
+
+  /**
+   * Create a new instance of a beacon at runtime, with its own config, and (by
+   * default) start it. This is what lets one beacon definition run many times
+   * over — per tenant, per stream, per queue — driven by the API or dashboard.
+   */
+  async createInstance(
+    beaconName: string,
+    opts: CreateInstanceOptions = {},
+  ): Promise<BeaconInstance> {
+    const reg = this.registry.get(beaconName);
+    if (!reg) throw new Error(`Beacon "${beaconName}" is not registered`);
+    const beacon = reg.beacon;
+
+    // Validate config up front so a bad payload fails the API call rather than
+    // silently crash-looping a child process.
+    if (opts.config !== undefined) {
+      const parsed = beacon.configSchema.safeParse(opts.config);
+      if (!parsed.success) {
+        throw new BeaconValidationError(beaconName, parsed.error?.message ?? "invalid config");
+      }
+    }
+
+    const limit = beacon.maxInstances ?? this.maxInstancesPerBeacon;
+    const existingCount = Array.from(this.instances.values()).filter(
+      (i) => i.beaconName === beaconName,
+    ).length;
+    if (existingCount >= limit) {
+      throw new BeaconInstanceLimitError(beaconName, limit);
+    }
+
+    const id = opts.id !== undefined ? this.validateInstanceId(opts.id) : this.generateInstanceId(beaconName);
+    // Ids are unique across all beacons: they are adapter primary keys, and the
+    // bare beacon name is reserved for the definition-owned instance.
+    if (this.instances.has(id) || this.registry.has(id)) {
+      throw new BeaconInstanceExistsError(id);
+    }
+    if (await this.adapter.getInstance(id)) {
+      throw new BeaconInstanceExistsError(id);
+    }
+
+    const start = opts.start ?? true;
+    const now = new Date();
+    const config = opts.config !== undefined ? opts.config : beacon.defaultConfig;
+    const instance: BeaconInstance = {
+      id,
+      beaconName,
+      label: opts.label,
+      origin: "api",
+      status: start ? "backoff" : "stopped",
+      desiredState: start ? "running" : "stopped",
+      incarnation: 0,
+      restartCount: 0,
+      config: config !== undefined ? JSON.stringify(config) : undefined,
+      nextRestartAt: start ? now : undefined,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.instances.set(id, instance);
+    this.supervised.set(id, this.freshSupervised());
+    await this.adapter.upsertInstance(instance);
+    this.emit("onBeaconInstanceCreated", { instance: { ...instance } });
+    await this.addEvent(instance, "created", opts.label ? `label=${opts.label}` : undefined);
+    // Don't wait a whole poll interval to honour an API-driven start.
+    if (start) this.wakePoll();
+    return { ...instance };
+  }
+
+  /**
+   * Stop an instance and remove its record entirely. Only instances created at
+   * runtime can be deleted — the definition-owned one is re-seeded from the
+   * beacon file on every boot, so stop it instead.
+   */
+  async deleteInstance(instanceId: string, opts?: { timeoutMs?: number }): Promise<void> {
+    const inst = this.instances.get(instanceId);
+    if (!inst) throw new BeaconInstanceNotFoundError(instanceId);
+    if (inst.origin === "definition") {
+      throw new Error(
+        `Instance "${instanceId}" is owned by the beacon definition and cannot be deleted. Stop it instead.`,
+      );
+    }
+
+    const sup = this.supervised.get(instanceId);
+    if (sup) sup.removing = true;
+    await this.patch(instanceId, { desiredState: "stopped" });
+
+    if (sup?.child) {
+      this.initiateStop(instanceId);
+      const beacon = this.registry.get(inst.beaconName)?.beacon;
+      const timeout = opts?.timeoutMs ?? (beacon?.stopTimeoutMs ?? 10_000) + 1_000;
+      const deadline = Date.now() + timeout;
+      while (sup.child && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      // Escalate rather than leave an orphan behind a deleted record.
+      if (sup.child) {
+        sup.child.kill("SIGKILL");
+        sup.child.removeAllListeners();
+        sup.child = undefined;
+      }
+    }
+    if (sup?.killTimer) {
+      clearTimeout(sup.killTimer);
+      sup.killTimer = undefined;
+    }
+
+    this.instances.delete(instanceId);
+    this.supervised.delete(instanceId);
+    try {
+      await this.adapter.removeInstance(instanceId);
+    } catch (err) {
+      console.error(`[station-beacon] Failed to remove instance "${instanceId}":`, err);
+    }
+    this.emit("onBeaconInstanceRemoved", { instance: { ...inst } });
+  }
+
+  /**
+   * Patch an instance's config or label. The new config is validated against
+   * the beacon's schema and takes effect on the next start — pass
+   * `restart: true` to apply it to a running instance immediately.
+   */
+  async updateInstance(
+    instanceId: string,
+    opts: UpdateInstanceOptions,
+  ): Promise<BeaconInstance> {
+    const inst = this.instances.get(instanceId);
+    if (!inst) throw new BeaconInstanceNotFoundError(instanceId);
+    const beacon = this.registry.get(inst.beaconName)?.beacon;
+
+    const patch: BeaconInstancePatch = {};
+    if ("config" in opts) {
+      if (beacon && opts.config !== undefined) {
+        const parsed = beacon.configSchema.safeParse(opts.config);
+        if (!parsed.success) {
+          throw new BeaconValidationError(inst.beaconName, parsed.error?.message ?? "invalid config");
+        }
+      }
+      patch.config = opts.config !== undefined ? JSON.stringify(opts.config) : undefined;
+    }
+    if ("label" in opts) patch.label = opts.label;
+
+    await this.patch(instanceId, patch);
+    if (opts.restart) await this.restartInstance(instanceId);
+    return { ...this.instances.get(instanceId)! };
+  }
+
   // ─── Operator controls ─────────────────────────────────────────────
 
   /**
-   * Start a beacon (or ensure it's running). Sets desired state to running and
-   * schedules an immediate launch. Optionally overrides its config.
+   * Start an instance (or ensure it's running). Sets desired state to running
+   * and schedules an immediate launch. Optionally overrides its config.
    */
-  async startBeacon(name: string, opts?: { config?: unknown }): Promise<void> {
-    const reg = this.registry.get(name);
-    if (!reg) throw new Error(`Beacon "${name}" is not registered`);
-    if (!this.instances.has(name)) await this.seedOrResume(reg.beacon);
+  async startInstance(instanceId: string, opts?: { config?: unknown }): Promise<void> {
+    const inst = this.instances.get(instanceId);
+    if (!inst) throw new BeaconInstanceNotFoundError(instanceId);
 
     const patch: BeaconInstancePatch = { desiredState: "running" };
     if (opts && "config" in opts) {
+      const beacon = this.registry.get(inst.beaconName)?.beacon;
+      if (beacon && opts.config !== undefined) {
+        const parsed = beacon.configSchema.safeParse(opts.config);
+        if (!parsed.success) {
+          throw new BeaconValidationError(inst.beaconName, parsed.error?.message ?? "invalid config");
+        }
+      }
       patch.config = opts.config !== undefined ? JSON.stringify(opts.config) : undefined;
     }
-    const sup = this.supervised.get(name);
+    const sup = this.supervised.get(instanceId);
     if (!sup?.child) {
       // Nothing live — schedule an immediate (re)start and clear any error.
       patch.status = "backoff";
@@ -369,65 +651,163 @@ export class BeaconRunner {
       // forced relaunch — otherwise it would strand at desired=running/stopped.
       sup.forceRestart = true;
     }
-    await this.patch(name, patch);
+    await this.patch(instanceId, patch);
+    this.wakePoll();
   }
 
-  /** Stop a beacon and keep it stopped (desired state = stopped). */
-  async stopBeacon(name: string): Promise<void> {
-    const inst = this.instances.get(name);
+  /** Stop an instance and keep it stopped (desired state = stopped). */
+  async stopInstance(instanceId: string): Promise<void> {
+    const inst = this.instances.get(instanceId);
     if (!inst) return;
-    await this.patch(name, { desiredState: "stopped" });
-    const sup = this.supervised.get(name);
+    await this.patch(instanceId, { desiredState: "stopped" });
+    const sup = this.supervised.get(instanceId);
     if (sup?.child && !sup.stopRequested) {
-      this.initiateStop(name);
+      this.initiateStop(instanceId);
     } else if (inst.status === "backoff") {
-      await this.patch(name, { status: "stopped", nextRestartAt: undefined });
+      await this.patch(instanceId, { status: "stopped", nextRestartAt: undefined });
     }
   }
 
-  /** Restart a beacon now — graceful stop of the current incarnation, then relaunch. */
-  async restartBeacon(name: string): Promise<void> {
-    const sup = this.supervised.get(name);
+  /** Restart an instance now — graceful stop of the current incarnation, then relaunch. */
+  async restartInstance(instanceId: string): Promise<void> {
+    const sup = this.supervised.get(instanceId);
     if (sup?.child) {
       sup.forceRestart = true;
-      await this.patch(name, { desiredState: "running" });
-      this.initiateStop(name);
+      await this.patch(instanceId, { desiredState: "running" });
+      this.initiateStop(instanceId);
+    } else {
+      await this.startInstance(instanceId);
+    }
+  }
+
+  /**
+   * Start a beacon's definition-owned instance, seeding it if this is the first
+   * time. For `on-demand` beacons there is no such instance — create one with
+   * {@link BeaconRunner.createInstance} instead.
+   */
+  async startBeacon(name: string, opts?: { config?: unknown }): Promise<void> {
+    const reg = this.registry.get(name);
+    if (!reg) throw new Error(`Beacon "${name}" is not registered`);
+    if (reg.beacon.startMode === "on-demand" && !this.instances.has(name)) {
+      throw new Error(
+        `Beacon "${name}" is on-demand: it has no definition instance to start. ` +
+          `Create an instance instead (POST /api/beacons/${name}/instances).`,
+      );
+    }
+    if (!this.instances.has(name)) await this.seedOrResumeDefinitionInstance(reg.beacon);
+    await this.startInstance(name, opts);
+  }
+
+  /** Stop a beacon's definition-owned instance and keep it stopped. */
+  async stopBeacon(name: string): Promise<void> {
+    await this.stopInstance(name);
+  }
+
+  /** Restart a beacon's definition-owned instance. */
+  async restartBeacon(name: string): Promise<void> {
+    if (this.instances.has(name)) {
+      await this.restartInstance(name);
     } else {
       await this.startBeacon(name);
     }
   }
 
+  /** Stop every instance of a beacon, definition-owned and runtime-created alike. */
+  async stopAllInstances(beaconName: string): Promise<number> {
+    const ids = Array.from(this.instances.values())
+      .filter((i) => i.beaconName === beaconName)
+      .map((i) => i.id);
+    for (const id of ids) await this.stopInstance(id);
+    return ids.length;
+  }
+
   // ─── Seeding / reconciliation ──────────────────────────────────────
 
-  private async seedOrResume(beacon: AnyBeacon): Promise<void> {
-    const existing = await this.adapter.getInstance(beacon.name);
-    if (existing) {
-      // Resume: on boot no child is live, so any desired-running beacon is
+  /**
+   * Load every persisted instance record into memory. This is what makes
+   * runtime-created instances durable: they exist only in the adapter, so
+   * without this pass a supervisor restart would forget them.
+   */
+  private async hydrate(): Promise<void> {
+    let records: BeaconInstance[];
+    try {
+      records = await this.adapter.listInstances();
+    } catch (err) {
+      console.error("[station-beacon] Failed to load persisted instances:", err);
+      return;
+    }
+
+    for (const rec of records) {
+      // Records written before multi-instance support have no id/origin.
+      const instance: BeaconInstance = {
+        ...rec,
+        id: rec.id ?? rec.beaconName,
+        origin: rec.origin ?? "definition",
+      };
+      this.instances.set(instance.id, instance);
+      this.supervised.set(instance.id, this.freshSupervised());
+
+      if (!this.registry.has(instance.beaconName)) {
+        // The beacon file is gone (renamed, deleted, or not in beaconsDir).
+        // Keep the record so it stays visible and recoverable, but surface why
+        // nothing is happening. Desired state is left alone, so restoring the
+        // file brings the instance back on the next boot.
+        const error = `Beacon "${instance.beaconName}" is not registered — its definition was not found.`;
+        await this.patch(instance.id, { status: "errored", lastError: error, pid: undefined });
+        console.warn(`[station-beacon] Orphaned instance "${instance.id}": ${error}`);
+        continue;
+      }
+
+      // On boot no child is live, so any desired-running instance is
       // rescheduled to launch; desired-stopped ones stay put.
-      this.instances.set(beacon.name, existing);
-      if (existing.desiredState === "running") {
-        await this.patch(beacon.name, {
+      if (instance.desiredState === "running") {
+        await this.patch(instance.id, {
           status: "backoff",
           nextRestartAt: new Date(),
           restartCount: 0,
           pid: undefined,
         });
       } else if (
-        existing.status === "running" ||
-        existing.status === "starting" ||
-        existing.status === "stopping"
+        instance.status === "running" ||
+        instance.status === "starting" ||
+        instance.status === "stopping"
       ) {
         // Desired-stopped but the record shows an active status — a crash left
         // it stale (no process is actually live on boot). Normalize to stopped.
-        await this.patch(beacon.name, { status: "stopped", pid: undefined });
+        await this.patch(instance.id, { status: "stopped", pid: undefined });
       }
-      this.supervised.set(beacon.name, this.freshSupervised());
+    }
+  }
+
+  private async seedOrResumeDefinitionInstance(beacon: AnyBeacon): Promise<void> {
+    // hydrate() already adopted it if a record existed.
+    if (this.instances.has(beacon.name)) return;
+
+    const existing = await this.adapter.getInstance(beacon.name);
+    if (existing) {
+      const instance: BeaconInstance = {
+        ...existing,
+        id: existing.id ?? beacon.name,
+        origin: existing.origin ?? "definition",
+      };
+      this.instances.set(instance.id, instance);
+      this.supervised.set(instance.id, this.freshSupervised());
+      if (instance.desiredState === "running") {
+        await this.patch(instance.id, {
+          status: "backoff",
+          nextRestartAt: new Date(),
+          restartCount: 0,
+          pid: undefined,
+        });
+      }
       return;
     }
 
     const now = new Date();
     const instance: BeaconInstance = {
+      id: beacon.name,
       beaconName: beacon.name,
+      origin: "definition",
       status: beacon.autoStart ? "backoff" : "stopped",
       desiredState: beacon.autoStart ? "running" : "stopped",
       incarnation: 0,
@@ -437,8 +817,8 @@ export class BeaconRunner {
       createdAt: now,
       updatedAt: now,
     };
-    this.instances.set(beacon.name, instance);
-    this.supervised.set(beacon.name, this.freshSupervised());
+    this.instances.set(instance.id, instance);
+    this.supervised.set(instance.id, this.freshSupervised());
     await this.adapter.upsertInstance(instance);
   }
 
@@ -451,27 +831,34 @@ export class BeaconRunner {
     this.ticking = true;
     try {
       const now = Date.now();
-      for (const { beacon } of this.registry.values()) {
-        await this.reconcile(beacon, now);
+      // Snapshot: reconcile awaits, and an API call can add or delete an
+      // instance in the meantime.
+      for (const id of Array.from(this.instances.keys())) {
+        const inst = this.instances.get(id);
+        if (!inst) continue;
+        const reg = this.registry.get(inst.beaconName);
+        if (!reg) continue; // orphaned record — flagged during hydrate()
+        await this.reconcile(reg.beacon, id, now);
       }
     } finally {
       this.ticking = false;
     }
   }
 
-  private async reconcile(beacon: AnyBeacon, now: number): Promise<void> {
+  private async reconcile(beacon: AnyBeacon, instanceId: string, now: number): Promise<void> {
     if (this.stopping) return;
-    const inst = this.instances.get(beacon.name);
+    const inst = this.instances.get(instanceId);
     if (!inst) return;
-    const sup = this.supervised.get(beacon.name)!;
+    const sup = this.supervised.get(instanceId);
+    if (!sup || sup.removing) return;
 
     // Enforce desired=stopped: stop any live child that shouldn't be running.
     // This is the reconcile safety net that closes the window where a
-    // stopBeacon() races an in-flight spawn (the child is spawned after
-    // stopBeacon already saw no child), and guarantees the supervisor always
+    // stopInstance() races an in-flight spawn (the child is spawned after
+    // stopInstance already saw no child), and guarantees the supervisor always
     // converges to the desired state.
     if (inst.desiredState === "stopped") {
-      if (sup.child && !sup.stopRequested) this.initiateStop(beacon.name);
+      if (sup.child && !sup.stopRequested) this.initiateStop(instanceId);
       return;
     }
 
@@ -490,10 +877,10 @@ export class BeaconRunner {
     ) {
       sup.startupTimedOut = true;
       const error = `Startup timed out after ${beacon.startupTimeoutMs}ms (never became ready)`;
-      await this.patch(beacon.name, { lastError: error });
-      this.emit("onBeaconStalled", { instance: { ...this.instances.get(beacon.name)! } });
-      await this.addEvent(beacon.name, inst.incarnation, "stalled", error);
-      this.initiateStop(beacon.name);
+      await this.patch(instanceId, { lastError: error });
+      this.emit("onBeaconStalled", { instance: { ...this.instances.get(instanceId)! } });
+      await this.addEvent(inst, "stalled", error);
+      this.initiateStop(instanceId);
       return;
     }
 
@@ -510,10 +897,10 @@ export class BeaconRunner {
       if (now - last > beacon.heartbeatTimeoutMs) {
         sup.stalled = true;
         const error = `Heartbeat stalled (no heartbeat within ${beacon.heartbeatTimeoutMs}ms)`;
-        await this.patch(beacon.name, { lastError: error });
-        this.emit("onBeaconStalled", { instance: { ...this.instances.get(beacon.name)! } });
-        await this.addEvent(beacon.name, inst.incarnation, "stalled", error);
-        this.initiateStop(beacon.name);
+        await this.patch(instanceId, { lastError: error });
+        this.emit("onBeaconStalled", { instance: { ...this.instances.get(instanceId)! } });
+        await this.addEvent(inst, "stalled", error);
+        this.initiateStop(instanceId);
         return;
       }
     }
@@ -526,21 +913,21 @@ export class BeaconRunner {
       inst.nextRestartAt &&
       inst.nextRestartAt.getTime() <= now
     ) {
-      await this.spawnBeacon(beacon);
+      await this.spawnBeacon(beacon, instanceId);
     }
   }
 
   // ─── Spawn ─────────────────────────────────────────────────────────
 
-  private async spawnBeacon(beacon: AnyBeacon): Promise<void> {
+  private async spawnBeacon(beacon: AnyBeacon, instanceId: string): Promise<void> {
     const reg = this.registry.get(beacon.name)!;
-    const inst = this.instances.get(beacon.name)!;
+    const inst = this.instances.get(instanceId)!;
     const incarnation = inst.incarnation + 1;
 
     // Resolve store-managed env vars and enforce `.env()` requirements before
     // spending a process on a beacon that cannot come up. Missing vars are a
     // config problem — restarting won't fix them — so mark the instance
-    // errored (terminal) instead of entering a restart loop. startBeacon()
+    // errored (terminal) instead of entering a restart loop. startInstance()
     // clears the error, so the operator can retry after defining the var.
     let injectedEnv: Record<string, string> | undefined;
     let envProviderErrored = false;
@@ -565,34 +952,34 @@ export class BeaconRunner {
           const delayMs = beacon.backoff.baseMs;
           const nextRestartAt = new Date(Date.now() + delayMs);
           const reason = `Env store unreachable while resolving required vars for "${beacon.name}" — will retry`;
-          await this.patch(beacon.name, { status: "backoff", nextRestartAt, lastError: reason });
+          await this.patch(instanceId, { status: "backoff", nextRestartAt, lastError: reason });
           this.emit("onBeaconRestartScheduled", {
-            instance: { ...this.instances.get(beacon.name)! },
+            instance: { ...this.instances.get(instanceId)! },
             delayMs,
             nextRestartAt,
           });
-          await this.addEvent(beacon.name, inst.incarnation, "restart-scheduled", reason);
+          await this.addEvent(inst, "restart-scheduled", reason);
           return;
         }
         const error =
           `Missing required environment variable${missing.length > 1 ? "s" : ""} for "${beacon.name}": ` +
           `${missing.join(", ")}. Define ${missing.length > 1 ? "them" : "it"} in the Station env store or the host environment.`;
-        await this.patch(beacon.name, { status: "errored", lastError: error, nextRestartAt: undefined });
-        this.emit("onBeaconErrored", { instance: { ...this.instances.get(beacon.name)! }, error });
-        await this.addEvent(beacon.name, inst.incarnation, "errored", error);
+        await this.patch(instanceId, { status: "errored", lastError: error, nextRestartAt: undefined });
+        this.emit("onBeaconErrored", { instance: { ...this.instances.get(instanceId)! }, error });
+        await this.addEvent(inst, "errored", error);
         return;
       }
     }
 
-    await this.patch(beacon.name, {
+    await this.patch(instanceId, {
       status: "starting",
       incarnation,
       startedAt: new Date(),
       readyAt: undefined,
       nextRestartAt: undefined,
     });
-    this.emit("onBeaconStarting", { instance: { ...this.instances.get(beacon.name)! } });
-    await this.addEvent(beacon.name, incarnation, "starting");
+    this.emit("onBeaconStarting", { instance: { ...this.instances.get(instanceId)! } });
+    await this.addEvent(this.instances.get(instanceId)!, "starting");
 
     // Only non-sensitive identifiers go through the environment (readable via
     // /proc/<pid>/environ by any same-user process). The beacon config and the
@@ -601,6 +988,7 @@ export class BeaconRunner {
     const env: Record<string, string> = {
       ...(process.env as Record<string, string>),
       STATION_BEACON_NAME: beacon.name,
+      STATION_BEACON_INSTANCE_ID: instanceId,
       STATION_BEACON_FILE: reg.filePath,
       STATION_BEACON_INCARNATION: String(incarnation),
       STATION_BEACON_STOP_TIMEOUT: String(beacon.stopTimeoutMs),
@@ -609,6 +997,8 @@ export class BeaconRunner {
     // A stop may have been requested while we prepared to launch. Bail before
     // spawning so we never leave a child the stop sweep has already passed.
     if (this.stopping) return;
+    const supBefore = this.supervised.get(instanceId);
+    if (!supBefore || supBefore.removing) return;
 
     const tsxImport = getTsxImport();
     const nodeArgs = tsxImport ? ["--import", tsxImport, BOOTSTRAP] : [BOOTSTRAP];
@@ -630,7 +1020,7 @@ export class BeaconRunner {
     try {
       child.send(jobInit);
     } catch (err) {
-      console.error(`[station-beacon] Failed to send job:init to "${beacon.name}":`, err);
+      console.error(`[station-beacon] Failed to send job:init to "${instanceId}":`, err);
     }
     // The supervisor's own poll loop keeps this process alive; a child must not.
     // Otherwise a lingering beacon would prevent the supervisor from exiting.
@@ -647,64 +1037,57 @@ export class BeaconRunner {
       exitHandled: false,
       startedAtMs: Date.now(),
     };
-    this.supervised.set(beacon.name, sup);
-    await this.patch(beacon.name, { pid: child.pid });
+    this.supervised.set(instanceId, sup);
+    await this.patch(instanceId, { pid: child.pid });
 
     child.on("message", (msg: BeaconIPCMessage) => {
-      this.handleMessage(beacon, msg).catch((err) =>
-        console.error(`[station-beacon] message handler error for "${beacon.name}":`, err),
+      this.handleMessage(instanceId, msg).catch((err) =>
+        console.error(`[station-beacon] message handler error for "${instanceId}":`, err),
       );
     });
     child.stdout?.on("data", (chunk: Buffer) => {
-      this.emit("onBeaconLog", {
-        instance: { ...this.instances.get(beacon.name)! },
-        level: "stdout",
-        message: chunk.toString(),
-      });
+      this.emitLog(instanceId, "stdout", chunk.toString());
     });
     child.stderr?.on("data", (chunk: Buffer) => {
-      this.emit("onBeaconLog", {
-        instance: { ...this.instances.get(beacon.name)! },
-        level: "stderr",
-        message: chunk.toString(),
-      });
+      this.emitLog(instanceId, "stderr", chunk.toString());
     });
     child.on("error", (err) => {
-      console.error(`[station-beacon] Failed to spawn "${beacon.name}":`, err);
-      void this.handleExit(beacon, null, err.message);
+      console.error(`[station-beacon] Failed to spawn "${instanceId}":`, err);
+      void this.handleExit(beacon, instanceId, null, err.message);
     });
     child.on("exit", (code) => {
-      void this.handleExit(beacon, code);
+      void this.handleExit(beacon, instanceId, code);
     });
   }
 
-  private async handleMessage(beacon: AnyBeacon, msg: BeaconIPCMessage): Promise<void> {
-    const sup = this.supervised.get(beacon.name);
+  private async handleMessage(instanceId: string, msg: BeaconIPCMessage): Promise<void> {
+    const sup = this.supervised.get(instanceId);
     if (!sup) return;
     switch (msg.type) {
       case "beacon:started": {
         sup.runningSinceMs = Date.now();
         if (!sup.stopRequested) {
-          await this.patch(beacon.name, { status: "running" });
+          await this.patch(instanceId, { status: "running" });
         }
-        this.emit("onBeaconStarted", { instance: { ...this.instances.get(beacon.name)! } });
+        this.emit("onBeaconStarted", { instance: { ...this.instances.get(instanceId)! } });
         break;
       }
       case "beacon:ready": {
-        await this.patch(beacon.name, { readyAt: new Date() });
-        this.emit("onBeaconReady", { instance: { ...this.instances.get(beacon.name)! } });
-        await this.addEvent(beacon.name, msg.incarnation, "ready");
+        await this.patch(instanceId, { readyAt: new Date() });
+        const inst = this.instances.get(instanceId)!;
+        this.emit("onBeaconReady", { instance: { ...inst } });
+        await this.addEvent(inst, "ready");
         break;
       }
       case "beacon:heartbeat": {
         sup.lastHeartbeatMs = Date.now();
-        await this.patch(beacon.name, { lastHeartbeatAt: new Date() });
-        this.emit("onBeaconHeartbeat", { instance: { ...this.instances.get(beacon.name)! } });
+        await this.patch(instanceId, { lastHeartbeatAt: new Date() });
+        this.emit("onBeaconHeartbeat", { instance: { ...this.instances.get(instanceId)! } });
         break;
       }
       case "beacon:error": {
         const error = (msg.data?.error as string) ?? "Unknown error";
-        await this.patch(beacon.name, { lastError: error });
+        await this.patch(instanceId, { lastError: error });
         if (msg.data?.fatal) {
           // Config/definition errors are fatal — mark for terminal errored state.
           sup.forceRestart = false;
@@ -713,11 +1096,7 @@ export class BeaconRunner {
         break;
       }
       case "beacon:log": {
-        this.emit("onBeaconLog", {
-          instance: { ...this.instances.get(beacon.name)! },
-          level: "log",
-          message: (msg.data?.message as string) ?? "",
-        });
+        this.emitLog(instanceId, "log", (msg.data?.message as string) ?? "");
         break;
       }
       case "beacon:stopping":
@@ -727,8 +1106,13 @@ export class BeaconRunner {
 
   // ─── Exit handling ─────────────────────────────────────────────────
 
-  private async handleExit(beacon: AnyBeacon, code: number | null, spawnError?: string): Promise<void> {
-    const sup = this.supervised.get(beacon.name);
+  private async handleExit(
+    beacon: AnyBeacon,
+    instanceId: string,
+    code: number | null,
+    spawnError?: string,
+  ): Promise<void> {
+    const sup = this.supervised.get(instanceId);
     if (!sup || sup.exitHandled) return;
     sup.exitHandled = true;
 
@@ -739,6 +1123,12 @@ export class BeaconRunner {
     const uptimeMs = sup.startedAtMs ? Date.now() - sup.startedAtMs : 0;
     const child = sup.child;
     sup.child = undefined;
+    child?.removeAllListeners();
+
+    // The instance is being deleted — deleteInstance() is waiting on the child
+    // to clear and will drop the record. Recording state or scheduling a
+    // restart here would resurrect it.
+    if (sup.removing) return;
 
     const reason: ExitReason = sup.startupTimedOut
       ? "startup-timeout"
@@ -750,21 +1140,21 @@ export class BeaconRunner {
             ? "clean"
             : "failure";
 
-    const inst = this.instances.get(beacon.name)!;
-    await this.patch(beacon.name, {
+    const inst = this.instances.get(instanceId);
+    if (!inst) return;
+    await this.patch(instanceId, {
       pid: undefined,
       readyAt: undefined,
       lastExitAt: new Date(),
       lastExitReason: reason,
       ...(spawnError ? { lastError: spawnError } : {}),
     });
-    this.emit("onBeaconExited", { instance: { ...this.instances.get(beacon.name)! }, reason, code });
-    await this.addEvent(beacon.name, inst.incarnation, "exited", `reason=${reason} code=${code ?? "null"}`);
-    child?.removeAllListeners();
+    this.emit("onBeaconExited", { instance: { ...this.instances.get(instanceId)! }, reason, code });
+    await this.addEvent(inst, "exited", `reason=${reason} code=${code ?? "null"}`);
 
     // Forced restart (operator restart) takes precedence and ignores policy.
     if (sup.forceRestart && !this.stopping) {
-      await this.scheduleRestart(beacon, 0, 0);
+      await this.scheduleRestart(instanceId, 0, 0);
       return;
     }
 
@@ -774,12 +1164,12 @@ export class BeaconRunner {
     const fatal = sup.fatal || code === FATAL_EXIT_CODE;
     if (fatal) {
       const error = inst.lastError ?? "fatal error (invalid config or beacon not found)";
-      await this.patch(beacon.name, { status: "errored", lastError: error });
+      await this.patch(instanceId, { status: "errored", lastError: error });
       this.emit("onBeaconErrored", {
-        instance: { ...this.instances.get(beacon.name)! },
+        instance: { ...this.instances.get(instanceId)! },
         error,
       });
-      await this.addEvent(beacon.name, inst.incarnation, "errored", error);
+      await this.addEvent(inst, "errored", error);
       return;
     }
 
@@ -789,48 +1179,48 @@ export class BeaconRunner {
     if (willRestart) {
       const attempt = shouldResetBackoff(uptimeMs, beacon.backoff) ? 0 : inst.restartCount;
       const delay = computeBackoffMs(attempt, beacon.backoff);
-      await this.scheduleRestart(beacon, delay, attempt + 1);
+      await this.scheduleRestart(instanceId, delay, attempt + 1);
       return;
     }
 
     // No restart. Distinguish a terminal failure from a completed/stopped beacon.
     if (reason === "failure" || reason === "stalled" || reason === "startup-timeout") {
-      await this.patch(beacon.name, { status: "errored" });
+      await this.patch(instanceId, { status: "errored" });
       this.emit("onBeaconErrored", {
-        instance: { ...this.instances.get(beacon.name)! },
+        instance: { ...this.instances.get(instanceId)! },
         error: inst.lastError,
       });
-      await this.addEvent(beacon.name, inst.incarnation, "errored", inst.lastError);
+      await this.addEvent(inst, "errored", inst.lastError);
     } else {
       // clean self-completion: mark desired stopped so we don't relaunch it.
       const patch: BeaconInstancePatch = { status: "stopped" };
       if (reason === "clean") patch.desiredState = "stopped";
-      await this.patch(beacon.name, patch);
-      this.emit("onBeaconStopped", { instance: { ...this.instances.get(beacon.name)! } });
-      await this.addEvent(beacon.name, inst.incarnation, "stopped");
+      await this.patch(instanceId, patch);
+      this.emit("onBeaconStopped", { instance: { ...this.instances.get(instanceId)! } });
+      await this.addEvent(inst, "stopped");
     }
   }
 
-  private async scheduleRestart(beacon: AnyBeacon, delayMs: number, restartCount: number): Promise<void> {
+  private async scheduleRestart(
+    instanceId: string,
+    delayMs: number,
+    restartCount: number,
+  ): Promise<void> {
     const nextRestartAt = new Date(Date.now() + delayMs);
-    await this.patch(beacon.name, {
+    await this.patch(instanceId, {
       status: "backoff",
       restartCount,
       nextRestartAt,
     });
     // Reset volatile state for the next incarnation.
-    this.supervised.set(beacon.name, this.freshSupervised());
+    this.supervised.set(instanceId, this.freshSupervised());
+    const inst = this.instances.get(instanceId)!;
     this.emit("onBeaconRestartScheduled", {
-      instance: { ...this.instances.get(beacon.name)! },
+      instance: { ...inst },
       delayMs,
       nextRestartAt,
     });
-    await this.addEvent(
-      beacon.name,
-      this.instances.get(beacon.name)!.incarnation,
-      "restart-scheduled",
-      `in ${delayMs}ms`,
-    );
+    await this.addEvent(inst, "restart-scheduled", `in ${delayMs}ms`);
   }
 
   /**
@@ -838,12 +1228,13 @@ export class BeaconRunner {
    * SIGKILL escalation timer at the beacon's stop timeout so a handler that
    * ignores the stop can't hang the supervisor.
    */
-  private initiateStop(name: string): void {
-    const sup = this.supervised.get(name);
-    const beacon = this.registry.get(name)?.beacon;
+  private initiateStop(instanceId: string): void {
+    const sup = this.supervised.get(instanceId);
+    const inst = this.instances.get(instanceId);
+    const beacon = inst ? this.registry.get(inst.beaconName)?.beacon : undefined;
     if (!sup?.child || sup.stopRequested) return;
     sup.stopRequested = true;
-    void this.patch(name, { status: "stopping" });
+    void this.patch(instanceId, { status: "stopping" });
     const child = sup.child;
     try {
       const delivered = child.send({ type: "stop" }, (err: Error | null) => {
@@ -862,22 +1253,60 @@ export class BeaconRunner {
 
   // ─── Helpers ───────────────────────────────────────────────────────
 
-  private async patch(name: string, patch: BeaconInstancePatch): Promise<void> {
-    const inst = this.instances.get(name);
+  /** Reject ids that can't safely be an adapter primary key or a URL segment. */
+  private validateInstanceId(id: string): string {
+    if (!VALID_INSTANCE_ID.test(id) || id.length > MAX_INSTANCE_ID_LENGTH) {
+      throw new Error(
+        `Invalid instance id "${id}". Ids must start with a letter or digit, contain only ` +
+          `letters, digits, and the characters . _ : -, and be at most ${MAX_INSTANCE_ID_LENGTH} characters.`,
+      );
+    }
+    return id;
+  }
+
+  private generateInstanceId(beaconName: string): string {
+    // Prefixed with the beacon name so ids stay readable in logs and URLs; the
+    // random suffix keeps them unique without a round trip to the adapter.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const id = `${beaconName}-${randomBytes(4).toString("hex")}`;
+      if (id.length <= MAX_INSTANCE_ID_LENGTH && !this.instances.has(id)) return id;
+    }
+    return `${beaconName.slice(0, 32)}-${randomBytes(8).toString("hex")}`;
+  }
+
+  /** Nudge the poll loop so an API-driven start doesn't wait out the interval. */
+  private wakePoll(): void {
+    if (!this.running || this.pollResolve === null) return;
+    if (this.pollTimer) {
+      clearTimeout(this.pollTimer);
+      this.pollTimer = null;
+    }
+    const resolve = this.pollResolve;
+    this.pollResolve = null;
+    resolve();
+  }
+
+  private emitLog(instanceId: string, level: "log" | "stdout" | "stderr", message: string): void {
+    const inst = this.instances.get(instanceId);
+    if (!inst) return;
+    this.emit("onBeaconLog", { instance: { ...inst }, level, message });
+  }
+
+  private async patch(instanceId: string, patch: BeaconInstancePatch): Promise<void> {
+    const inst = this.instances.get(instanceId);
     if (!inst) return;
     Object.assign(inst, patch);
     inst.updatedAt = new Date();
-    this.instances.set(name, inst);
+    this.instances.set(instanceId, inst);
     try {
-      await this.adapter.updateInstance(name, { ...patch, updatedAt: inst.updatedAt });
+      await this.adapter.updateInstance(instanceId, { ...patch, updatedAt: inst.updatedAt });
     } catch (err) {
-      console.error(`[station-beacon] Failed to persist instance "${name}":`, err);
+      console.error(`[station-beacon] Failed to persist instance "${instanceId}":`, err);
     }
   }
 
   private async addEvent(
-    beaconName: string,
-    incarnation: number,
+    instance: BeaconInstance,
     type: Parameters<NonNullable<BeaconStateAdapter["addEvent"]>>[0]["type"],
     message?: string,
   ): Promise<void> {
@@ -885,14 +1314,15 @@ export class BeaconRunner {
     try {
       await this.adapter.addEvent({
         id: this.adapter.generateId(),
-        beaconName,
-        incarnation,
+        instanceId: instance.id,
+        beaconName: instance.beaconName,
+        incarnation: instance.incarnation,
         type,
         message,
         at: new Date(),
       });
     } catch (err) {
-      console.error(`[station-beacon] Failed to record event for "${beaconName}":`, err);
+      console.error(`[station-beacon] Failed to record event for "${instance.id}":`, err);
     }
   }
 
@@ -915,6 +1345,7 @@ export class BeaconRunner {
       this.pollResolve = res;
       this.pollTimer = setTimeout(() => {
         this.pollResolve = null;
+        this.pollTimer = null;
         res();
       }, ms);
     });

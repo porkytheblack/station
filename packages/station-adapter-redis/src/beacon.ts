@@ -3,6 +3,7 @@ import Redis from "ioredis";
 import type {
   BeaconStateAdapter,
   BeaconInstance,
+  BeaconInstanceFilter,
   BeaconInstancePatch,
   BeaconEvent,
 } from "station-beacon";
@@ -12,20 +13,25 @@ export interface BeaconRedisAdapterOptions {
   url?: string;
   redis?: Redis;
   prefix?: string;
-  /** Max lifecycle events retained per beacon. @default 1000 */
+  /** Max lifecycle events retained per instance. @default 1000 */
   maxEventsPerBeacon?: number;
 }
 
-const beaconHashKey = (prefix: string, name: string) => key(prefix, "beacon", name);
+// Keyed by instance id. A beacon's definition-owned instance uses the beacon
+// name as its id, so records written before multi-instance support live at
+// exactly these keys already and need no data migration — only the `id`,
+// `beaconName`, and `origin` fields are defaulted on read.
+const beaconHashKey = (prefix: string, instanceId: string) => key(prefix, "beacon", instanceId);
 const beaconAllKey = (prefix: string) => key(prefix, "beacons", "all");
-const beaconEventsKey = (prefix: string, name: string) => key(prefix, "beacon-events", name);
+const beaconEventsKey = (prefix: string, instanceId: string) =>
+  key(prefix, "beacon-events", instanceId);
 
 const BEACON_DATE_FIELDS = new Set([
   "startedAt", "readyAt", "lastHeartbeatAt", "lastExitAt", "nextRestartAt", "createdAt", "updatedAt",
 ]);
 const BEACON_NUMBER_FIELDS = new Set(["incarnation", "restartCount", "pid"]);
 const BEACON_PATCH_KEYS = new Set([
-  "status", "desiredState", "incarnation", "restartCount", "pid", "config",
+  "label", "status", "desiredState", "incarnation", "restartCount", "pid", "config",
   "startedAt", "readyAt", "lastHeartbeatAt", "lastExitAt", "lastExitReason",
   "lastError", "nextRestartAt", "updatedAt",
 ]);
@@ -54,23 +60,23 @@ export class BeaconRedisAdapter implements BeaconStateAdapter {
 
   async upsertInstance(instance: BeaconInstance): Promise<void> {
     const hash = instanceToHash(instance);
-    const k = beaconHashKey(this.prefix, instance.beaconName);
+    const k = beaconHashKey(this.prefix, instance.id);
     // DEL + HSET fully replaces so a field that became undefined doesn't linger.
     const pipeline = this.redis.multi();
     pipeline.del(k);
     pipeline.hset(k, hash);
-    pipeline.sadd(beaconAllKey(this.prefix), instance.beaconName);
+    pipeline.sadd(beaconAllKey(this.prefix), instance.id);
     await pipeline.exec();
   }
 
-  async getInstance(beaconName: string): Promise<BeaconInstance | null> {
-    const hash = await this.redis.hgetall(beaconHashKey(this.prefix, beaconName));
+  async getInstance(instanceId: string): Promise<BeaconInstance | null> {
+    const hash = await this.redis.hgetall(beaconHashKey(this.prefix, instanceId));
     if (!hash || Object.keys(hash).length === 0) return null;
-    return hashToInstance(hash);
+    return hashToInstance(hash, instanceId);
   }
 
-  async updateInstance(beaconName: string, patch: BeaconInstancePatch): Promise<void> {
-    const exists = await this.redis.exists(beaconHashKey(this.prefix, beaconName));
+  async updateInstance(instanceId: string, patch: BeaconInstancePatch): Promise<void> {
+    const exists = await this.redis.exists(beaconHashKey(this.prefix, instanceId));
     if (!exists) return;
     const { setArgs, delFields } = patchToHashArgs(
       patch as Record<string, unknown>,
@@ -81,43 +87,48 @@ export class BeaconRedisAdapter implements BeaconStateAdapter {
     if (!("updatedAt" in patch)) {
       setArgs.updatedAt = new Date().toISOString();
     }
-    const k = beaconHashKey(this.prefix, beaconName);
+    const k = beaconHashKey(this.prefix, instanceId);
     const pipeline = this.redis.multi();
     if (Object.keys(setArgs).length > 0) pipeline.hset(k, setArgs);
     if (delFields.length > 0) pipeline.hdel(k, ...delFields);
     await pipeline.exec();
   }
 
-  async listInstances(): Promise<BeaconInstance[]> {
-    const names = await this.redis.smembers(beaconAllKey(this.prefix));
-    if (names.length === 0) return [];
+  async listInstances(filter?: BeaconInstanceFilter): Promise<BeaconInstance[]> {
+    const ids = await this.redis.smembers(beaconAllKey(this.prefix));
+    if (ids.length === 0) return [];
     const pipeline = this.redis.pipeline();
-    for (const name of names) pipeline.hgetall(beaconHashKey(this.prefix, name));
+    for (const id of ids) pipeline.hgetall(beaconHashKey(this.prefix, id));
     const results = await pipeline.exec();
     if (!results) return [];
     const out: BeaconInstance[] = [];
-    for (const [err, hash] of results) {
-      if (err) continue;
+    results.forEach(([err, hash], i) => {
+      if (err) return;
       const data = hash as Record<string, string>;
-      if (!data || Object.keys(data).length === 0) continue;
-      out.push(hashToInstance(data));
-    }
-    out.sort((a, b) => a.beaconName.localeCompare(b.beaconName));
+      if (!data || Object.keys(data).length === 0) return;
+      const inst = hashToInstance(data, ids[i]);
+      // Instance counts are small, so filtering in memory beats maintaining a
+      // second per-beacon index that would have to be migrated and kept in sync.
+      if (filter?.beaconName && inst.beaconName !== filter.beaconName) return;
+      out.push(inst);
+    });
+    out.sort((a, b) => a.id.localeCompare(b.id));
     return out;
   }
 
-  async removeInstance(beaconName: string): Promise<void> {
+  async removeInstance(instanceId: string): Promise<void> {
     const pipeline = this.redis.multi();
-    pipeline.del(beaconHashKey(this.prefix, beaconName));
-    pipeline.srem(beaconAllKey(this.prefix), beaconName);
-    pipeline.del(beaconEventsKey(this.prefix, beaconName));
+    pipeline.del(beaconHashKey(this.prefix, instanceId));
+    pipeline.srem(beaconAllKey(this.prefix), instanceId);
+    pipeline.del(beaconEventsKey(this.prefix, instanceId));
     await pipeline.exec();
   }
 
   async addEvent(event: BeaconEvent): Promise<void> {
-    const k = beaconEventsKey(this.prefix, event.beaconName);
+    const k = beaconEventsKey(this.prefix, event.instanceId);
     const payload = JSON.stringify({
       id: event.id,
+      instanceId: event.instanceId,
       beaconName: event.beaconName,
       incarnation: event.incarnation,
       type: event.type,
@@ -131,19 +142,34 @@ export class BeaconRedisAdapter implements BeaconStateAdapter {
     await pipeline.exec();
   }
 
-  async listEvents(beaconName: string, limit = 100): Promise<BeaconEvent[]> {
-    const raw = await this.redis.lrange(beaconEventsKey(this.prefix, beaconName), 0, Math.max(0, limit - 1));
-    return raw.map((s) => {
-      const o = JSON.parse(s) as Record<string, unknown>;
-      return {
-        id: o.id as string,
-        beaconName: o.beaconName as string,
-        incarnation: Number(o.incarnation),
-        type: o.type as BeaconEvent["type"],
-        message: (o.message as string | null) ?? undefined,
-        at: new Date(o.at as string),
-      };
+  async listEvents(instanceId: string, limit = 100): Promise<BeaconEvent[]> {
+    const raw = await this.redis.lrange(
+      beaconEventsKey(this.prefix, instanceId),
+      0,
+      Math.max(0, limit - 1),
+    );
+    return raw.map((s) => parseEvent(s, instanceId));
+  }
+
+  /**
+   * Events live in a per-instance list, so a definition-wide timeline is a merge
+   * across that beacon's instances rather than a single range read.
+   */
+  async listBeaconEvents(beaconName: string, limit = 100): Promise<BeaconEvent[]> {
+    const instances = await this.listInstances({ beaconName });
+    if (instances.length === 0) return [];
+    const pipeline = this.redis.pipeline();
+    for (const inst of instances) {
+      pipeline.lrange(beaconEventsKey(this.prefix, inst.id), 0, Math.max(0, limit - 1));
+    }
+    const results = await pipeline.exec();
+    if (!results) return [];
+    const out: BeaconEvent[] = [];
+    results.forEach(([err, raw], i) => {
+      if (err || !Array.isArray(raw)) return;
+      for (const s of raw as string[]) out.push(parseEvent(s, instances[i].id));
     });
+    return out.sort((a, b) => b.at.getTime() - a.at.getTime()).slice(0, limit);
   }
 
   generateId(): string {
@@ -178,7 +204,7 @@ function instanceToHash(instance: BeaconInstance): Record<string, string> {
   return hash;
 }
 
-function hashToInstance(hash: Record<string, string>): BeaconInstance {
+function hashToInstance(hash: Record<string, string>, instanceId: string): BeaconInstance {
   const obj: Record<string, unknown> = {};
   for (const [field, value] of Object.entries(hash)) {
     if (BEACON_DATE_FIELDS.has(field)) {
@@ -189,5 +215,23 @@ function hashToInstance(hash: Record<string, string>): BeaconInstance {
       obj[field] = value;
     }
   }
+  // Hashes written before multi-instance support carry neither id nor origin;
+  // they are a beacon's definition-owned instance, whose id is the beacon name.
+  obj.id ??= instanceId;
+  obj.beaconName ??= instanceId;
+  obj.origin ??= "definition";
   return obj as unknown as BeaconInstance;
+}
+
+function parseEvent(raw: string, instanceId: string): BeaconEvent {
+  const o = JSON.parse(raw) as Record<string, unknown>;
+  return {
+    id: o.id as string,
+    instanceId: (o.instanceId as string | undefined) ?? instanceId,
+    beaconName: o.beaconName as string,
+    incarnation: Number(o.incarnation),
+    type: o.type as BeaconEvent["type"],
+    message: (o.message as string | null) ?? undefined,
+    at: new Date(o.at as string),
+  };
 }

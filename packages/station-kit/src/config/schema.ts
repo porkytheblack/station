@@ -46,6 +46,12 @@ export interface StationConfig {
    */
   beaconAdapter?: BeaconStateAdapter;
   /**
+   * Default cap on how many instances of one beacon may exist at once, applied
+   * to beacons that don't declare their own `.maxInstances()`. Bounds how many
+   * processes an API caller can spawn by creating instances. @default 100
+   */
+  beaconMaxInstances?: number;
+  /**
    * Optional schedule storage adapter. When provided, runtime-editable
    * schedules are persisted here and reconciled by both runners.
    */
@@ -127,6 +133,7 @@ export function resolveConfig(input: StationUserConfig): StationConfig {
     adapter: input.adapter,
     broadcastAdapter: input.broadcastAdapter,
     beaconAdapter: input.beaconAdapter,
+    beaconMaxInstances: input.beaconMaxInstances,
     scheduleAdapter: input.scheduleAdapter,
     envStorage: input.envStorage,
     logStorage: input.logStorage,

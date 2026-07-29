@@ -20,6 +20,8 @@ import { isBeacon } from "./util.js";
 
 const beaconName = process.env.STATION_BEACON_NAME;
 const beaconFile = process.env.STATION_BEACON_FILE;
+// Falls back to the beacon name — the id of a beacon's definition-owned instance.
+const instanceId = process.env.STATION_BEACON_INSTANCE_ID || beaconName || "";
 const incarnation = Number(process.env.STATION_BEACON_INCARNATION ?? "1");
 const stopTimeoutMs = Number(process.env.STATION_BEACON_STOP_TIMEOUT ?? "10000");
 
@@ -70,6 +72,7 @@ function sendIPC(
     process.send({
       type,
       beaconName,
+      instanceId,
       incarnation,
       timestamp: new Date().toISOString(),
       data,
@@ -93,7 +96,7 @@ function sendThenExit(type: "beacon:error", data: Record<string, unknown>, code:
   };
   try {
     process.send!(
-      { type, beaconName, incarnation, timestamp: new Date().toISOString(), data },
+      { type, beaconName, instanceId, incarnation, timestamp: new Date().toISOString(), data },
       exit,
     );
   } catch {
@@ -162,6 +165,7 @@ process.on("SIGINT", () => {
 function buildContext<TConfig>(config: TConfig): BeaconContext<TConfig> {
   return {
     name: beaconName!,
+    instanceId,
     config,
     incarnation,
     signal: abortController.signal,

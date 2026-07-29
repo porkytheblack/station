@@ -47,6 +47,12 @@ import { v1DefinitionRoutes, v1DefinitionReadRoutes } from "./routes/v1/definiti
 import { v1ScheduleRoutes, v1ScheduleReadRoutes } from "./routes/v1/schedules.js";
 import { v1EnvRoutes, v1EnvReadRoutes } from "./routes/v1/env.js";
 import { v1ExpressionRoutes } from "./routes/v1/expressions.js";
+import {
+  v1BeaconReadRoutes,
+  v1BeaconStartRoutes,
+  v1BeaconStopRoutes,
+  v1BeaconAdminRoutes,
+} from "./routes/v1/beacons.js";
 
 export {
   KeyStore,
@@ -216,6 +222,7 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
         signalRunner, // beacons can trigger signals into the shared queue
         subscribers: [stationBeaconSub],
         envProvider: envStore,
+        maxInstancesPerBeacon: config.beaconMaxInstances,
       });
     }
   }
@@ -317,9 +324,9 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
   // stack instead of isolating (a trigger-only key would be rejected by the
   // read group's guard before reaching /trigger). Attach the guard to each
   // route individually instead.
-  const guarded = (scope: string, group: Hono): Hono => {
+  const guarded = (scope: string | string[], group: Hono): Hono => {
     const out = new Hono();
-    const guard = requireScope(scope);
+    const guard = requireScope(...(Array.isArray(scope) ? scope : [scope]));
     for (const r of group.routes) {
       out.on(r.method, r.path, guard, r.handler);
     }
@@ -343,10 +350,15 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
     signalRunner,
     signalSubscriber: stationSignalSub,
   }));
+  readRoutes.route("/", v1BeaconReadRoutes({ beaconRunner, beaconAdapter, logBuffer, logStore }));
   v1.route("/", guarded("read", readRoutes));
 
   // Trigger-scope routes
   v1.route("/", guarded("trigger", v1TriggerRoutes({ signalRunner, signalAdapter, broadcastRunner, broadcastAdapter, signalSubscriber: stationSignalSub })));
+
+  // Bringing a beacon up is the long-running counterpart of triggering a
+  // signal, so it shares the trigger scope (admin also passes).
+  v1.route("/", guarded(["trigger", "admin"], v1BeaconStartRoutes({ beaconRunner })));
 
   // Cancel-scope routes — only the cancel endpoints
   const cancelRoutes = new Hono();
@@ -374,6 +386,10 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
   });
   v1.route("/", guarded("cancel", cancelRoutes));
 
+  // Stopping a beacon instance is a halt, not a mutation — same scope family as
+  // cancelling a run (trigger/admin also pass, so one key can do both).
+  v1.route("/", guarded(["cancel", "trigger", "admin"], v1BeaconStopRoutes({ beaconRunner })));
+
   // Admin-scope routes — destructive / mutating endpoints
   const adminRoutes = new Hono();
   adminRoutes.route("/", v1KeyRoutes({ keyStore }));
@@ -385,6 +401,7 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
   }));
   adminRoutes.route("/", v1ScheduleRoutes({ scheduleAdapter }));
   adminRoutes.route("/", v1EnvRoutes({ envStore }));
+  adminRoutes.route("/", v1BeaconAdminRoutes({ beaconRunner }));
   v1.route("/", guarded("admin", adminRoutes));
 
   app.route("/api/v1", v1);
@@ -467,6 +484,10 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
           beaconRunner.start().catch((err: unknown) => {
             console.error("[station] Beacon runner error:", err);
           });
+          // Discovery and instance hydration are async, so wait for them before
+          // binding the port — otherwise the first /api/beacons request can
+          // land on an empty registry and report no beacons at all.
+          await beaconRunner.whenReady();
         }
       }
 

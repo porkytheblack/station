@@ -4,6 +4,7 @@ import type { Pool, RowDataPacket } from "mysql2/promise";
 import type {
   BeaconStateAdapter,
   BeaconInstance,
+  BeaconInstanceFilter,
   BeaconInstancePatch,
   BeaconEvent,
 } from "station-beacon";
@@ -14,7 +15,7 @@ export interface BeaconMysqlAdapterOptions {
   pool?: Pool;
   tableName?: string;
   eventsTableName?: string;
-  /** Max lifecycle events retained per beacon. @default 1000 */
+  /** Max lifecycle events retained per instance. @default 1000 */
   maxEventsPerBeacon?: number;
 }
 
@@ -53,7 +54,10 @@ export class BeaconMysqlAdapter implements BeaconStateAdapter {
 
     await pool.execute(`
       CREATE TABLE IF NOT EXISTS ${table} (
-        beacon_name        VARCHAR(255) PRIMARY KEY,
+        id                 VARCHAR(191) PRIMARY KEY,
+        beacon_name        VARCHAR(255) NOT NULL,
+        label              TEXT,
+        origin             VARCHAR(20) NOT NULL DEFAULT 'definition',
         status             VARCHAR(50) NOT NULL,
         desired_state      VARCHAR(50) NOT NULL,
         incarnation        INT NOT NULL DEFAULT 0,
@@ -75,6 +79,7 @@ export class BeaconMysqlAdapter implements BeaconStateAdapter {
       CREATE TABLE IF NOT EXISTS ${eventsTable} (
         seq         BIGINT AUTO_INCREMENT PRIMARY KEY,
         id          VARCHAR(36) NOT NULL,
+        instance_id VARCHAR(191) NOT NULL,
         beacon_name VARCHAR(255) NOT NULL,
         incarnation INT NOT NULL,
         type        VARCHAR(50) NOT NULL,
@@ -82,9 +87,19 @@ export class BeaconMysqlAdapter implements BeaconStateAdapter {
         at          DATETIME(3) NOT NULL
       )
     `);
+    await migrateToMultiInstance(pool, table, eventsTable);
+
+    await runIdempotentDdl(
+      (sql) => pool.execute(sql),
+      `CREATE INDEX idx_${eventsTable}_instance ON ${eventsTable} (instance_id, seq)`,
+    );
     await runIdempotentDdl(
       (sql) => pool.execute(sql),
       `CREATE INDEX idx_${eventsTable}_beacon ON ${eventsTable} (beacon_name, seq)`,
+    );
+    await runIdempotentDdl(
+      (sql) => pool.execute(sql),
+      `CREATE INDEX idx_${table}_beacon ON ${table} (beacon_name)`,
     );
 
     return new BeaconMysqlAdapter(pool, table, eventsTable, ownsPool, maxEvents);
@@ -93,11 +108,14 @@ export class BeaconMysqlAdapter implements BeaconStateAdapter {
   async upsertInstance(instance: BeaconInstance): Promise<void> {
     await this.pool.execute(
       `INSERT INTO ${this.table}
-        (beacon_name, status, desired_state, incarnation, restart_count, pid, config,
+        (id, beacon_name, label, origin, status, desired_state, incarnation, restart_count, pid, config,
          started_at, ready_at, last_heartbeat_at, last_exit_at, last_exit_reason,
          last_error, next_restart_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
+         beacon_name = VALUES(beacon_name),
+         label = VALUES(label),
+         origin = VALUES(origin),
          status = VALUES(status),
          desired_state = VALUES(desired_state),
          incarnation = VALUES(incarnation),
@@ -114,7 +132,10 @@ export class BeaconMysqlAdapter implements BeaconStateAdapter {
          created_at = VALUES(created_at),
          updated_at = VALUES(updated_at)`,
       [
+        instance.id,
         instance.beaconName,
+        instance.label ?? null,
+        instance.origin,
         instance.status,
         instance.desiredState,
         instance.incarnation,
@@ -134,16 +155,17 @@ export class BeaconMysqlAdapter implements BeaconStateAdapter {
     );
   }
 
-  async getInstance(beaconName: string): Promise<BeaconInstance | null> {
+  async getInstance(instanceId: string): Promise<BeaconInstance | null> {
     const [rows] = await this.pool.execute<RowDataPacket[]>(
-      `SELECT * FROM ${this.table} WHERE beacon_name = ?`,
-      [beaconName],
+      `SELECT * FROM ${this.table} WHERE id = ?`,
+      [instanceId],
     );
     return rows.length > 0 ? rowToInstance(rows[0] as Record<string, unknown>) : null;
   }
 
-  async updateInstance(beaconName: string, patch: BeaconInstancePatch): Promise<void> {
+  async updateInstance(instanceId: string, patch: BeaconInstancePatch): Promise<void> {
     const map: Record<string, { col: string; date?: boolean }> = {
+      label: { col: "label" },
       status: { col: "status" },
       desiredState: { col: "desired_state" },
       incarnation: { col: "incarnation" },
@@ -176,50 +198,71 @@ export class BeaconMysqlAdapter implements BeaconStateAdapter {
       values.push(dateToStr(new Date()));
     }
     if (setClauses.length === 0) return;
-    values.push(beaconName);
-    await this.pool.execute(`UPDATE ${this.table} SET ${setClauses.join(", ")} WHERE beacon_name = ?`, values);
+    values.push(instanceId);
+    await this.pool.execute(`UPDATE ${this.table} SET ${setClauses.join(", ")} WHERE id = ?`, values);
   }
 
-  async listInstances(): Promise<BeaconInstance[]> {
-    const [rows] = await this.pool.execute<RowDataPacket[]>(
-      `SELECT * FROM ${this.table} ORDER BY beacon_name ASC`,
-    );
+  async listInstances(filter?: BeaconInstanceFilter): Promise<BeaconInstance[]> {
+    const [rows] = filter?.beaconName
+      ? await this.pool.execute<RowDataPacket[]>(
+          `SELECT * FROM ${this.table} WHERE beacon_name = ? ORDER BY id ASC`,
+          [filter.beaconName],
+        )
+      : await this.pool.execute<RowDataPacket[]>(`SELECT * FROM ${this.table} ORDER BY id ASC`);
     return rows.map((r) => rowToInstance(r as Record<string, unknown>));
   }
 
-  async removeInstance(beaconName: string): Promise<void> {
-    await this.pool.execute(`DELETE FROM ${this.table} WHERE beacon_name = ?`, [beaconName]);
+  async removeInstance(instanceId: string): Promise<void> {
+    await this.pool.execute(`DELETE FROM ${this.table} WHERE id = ?`, [instanceId]);
+    await this.pool.execute(`DELETE FROM ${this.eventsTable} WHERE instance_id = ?`, [instanceId]);
   }
 
   async addEvent(event: BeaconEvent): Promise<void> {
     await this.pool.execute(
-      `INSERT INTO ${this.eventsTable} (id, beacon_name, incarnation, type, message, at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [event.id, event.beaconName, event.incarnation, event.type, event.message ?? null, dateToStr(event.at)],
+      `INSERT INTO ${this.eventsTable} (id, instance_id, beacon_name, incarnation, type, message, at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        event.id,
+        event.instanceId,
+        event.beaconName,
+        event.incarnation,
+        event.type,
+        event.message ?? null,
+        dateToStr(event.at),
+      ],
     );
-    // Prune this beacon's oldest events beyond the retention cap. The inner
+    // Prune this instance's oldest events beyond the retention cap. The inner
     // query finds the seq of the maxEvents-th newest row; rows at/below it are
     // deleted. OFFSET is inlined (coerced integer) as mysql2 doesn't reliably
     // bind LIMIT/OFFSET placeholders, and the subquery is wrapped in a derived
-    // table so MySQL allows referencing the DELETE target. When the beacon has
+    // table so MySQL allows referencing the DELETE target. When the instance has
     // <= maxEvents rows the inner query yields no row → NULL → nothing deleted.
     const cap = Math.max(0, Math.floor(this.maxEvents));
     await this.pool.execute(
       `DELETE FROM ${this.eventsTable}
-       WHERE beacon_name = ?
+       WHERE instance_id = ?
          AND seq <= (
            SELECT s FROM (
              SELECT seq AS s FROM ${this.eventsTable}
-             WHERE beacon_name = ? ORDER BY seq DESC LIMIT 1 OFFSET ${cap}
+             WHERE instance_id = ? ORDER BY seq DESC LIMIT 1 OFFSET ${cap}
            ) AS cutoff
          )`,
-      [event.beaconName, event.beaconName],
+      [event.instanceId, event.instanceId],
     );
   }
 
-  async listEvents(beaconName: string, limit = 100): Promise<BeaconEvent[]> {
+  async listEvents(instanceId: string, limit = 100): Promise<BeaconEvent[]> {
     // LIMIT is inlined (coerced integer) — mysql2 prepared statements don't
     // reliably bind LIMIT placeholders.
+    const lim = Math.max(1, Math.floor(limit));
+    const [rows] = await this.pool.execute<RowDataPacket[]>(
+      `SELECT * FROM ${this.eventsTable} WHERE instance_id = ? ORDER BY seq DESC LIMIT ${lim}`,
+      [instanceId],
+    );
+    return rows.map((r) => rowToEvent(r as Record<string, unknown>));
+  }
+
+  async listBeaconEvents(beaconName: string, limit = 100): Promise<BeaconEvent[]> {
     const lim = Math.max(1, Math.floor(limit));
     const [rows] = await this.pool.execute<RowDataPacket[]>(
       `SELECT * FROM ${this.eventsTable} WHERE beacon_name = ? ORDER BY seq DESC LIMIT ${lim}`,
@@ -248,9 +291,56 @@ export class BeaconMysqlAdapter implements BeaconStateAdapter {
   }
 }
 
+/**
+ * Bring a pre-multi-instance database forward. The old layout keyed instances by
+ * `beacon_name`; the new one keys them by instance id, and a beacon's
+ * definition-owned instance uses the beacon name as its id — so the migration is
+ * a column rename (CHANGE COLUMN keeps the primary key) plus a backfill, and
+ * every existing row keeps its identity, desired state, and counters.
+ */
+async function migrateToMultiInstance(
+  pool: Pool,
+  table: string,
+  eventsTable: string,
+): Promise<void> {
+  const hasColumn = async (t: string, column: string): Promise<boolean> => {
+    const [rows] = await pool.execute<RowDataPacket[]>(
+      `SELECT 1 FROM information_schema.columns
+        WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,
+      [t, column],
+    );
+    return rows.length > 0;
+  };
+
+  if (!(await hasColumn(table, "id"))) {
+    await pool.execute(
+      `ALTER TABLE ${table} CHANGE COLUMN beacon_name id VARCHAR(191) NOT NULL`,
+    );
+    await pool.execute(`ALTER TABLE ${table} ADD COLUMN beacon_name VARCHAR(255) NULL`);
+    await pool.execute(`UPDATE ${table} SET beacon_name = id WHERE beacon_name IS NULL`);
+  }
+  if (!(await hasColumn(table, "label"))) {
+    await pool.execute(`ALTER TABLE ${table} ADD COLUMN label TEXT`);
+  }
+  if (!(await hasColumn(table, "origin"))) {
+    await pool.execute(
+      `ALTER TABLE ${table} ADD COLUMN origin VARCHAR(20) NOT NULL DEFAULT 'definition'`,
+    );
+  }
+  if (!(await hasColumn(eventsTable, "instance_id"))) {
+    await pool.execute(`ALTER TABLE ${eventsTable} ADD COLUMN instance_id VARCHAR(191) NULL`);
+    await pool.execute(
+      `UPDATE ${eventsTable} SET instance_id = beacon_name WHERE instance_id IS NULL`,
+    );
+  }
+}
+
 function rowToInstance(row: Record<string, unknown>): BeaconInstance {
   return {
-    beaconName: row.beacon_name as string,
+    id: row.id as string,
+    beaconName: (row.beacon_name as string | null) ?? (row.id as string),
+    label: (row.label as string | null) ?? undefined,
+    origin: ((row.origin as string | null) ?? "definition") as BeaconInstance["origin"],
     status: row.status as BeaconInstance["status"],
     desiredState: row.desired_state as BeaconInstance["desiredState"],
     incarnation: Number(row.incarnation),
@@ -272,6 +362,7 @@ function rowToInstance(row: Record<string, unknown>): BeaconInstance {
 function rowToEvent(row: Record<string, unknown>): BeaconEvent {
   return {
     id: row.id as string,
+    instanceId: ((row.instance_id as string | null) ?? (row.beacon_name as string)) ?? "",
     beaconName: row.beacon_name as string,
     incarnation: Number(row.incarnation),
     type: row.type as BeaconEvent["type"],
