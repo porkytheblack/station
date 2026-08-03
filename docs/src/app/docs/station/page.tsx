@@ -144,6 +144,18 @@ export default defineConfig({
             </td>
           </tr>
           <tr>
+            <td><code>subscribers</code></td>
+            <td><code>{`{ signal?, broadcast?, beacon? }`}</code></td>
+            <td>&mdash;</td>
+            <td>
+              Your own lifecycle subscribers for metrics, alerting, or audit
+              logging. Registered <em>in addition to</em> Station&rsquo;s own,
+              which always run first. Errors thrown from a subscriber are caught
+              and logged, never propagated into a run. Requires{" "}
+              <code>runRunners: true</code>.
+            </td>
+          </tr>
+          <tr>
             <td><code>runRunners</code></td>
             <td><code>boolean</code></td>
             <td><code>true</code></td>

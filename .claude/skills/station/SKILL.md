@@ -64,15 +64,15 @@ primitives only when there is a concrete requirement station-kit cannot satisfy
 - A desktop/Tauri app — use `station-tauri`'s `createTauriStation()` instead
   (see rule 14).
 - A headless worker that must not bind a port or expose a dashboard at all.
-- **Registering your own subscribers** (metrics, alerting, custom webhooks).
-  `StationConfig` has no `subscribers` field and `createStation` does not
-  return the runners, so this is currently only reachable by constructing the
-  runner yourself.
 - Tests and tight in-process harnesses.
+
+Note that **custom subscribers are not a reason to go bare** — pass them via
+`defineConfig({ subscribers: { signal: [...], broadcast: [...], beacon: [...] } })`
+and they are registered alongside Station's own.
 
 When you do go bare, say why in a comment, and expect to handle shutdown order
 (broadcast before signal), subscriber wiring, and storage setup yourself. If you
-are unsure whether station-kit covers a requirement, check `api-reference.md` §12
+are unsure whether station-kit covers a requirement, check `api-reference.md` §7
 (`StationConfig`) before deciding it doesn't — most "I need custom X" cases are a
 config field or a pluggable adapter.
 
@@ -366,6 +366,16 @@ export default defineConfig({
   adapter: new SqliteAdapter({ dbPath: "./jobs.db" }),
   broadcastAdapter: new BroadcastSqliteAdapter({ dbPath: "./jobs.db" }),
   auth: { username: "admin", password: "changeme" },
+
+  // Your own lifecycle hooks — metrics, alerting, audit logs. Registered
+  // alongside Station's own (which power the dashboard), never instead of them.
+  subscribers: {
+    signal: [{
+      onRunCompleted: ({ run }) => metrics.increment("signal.completed", { name: run.signalName }),
+      onRunFailed: ({ run, error }) => alerting.send(`${run.signalName} failed: ${error}`),
+    }],
+    // broadcast: [...], beacon: [...]
+  },
 });
 ```
 

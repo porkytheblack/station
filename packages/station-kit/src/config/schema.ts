@@ -1,6 +1,6 @@
-import type { SignalQueueAdapter } from "station-signal";
-import type { BroadcastQueueAdapter } from "station-broadcast";
-import type { BeaconStateAdapter } from "station-beacon";
+import type { SignalQueueAdapter, SignalSubscriber } from "station-signal";
+import type { BroadcastQueueAdapter, BroadcastSubscriber } from "station-broadcast";
+import type { BeaconStateAdapter, BeaconSubscriber } from "station-beacon";
 import type { ScheduleAdapter } from "station-schedules";
 import type { EnvStorageAdapter } from "station-env";
 import type { ApiKeyStorageAdapter } from "../server/auth/keys.js";
@@ -32,6 +32,25 @@ export interface BroadcastRunnerConfig {
 
 export interface DeployConfig {
   include?: string[];
+}
+
+/**
+ * Your own lifecycle subscribers, registered alongside the ones Station wires
+ * for the dashboard and event stream. Use them for metrics, alerting, audit
+ * logs, or any cross-cutting side effect that shouldn't live inside a handler.
+ *
+ * Station's internal subscribers are always registered and always run first —
+ * these are additive, so a slow or throwing subscriber of yours can't stop the
+ * dashboard from updating. Errors thrown from a subscriber are caught and
+ * logged by the runner, never propagated into a run.
+ */
+export interface SubscribersConfig {
+  /** Signal run lifecycle: dispatched, started, completed, failed, retried, steps, logs. */
+  signal?: SignalSubscriber[];
+  /** Broadcast lifecycle: queued, started, completed, failed, and per-node events. */
+  broadcast?: BroadcastSubscriber[];
+  /** Beacon supervision: starting, ready, heartbeat, exited, restart-scheduled, instance create/remove. */
+  beacon?: BeaconSubscriber[];
 }
 
 export interface StationConfig {
@@ -73,6 +92,13 @@ export interface StationConfig {
    * against Postgres, MySQL, Redis, S3, etc., and pass it here.
    */
   logStorage?: LogStorageAdapter;
+  /**
+   * Your own lifecycle subscribers for metrics, alerting, or audit logging.
+   * Registered in addition to Station's own — see {@link SubscribersConfig}.
+   * Only applied when `runRunners` is true, since there are no runners to
+   * subscribe to otherwise.
+   */
+  subscribers?: SubscribersConfig;
   signalsDir?: string;
   broadcastsDir?: string;
   beaconsDir?: string;
@@ -137,6 +163,7 @@ export function resolveConfig(input: StationUserConfig): StationConfig {
     scheduleAdapter: input.scheduleAdapter,
     envStorage: input.envStorage,
     logStorage: input.logStorage,
+    subscribers: input.subscribers,
     signalsDir: input.signalsDir,
     broadcastsDir: input.broadcastsDir,
     beaconsDir: input.beaconsDir,

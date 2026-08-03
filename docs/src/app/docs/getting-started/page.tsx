@@ -474,35 +474,42 @@ export const processOrder = signal("processOrder")
         Subscribers observe the signal lifecycle. Use them for logging, metrics,
         alerting, or any side effect that should not live inside a handler.
       </p>
+      <p>
+        Register them in <code>station.config.ts</code>. Yours run alongside the
+        subscribers Station wires for the dashboard and event stream — additive,
+        never instead of them.
+      </p>
+      <Code>{`// station.config.ts
+import { defineConfig } from "station-kit";
+import { ConsoleSubscriber } from "station-signal";
+
+export default defineConfig({
+  signalsDir: "./signals",
+  subscribers: {
+    signal: [
+      new ConsoleSubscriber(), // Built-in: logs all events to stdout
+      {
+        onRunStarted({ run }) {
+          metrics.increment("signal.started", { name: run.signalName });
+        },
+        onRunCompleted({ run }) {
+          metrics.increment("signal.completed", { name: run.signalName });
+        },
+        onRunFailed({ run, error }) {
+          alerting.send(\`Signal \${run.signalName} failed: \${error}\`);
+        },
+      },
+    ],
+    // broadcast: [...] and beacon: [...] take their own subscriber shapes
+  },
+});`}</Code>
       <div className="info-box">
         <p>
-          Custom subscribers are one of the few things{" "}
-          <code>defineConfig</code> does not expose today — station-kit wires its
-          own (they power the dashboard and the event stream). Registering your
-          own means constructing the runner yourself, which is a legitimate
-          reason to embed. Everything else in this guide should stay on{" "}
-          <code>station.config.ts</code>.
+          Station&apos;s own subscribers always run first, and the runner catches
+          and logs anything a subscriber throws — so a slow or broken subscriber
+          of yours can neither stall the dashboard nor fail a run.
         </p>
       </div>
-      <Code>{`import { SignalRunner, ConsoleSubscriber } from "station-signal";
-
-const runner = new SignalRunner({
-  signalsDir: "./signals",
-  subscribers: [
-    new ConsoleSubscriber(), // Built-in: logs all events to stdout
-    {
-      onRunStarted({ run }) {
-        metrics.increment("signal.started", { name: run.signalName });
-      },
-      onRunCompleted({ run }) {
-        metrics.increment("signal.completed", { name: run.signalName });
-      },
-      onRunFailed({ run, error }) {
-        alerting.send(\`Signal \${run.signalName} failed: \${error}\`);
-      },
-    },
-  ],
-});`}</Code>
 
       <table className="api-table">
         <thead>
