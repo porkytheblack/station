@@ -159,6 +159,27 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
   stationBroadcastSub.setSSEHub(sseHub);
   stationBeaconSub.setSSEHub(sseHub);
 
+  // User-supplied subscribers are appended after Station's own, so the
+  // dashboard and event stream are updated before any custom side effect runs.
+  // Runners already catch and log per-subscriber errors, so one of these
+  // throwing can't break a run.
+  const signalSubscribers = [stationSignalSub, ...(config.subscribers?.signal ?? [])];
+  const broadcastSubscribers = [stationBroadcastSub, ...(config.subscribers?.broadcast ?? [])];
+  const beaconSubscribers = [stationBeaconSub, ...(config.subscribers?.beacon ?? [])];
+
+  // Without runners there is nothing to subscribe to, and silently dropping
+  // them would look like the subscribers were simply never called.
+  const configuredSubscriberCount =
+    (config.subscribers?.signal?.length ?? 0) +
+    (config.subscribers?.broadcast?.length ?? 0) +
+    (config.subscribers?.beacon?.length ?? 0);
+  if (configuredSubscriberCount > 0 && !config.runRunners) {
+    console.warn(
+      `[station] ${configuredSubscriberCount} subscriber(s) configured but runRunners is false — ` +
+        "this instance only serves the dashboard, so they will never fire.",
+    );
+  }
+
   // Create runners if enabled
   let signalRunner: SignalRunner | undefined;
   let broadcastRunner: BroadcastRunner | undefined;
@@ -187,7 +208,7 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
       maxConcurrent: config.runner.maxConcurrent,
       maxAttempts: config.runner.maxAttempts,
       retryBackoffMs: config.runner.retryBackoffMs,
-      subscribers: [stationSignalSub],
+      subscribers: signalSubscribers,
       scheduleReconciler: signalScheduleReconciler,
       envProvider: envStore,
     });
@@ -210,7 +231,7 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
         broadcastsDir,
         adapter: broadcastAdapter ?? new BroadcastMemoryAdapter(),
         pollIntervalMs: config.broadcastRunner.pollIntervalMs,
-        subscribers: [stationBroadcastSub],
+        subscribers: broadcastSubscribers,
         scheduleReconciler: broadcastScheduleReconciler,
       });
     }
@@ -220,7 +241,7 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
         beaconsDir,
         adapter: beaconAdapter ?? new BeaconMemoryAdapter(),
         signalRunner, // beacons can trigger signals into the shared queue
-        subscribers: [stationBeaconSub],
+        subscribers: beaconSubscribers,
         envProvider: envStore,
         maxInstancesPerBeacon: config.beaconMaxInstances,
       });

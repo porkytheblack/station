@@ -4,7 +4,13 @@ export function defineConfig(config: StationUserConfig): StationUserConfig {
   return config;
 }
 
-export type { StationConfig, StationUserConfig, AuthConfig, DeployConfig } from "./config/schema.js";
+export type {
+  StationConfig,
+  StationUserConfig,
+  AuthConfig,
+  DeployConfig,
+  SubscribersConfig,
+} from "./config/schema.js";
 export { resolveConfig } from "./config/schema.js";
 export { loadConfig } from "./config/loader.js";
 

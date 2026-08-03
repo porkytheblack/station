@@ -1317,6 +1317,13 @@ interface StationConfig {
    * deployments. (See §7.6 below.)
    */
   logStorage?: LogStorageAdapter;
+  /**
+   * Your own lifecycle subscribers, registered *in addition to* the ones
+   * Station wires for the dashboard and event stream. Use for metrics,
+   * alerting, audit logs. Only applied when `runRunners` is true (Station warns
+   * if you configure them on a dashboard-only instance). (See §7.7 below.)
+   */
+  subscribers?: SubscribersConfig;
   signalsDir?: string;                   // auto-detects "./signals" if exists
   broadcastsDir?: string;                // auto-detects "./broadcasts" if exists
   beaconsDir?: string;                   // auto-detects "./beacons" if exists; supervises beacons + surfaces them on the dashboard
@@ -1335,6 +1342,36 @@ type StationUserConfig = Partial<Omit<StationConfig, "runner" | "broadcastRunner
   broadcastRunner?: Partial<BroadcastRunnerConfig>;
 };
 ```
+
+### 7.7 Custom subscribers (`subscribers`)
+
+```ts
+interface SubscribersConfig {
+  signal?: SignalSubscriber[];       // run lifecycle — see §1
+  broadcast?: BroadcastSubscriber[]; // DAG lifecycle — see §2
+  beacon?: BeaconSubscriber[];       // supervision lifecycle — see §13
+}
+```
+
+```ts
+export default defineConfig({
+  signalsDir: "./signals",
+  subscribers: {
+    signal: [{
+      onRunCompleted: ({ run }) => metrics.increment("signal.completed", { name: run.signalName }),
+      onRunFailed: ({ run, error }) => alerting.send(`${run.signalName} failed: ${error}`),
+    }],
+  },
+});
+```
+
+Semantics:
+
+- **Additive, never replacing.** Station's internal subscribers (which power the dashboard, WebSocket/SSE streams, and log capture) are always registered and always run **first**; yours are appended.
+- **Isolated.** Runners catch and log per-subscriber errors, so one of yours throwing cannot fail a run or stop later subscribers from firing.
+- **Requires runners.** With `runRunners: false` there is nothing to subscribe to; Station logs a warning rather than silently dropping them.
+
+This is why hand-rolling a runner is *not* needed for observability hooks.
 
 ### Config file example
 
