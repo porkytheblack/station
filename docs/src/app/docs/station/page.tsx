@@ -807,11 +807,18 @@ export default defineConfig({
 
       <h3>Using Station with an existing runner</h3>
       <p>
-        A common setup: one process runs signals, another runs Station for
-        monitoring. Both point at the same SQLite database.
+        By default a single <code>npx station</code> process both executes
+        signals and serves the dashboard — that is the setup you want unless
+        something prevents it.
+      </p>
+      <p>
+        If you already have a process executing signals — Station embedded in an
+        app server you own, say — you can point a second, read-only Station at
+        the same database purely for monitoring. Both processes share one SQLite
+        file; only the first one runs jobs.
       </p>
 
-      <Code>{`// runner.ts — executes signals
+      <Code>{`// runner.ts — an existing process that executes signals
 import path from "node:path";
 import { SignalRunner } from "station-signal";
 import { SqliteAdapter } from "station-adapter-sqlite";

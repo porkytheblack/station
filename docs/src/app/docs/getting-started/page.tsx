@@ -31,7 +31,12 @@ export default function GettingStartedPage() {
       {/* ── 1. Install ── */}
 
       <h3>1. Install</h3>
-      <Code>{`pnpm add station-signal`}</Code>
+      <Code>{`pnpm add station-signal station-kit`}</Code>
+      <p>
+        <code>station-signal</code> is where you define jobs;{" "}
+        <code>station-kit</code> is how you run them — it is Station&apos;s entry
+        point, and it wires the runners, dashboard, and API for you.
+      </p>
       <div className="info-box">
         <p>
           station-signal re-exports <code>z</code> from Zod. There is no need to
@@ -111,15 +116,83 @@ export const sendEmail = signal("sendEmail")
 
       <hr className="divider" />
 
-      {/* ── 3. Create the runner ── */}
+      {/* ── 3. Run it ── */}
 
-      <h3>3. Create the runner</h3>
+      <h3>3. Run it</h3>
       <p>
-        The runner is the process that polls for due jobs and spawns child
-        processes to execute them. Point it at a directory of signal files and
-        call <code>start()</code>.
+        Station apps are configured in one file and started with one command.{" "}
+        <code>defineConfig</code> points Station at your signal directory; the{" "}
+        <code>station</code> CLI discovers what is there and runs it.
       </p>
-      <Code>{`// runner.ts
+      <Code>{`// station.config.ts
+import { defineConfig } from "station-kit";
+
+export default defineConfig({
+  signalsDir: "./signals",
+});`}</Code>
+      <Code>{`npx station`}</Code>
+      <p>
+        That one command starts the signal runner, serves the dashboard on{" "}
+        <code>http://localhost:4400</code>, and exposes the authenticated v1 API
+        — so you can watch runs, inspect logs, and trigger jobs without writing
+        any of that yourself. Add <code>broadcastsDir</code> and{" "}
+        <code>beaconsDir</code> later and the matching runners are wired the same
+        way, including the shutdown ordering between them.
+      </p>
+
+      <table className="api-table">
+        <thead>
+          <tr>
+            <th>Config field</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>signalsDir</code></td>
+            <td>
+              Path to a directory of signal files. Station auto-discovers every{" "}
+              <code>.ts</code> or <code>.js</code> file that exports a signal and
+              registers it at startup.
+            </td>
+          </tr>
+          <tr>
+            <td><code>adapter</code></td>
+            <td>
+              Where run state is persisted. Defaults to in-memory — see{" "}
+              <strong>step 5</strong>.
+            </td>
+          </tr>
+          <tr>
+            <td><code>port</code></td>
+            <td>Dashboard / API port. Defaults to <code>4400</code>.</td>
+          </tr>
+          <tr>
+            <td><code>runner.pollIntervalMs</code></td>
+            <td>
+              How often the runner checks for due entries. Defaults to one
+              second.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div className="warn-box">
+        <p>
+          By default, Station uses an in-memory adapter. All jobs are lost on
+          restart. See <strong>step 5</strong> below for production-grade persistence.
+        </p>
+      </div>
+
+      <h4>Embedding: constructing a runner yourself</h4>
+      <p>
+        <code>SignalRunner</code> is also exported directly, for the cases
+        station-kit deliberately doesn&apos;t cover: embedding Station inside a
+        server process you already own, a headless worker that must not bind a
+        port, or tests. Reach for it only then — you take on wiring the storage,
+        subscribers, and shutdown ordering yourself.
+      </p>
+      <Code>{`// runner.ts — the escape hatch, not the default
 import path from "node:path";
 import { SignalRunner } from "station-signal";
 
@@ -128,40 +201,6 @@ const runner = new SignalRunner({
 });
 
 runner.start();`}</Code>
-
-      <table className="api-table">
-        <thead>
-          <tr>
-            <th>Option</th>
-            <th>Description</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td><code>signalsDir</code></td>
-            <td>
-              Path to a directory of signal files. The runner auto-discovers
-              every <code>.ts</code> or <code>.js</code> file that exports a
-              signal and registers it at startup.
-            </td>
-          </tr>
-          <tr>
-            <td><code>runner.start()</code></td>
-            <td>
-              Begins the poll loop. The runner checks for due entries every
-              second by default. Configurable via the <code>pollIntervalMs</code> option
-              (in milliseconds).
-            </td>
-          </tr>
-        </tbody>
-      </table>
-
-      <div className="warn-box">
-        <p>
-          By default, the runner uses an in-memory adapter. All jobs are lost on
-          restart. See <strong>step 5</strong> below for production-grade persistence.
-        </p>
-      </div>
 
       <hr className="divider" />
 
@@ -233,19 +272,14 @@ console.log(\`Enqueued run: \${runId}\`);`}</Code>
         your <code>package.json</code> and re-run <code>pnpm install</code>.
         See <a href="/docs/adapters">Adapters</a> for details.
       </div>
-      <Code>{`// runner.ts
-import path from "node:path";
-import { SignalRunner } from "station-signal";
+      <Code>{`// station.config.ts
+import { defineConfig } from "station-kit";
 import { SqliteAdapter } from "station-adapter-sqlite";
 
-const runner = new SignalRunner({
-  signalsDir: path.join(import.meta.dirname, "signals"),
-  adapter: new SqliteAdapter({
-    dbPath: path.join(import.meta.dirname, "jobs.db"),
-  }),
-});
-
-runner.start();`}</Code>
+export default defineConfig({
+  signalsDir: "./signals",
+  adapter: new SqliteAdapter({ dbPath: "./jobs.db" }),
+});`}</Code>
 
       <table className="api-table">
         <thead>
@@ -440,6 +474,16 @@ export const processOrder = signal("processOrder")
         Subscribers observe the signal lifecycle. Use them for logging, metrics,
         alerting, or any side effect that should not live inside a handler.
       </p>
+      <div className="info-box">
+        <p>
+          Custom subscribers are one of the few things{" "}
+          <code>defineConfig</code> does not expose today — station-kit wires its
+          own (they power the dashboard and the event stream). Registering your
+          own means constructing the runner yourself, which is a legitimate
+          reason to embed. Everything else in this guide should stay on{" "}
+          <code>station.config.ts</code>.
+        </p>
+      </div>
       <Code>{`import { SignalRunner, ConsoleSubscriber } from "station-signal";
 
 const runner = new SignalRunner({

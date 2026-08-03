@@ -2,6 +2,32 @@
 
 Complete, copy-pasteable examples for the Station background job framework.
 
+> **How to run any of these: `station-kit`.** Signals, broadcasts, and beacons
+> are just exported definitions in `signalsDir` / `broadcastsDir` /
+> `beaconsDir` — a `station.config.ts` calling `defineConfig` plus
+> `npx station` discovers and runs them, with the dashboard and v1 API included.
+>
+> ```ts
+> // station.config.ts
+> import { defineConfig } from "station-kit";
+> import { SqliteAdapter } from "station-adapter-sqlite";
+> import { BroadcastSqliteAdapter } from "station-adapter-sqlite/broadcast";
+>
+> export default defineConfig({
+>   signalsDir: "./signals",
+>   broadcastsDir: "./broadcasts",
+>   beaconsDir: "./beacons",
+>   adapter: new SqliteAdapter({ dbPath: "./jobs.db" }),
+>   broadcastAdapter: new BroadcastSqliteAdapter({ dbPath: "./jobs.db" }),
+> });
+> ```
+>
+> Several examples below construct `SignalRunner` / `BroadcastRunner` /
+> `BeaconRunner` by hand to show what a runner does and which options exist.
+> That is the escape hatch, for embedding Station in a process you own, headless
+> workers, and tests — **not** the shape to copy for a normal app. Prefer the
+> config above and let station-kit wire the runners.
+
 ---
 
 ## 1. Basic Signal -- Send Email
@@ -2003,7 +2029,8 @@ const beaconRunner = new BeaconRunner({
 });
 
 await signalRunner.start();
-await beaconRunner.start();
+beaconRunner.start().catch(console.error);   // only settles when the supervisor stops
+await beaconRunner.whenReady();              // discovery + instance hydration done
 
 // Runtime control (e.g. from an API handler):
 // await beaconRunner.stopBeacon("stream-client");
@@ -2013,6 +2040,57 @@ await beaconRunner.start();
 ```
 
 **Notes:** invalid config or a missing beacon is a fatal error (goes to `errored`, never restart-looped, even under `restart("always")`). Triggering signals from a beacon requires a **persistent** signal adapter — the default in-memory adapter does not cross the child-process boundary. See `examples/15-beacon` for a runnable, dependency-light version (no signals).
+
+### Many instances of one beacon
+
+The three beacons above are single processes. A beacon can instead be a *template*: declare `.onDemand()` and nothing starts on discovery -- instances are created at runtime, each with its own config, and each supervised independently.
+
+```ts
+// beacons/queue-worker.ts -- ON-DEMAND mode (one per tenant / queue / stream)
+import { beacon, z } from "station-beacon";
+
+export const queueWorker = beacon("queue-worker")
+  .config(z.object({ queue: z.string(), batchSize: z.number().default(10) }))
+  .onDemand()                     // no instance seeded; created via API/runner
+  .maxInstances(8)                // bound what an API caller can spawn
+  .restart("on-failure")
+  .run(async (ctx) => {
+    ctx.log(`worker ${ctx.instanceId} draining ${ctx.config.queue}`);
+    ctx.ready();
+    while (!ctx.signal.aborted) {
+      await drainBatch(ctx.config.queue, ctx.config.batchSize, { signal: ctx.signal });
+    }
+  });
+```
+
+```ts
+// From code -- e.g. spin up a worker when a tenant is provisioned
+const worker = await beaconRunner.createInstance("queue-worker", {
+  id: `worker-${tenantId}`,                     // optional; generated when omitted
+  label: tenant.name,
+  config: { queue: tenantId, batchSize: 25 },   // validated against the config schema
+});                                             // starts immediately (start: false to stage it)
+
+await beaconRunner.listInstances({ beaconName: "queue-worker" });
+await beaconRunner.updateInstance(worker.id, { config: { queue: tenantId, batchSize: 50 }, restart: true });
+await beaconRunner.stopInstance(worker.id);
+await beaconRunner.deleteInstance(worker.id);   // stops the process, then removes the record
+```
+
+```bash
+# ...or over HTTP. The v1 API mirrors these under /api/v1 with scopes:
+# create/start -> trigger, stop -> cancel, patch/delete -> admin.
+curl -X POST localhost:4400/api/beacons/queue-worker/instances \
+     -H 'content-type: application/json' \
+     -d '{"id":"worker-acme","label":"acme","config":{"queue":"acme","batchSize":25}}'
+
+curl localhost:4400/api/beacons/queue-worker/instances
+curl -X POST   localhost:4400/api/beacons/queue-worker/instances/worker-acme/stop
+curl -X DELETE localhost:4400/api/beacons/queue-worker/instances/worker-acme
+curl -X POST  'localhost:4400/api/beacons/queue-worker/stop?all=true'
+```
+
+**Start modes:** `auto` (default -- one instance, seeded and started), `.manualStart()` (one instance, seeded but stopped), `.onDemand()` (none seeded). The definition-owned instance's id **is** the beacon name, so `startBeacon`/`stopBeacon` keep working and pre-existing single-instance state carries over. Runtime-created instances are persisted, so a supervisor restart resumes them; one whose definition has disappeared shows up as `errored` rather than vanishing. Only runtime-created instances can be deleted -- stop the definition-owned one instead.
 
 ---
 

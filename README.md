@@ -9,14 +9,14 @@ Type-safe background jobs, recurring tasks, and DAG workflows for TypeScript.
 - **Beacons** — Long-running, supervised processes (servers, pollers, clients) with restart policies, exponential backoff, heartbeat stall detection, and graceful shutdown
 - **Recurring jobs** — Simple interval syntax (`"every 5m"`, `"every 1h"`)
 - **Four adapter backends** — SQLite, PostgreSQL, MySQL, Redis (or bring your own)
-- **Dashboard** — Real-time monitoring UI with auth, WebSocket updates, and a REST API
+- **`station-kit`** — The entry point: one config file and `npx station` wire the runners, a real-time dashboard with auth and WebSocket updates, and an authenticated REST API
 - **Remote triggers** — `configure({ endpoint, apiKey })` to trigger jobs from any service over HTTP
 - **Claude Code skill** — AI assistant that knows the full API
 
 ## Quick start
 
 ```bash
-pnpm add station-signal
+pnpm add station-signal station-kit
 ```
 
 Define a signal:
@@ -34,20 +34,28 @@ export const sendEmail = signal("send-email")
   });
 ```
 
-Start the runner:
+Configure and run it:
 
 ```ts
-// src/runner.ts
-import { SignalRunner } from "station-signal";
+// station.config.ts
+import { defineConfig } from "station-kit";
 import { SqliteAdapter } from "station-adapter-sqlite";
 
-const runner = new SignalRunner({
+export default defineConfig({
   signalsDir: "./src/signals",
   adapter: new SqliteAdapter({ dbPath: "jobs.db" }),
 });
-
-await runner.start();
 ```
+
+```bash
+npx station
+```
+
+`station-kit` is the entry point: one config file and one command wire the
+runners, the dashboard, and the authenticated v1 API. The `SignalRunner` /
+`BroadcastRunner` / `BeaconRunner` classes are exported too, but constructing
+them by hand is an escape hatch — for embedding Station in a process you already
+own, headless workers, or tests.
 
 Trigger from anywhere:
 
@@ -73,7 +81,7 @@ await sendEmail.trigger({
 | [`station-adapter-postgres`](./packages/station-adapter-postgres) | PostgreSQL adapter (pg) |
 | [`station-adapter-mysql`](./packages/station-adapter-mysql) | MySQL adapter (mysql2) |
 | [`station-adapter-redis`](./packages/station-adapter-redis) | Redis adapter (ioredis) |
-| [`station-kit`](./packages/station-kit) | Dashboard — monitor and control signals and broadcasts |
+| [`station-kit`](./packages/station-kit) | **The entry point** — `defineConfig` + `npx station`: runners, dashboard, v1 API, deploy |
 
 ## Documentation
 
