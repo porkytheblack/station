@@ -6,6 +6,13 @@
 export interface BeaconContext<TConfig = unknown> {
   /** The beacon's name. */
   readonly name: string;
+  /**
+   * The id of the instance this process is running. A beacon can back several
+   * instances at once (one per tenant, stream, queue, …), each with its own
+   * config; this is what distinguishes them in logs and connection labels. For
+   * a beacon's definition-owned instance it equals `name`.
+   */
+  readonly instanceId: string;
   /** Validated configuration for this incarnation (schema defaults applied). */
   readonly config: TConfig;
   /**

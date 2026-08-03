@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 import { BeaconMemoryAdapter } from "../src/adapters/memory.js";
 import type { BeaconInstance } from "../src/types.js";
 
-function makeInstance(name: string): BeaconInstance {
+function makeInstance(id: string, beaconName = id): BeaconInstance {
   const now = new Date();
   return {
-    beaconName: name,
+    id,
+    beaconName,
+    origin: id === beaconName ? "definition" : "api",
     status: "backoff",
     desiredState: "running",
     incarnation: 0,
@@ -55,11 +57,24 @@ test("listInstances returns all and removeInstance drops one", async () => {
   assert.deepEqual(names.sort(), ["two"]);
 });
 
+test("listInstances filters by beacon name across many instances", async () => {
+  const a = new BeaconMemoryAdapter();
+  await a.upsertInstance(makeInstance("worker", "worker"));
+  await a.upsertInstance(makeInstance("worker-a1", "worker"));
+  await a.upsertInstance(makeInstance("worker-b2", "worker"));
+  await a.upsertInstance(makeInstance("other"));
+
+  const workers = await a.listInstances({ beaconName: "worker" });
+  assert.deepEqual(workers.map((i) => i.id), ["worker", "worker-a1", "worker-b2"]);
+  assert.equal((await a.listInstances()).length, 4);
+});
+
 test("events are appended and listed newest-first with a limit", async () => {
   const a = new BeaconMemoryAdapter();
   for (let i = 0; i < 5; i++) {
     await a.addEvent({
       id: a.generateId(),
+      instanceId: "gamma",
       beaconName: "gamma",
       incarnation: i,
       type: "starting",
@@ -68,6 +83,7 @@ test("events are appended and listed newest-first with a limit", async () => {
   }
   await a.addEvent({
     id: a.generateId(),
+    instanceId: "other",
     beaconName: "other",
     incarnation: 0,
     type: "starting",
@@ -78,6 +94,27 @@ test("events are appended and listed newest-first with a limit", async () => {
   assert.equal(recent.length, 2);
   // newest first → incarnations 4 then 3
   assert.deepEqual(recent.map((e) => e.incarnation), [4, 3]);
+});
+
+test("listBeaconEvents spans every instance of a beacon; removal drops an instance's events", async () => {
+  const a = new BeaconMemoryAdapter();
+  for (const [instanceId, incarnation] of [["w-1", 1], ["w-2", 2]] as const) {
+    await a.addEvent({
+      id: a.generateId(),
+      instanceId,
+      beaconName: "worker",
+      incarnation,
+      type: "starting",
+      at: new Date(),
+    });
+  }
+
+  assert.equal((await a.listBeaconEvents("worker")).length, 2);
+  assert.equal((await a.listEvents("w-1")).length, 1);
+
+  await a.removeInstance("w-1");
+  assert.equal((await a.listEvents("w-1")).length, 0);
+  assert.equal((await a.listBeaconEvents("worker")).length, 1);
 });
 
 test("generateId is unique and ping resolves true", async () => {

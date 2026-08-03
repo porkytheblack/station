@@ -7,6 +7,17 @@ import { useStation } from "../hooks/use-station";
 import { useBreadcrumb } from "../hooks/use-breadcrumb";
 import { StatusBadge } from "../components/status-badge";
 
+/**
+ * One badge for a whole beacon: the definition-owned instance's status if there
+ * is one, otherwise "running" when any instance is up, else the first instance's
+ * status. Beacons with no instances at all get no badge.
+ */
+function summaryStatus(b: BeaconListItem): BeaconListItem["instances"][number]["status"] | null {
+  if (b.instance) return b.instance.status;
+  if (b.runningCount > 0) return "running";
+  return b.instances[0]?.status ?? null;
+}
+
 export default function BeaconsPage() {
   const api = useApi();
   const router = useRouter();
@@ -62,10 +73,10 @@ export default function BeaconsPage() {
             <th>Status</th>
             <th>Name</th>
             <th>Kind</th>
-            <th>Desired</th>
-            <th>Incarnation</th>
+            <th>Start mode</th>
+            <th>Instances</th>
+            <th>Running</th>
             <th>Restarts</th>
-            <th>PID</th>
           </tr>
         </thead>
         <tbody>
@@ -77,17 +88,21 @@ export default function BeaconsPage() {
               onClick={() => router.push(`/beacons/${encodeURIComponent(b.name)}`)}
             >
               <td>
-                {b.instance ? <StatusBadge status={b.instance.status} /> : <span style={{ color: "var(--muted)" }}>{"—"}</span>}
+                {summaryStatus(b) ? (
+                  <StatusBadge status={summaryStatus(b)!} />
+                ) : (
+                  <span style={{ color: "var(--muted)" }}>{"—"}</span>
+                )}
               </td>
               <td className="mono">{b.name}</td>
               <td style={{ color: "var(--muted)", fontSize: "0.8125rem" }}>{b.mode}</td>
               <td className="mono" style={{ color: "var(--muted)", fontSize: "0.8125rem" }}>
-                {b.instance?.desiredState ?? "—"}
+                {b.startMode}
               </td>
-              <td className="mono" style={{ fontSize: "0.8125rem" }}>{b.instance?.incarnation ?? 0}</td>
-              <td className="mono" style={{ fontSize: "0.8125rem" }}>{b.instance?.restartCount ?? 0}</td>
-              <td className="mono" style={{ fontSize: "0.8125rem", color: "var(--muted)" }}>
-                {b.instance?.pid ?? "—"}
+              <td className="mono" style={{ fontSize: "0.8125rem" }}>{b.instanceCount}</td>
+              <td className="mono" style={{ fontSize: "0.8125rem" }}>{b.runningCount}</td>
+              <td className="mono" style={{ fontSize: "0.8125rem" }}>
+                {b.instances.reduce((sum, i) => sum + i.restartCount, 0)}
               </td>
             </tr>
           ))}

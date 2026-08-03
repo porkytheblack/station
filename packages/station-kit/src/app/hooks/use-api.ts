@@ -105,7 +105,12 @@ export type BeaconStatus =
   | "stopped" | "starting" | "running" | "stopping" | "backoff" | "errored";
 
 export interface BeaconInstance {
+  /** Unique instance id. A beacon's definition-owned instance uses the beacon name. */
+  id: string;
   beaconName: string;
+  label?: string;
+  /** `definition` = seeded from the beacon file; `api` = created at runtime. */
+  origin: "definition" | "api";
   status: BeaconStatus;
   desiredState: "running" | "stopped";
   incarnation: number;
@@ -116,7 +121,7 @@ export interface BeaconInstance {
   readyAt?: string;
   lastHeartbeatAt?: string;
   lastExitAt?: string;
-  lastExitReason?: "clean" | "failure" | "stopped" | "stalled";
+  lastExitReason?: "clean" | "failure" | "stopped" | "stalled" | "startup-timeout";
   lastError?: string;
   nextRestartAt?: string;
   createdAt: string;
@@ -128,19 +133,51 @@ export interface BeaconListItem {
   filePath: string;
   mode: "run" | "poll";
   restartPolicy: string;
+  /** How instances come into existence: seeded and started, seeded stopped, or API-only. */
+  startMode: "auto" | "manual" | "on-demand";
   autoStart: boolean;
+  maxInstances: number;
   requiredEnv?: string[];
+  /** The definition-owned instance, or null for an on-demand beacon. */
   instance: BeaconInstance | null;
+  instances: BeaconInstance[];
+  instanceCount: number;
+  runningCount: number;
+}
+
+export interface BeaconDetail extends BeaconListItem {
+  /** Serialized config schema, so the dashboard can render a form for new instances. */
+  configSchema: SchemaField | null;
+  defaultConfig: unknown;
 }
 
 export interface BeaconEvent {
   id: string;
+  instanceId: string;
   beaconName: string;
   incarnation: number;
   type: string;
   message?: string;
   at: string;
 }
+
+export interface CreateBeaconInstanceBody {
+  id?: string;
+  label?: string;
+  config?: unknown;
+  start?: boolean;
+}
+
+export interface BeaconLogEntry {
+  runId: string;
+  signalName: string;
+  level: string;
+  message: string;
+  timestamp: string;
+}
+
+const instancePath = (name: string, instanceId: string) =>
+  `/beacons/${encodeURIComponent(name)}/instances/${encodeURIComponent(instanceId)}`;
 
 // ─── Dynamic broadcasts / schedules / expressions ───────────────────
 
@@ -237,13 +274,43 @@ export function useApi() {
 
     // Beacons
     getBeacons: () => fetchApi<BeaconListItem[]>("/beacons"),
-    getBeacon: (name: string) => fetchApi<BeaconListItem>(`/beacons/${encodeURIComponent(name)}`),
+    getBeacon: (name: string) => fetchApi<BeaconDetail>(`/beacons/${encodeURIComponent(name)}`),
     getBeaconEvents: (name: string) => fetchApi<BeaconEvent[]>(`/beacons/${encodeURIComponent(name)}/events`),
     getBeaconLogs: (name: string) =>
-      fetchApi<Array<{ runId: string; signalName: string; level: string; message: string; timestamp: string }>>(`/beacons/${encodeURIComponent(name)}/logs`),
+      fetchApi<BeaconLogEntry[]>(`/beacons/${encodeURIComponent(name)}/logs`),
     startBeacon: (name: string) => fetchApi<{ started: boolean }>(`/beacons/${encodeURIComponent(name)}/start`, { method: "POST" }),
     stopBeacon: (name: string) => fetchApi<{ stopped: boolean }>(`/beacons/${encodeURIComponent(name)}/stop`, { method: "POST" }),
     restartBeacon: (name: string) => fetchApi<{ restarted: boolean }>(`/beacons/${encodeURIComponent(name)}/restart`, { method: "POST" }),
+
+    // Beacon instances — a beacon can run many at once, each with its own config
+    getBeaconInstances: (name: string) =>
+      fetchApi<BeaconInstance[]>(`/beacons/${encodeURIComponent(name)}/instances`),
+    createBeaconInstance: (name: string, body: CreateBeaconInstanceBody) =>
+      fetchApi<BeaconInstance>(`/beacons/${encodeURIComponent(name)}/instances`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    updateBeaconInstance: (
+      name: string,
+      instanceId: string,
+      body: { config?: unknown; label?: string; restart?: boolean },
+    ) =>
+      fetchApi<BeaconInstance>(instancePath(name, instanceId), {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      }),
+    deleteBeaconInstance: (name: string, instanceId: string) =>
+      fetchApi<{ deleted: boolean }>(instancePath(name, instanceId), { method: "DELETE" }),
+    startBeaconInstance: (name: string, instanceId: string) =>
+      fetchApi<{ started: boolean }>(`${instancePath(name, instanceId)}/start`, { method: "POST" }),
+    stopBeaconInstance: (name: string, instanceId: string) =>
+      fetchApi<{ stopped: boolean }>(`${instancePath(name, instanceId)}/stop`, { method: "POST" }),
+    restartBeaconInstance: (name: string, instanceId: string) =>
+      fetchApi<{ restarted: boolean }>(`${instancePath(name, instanceId)}/restart`, { method: "POST" }),
+    getBeaconInstanceEvents: (name: string, instanceId: string) =>
+      fetchApi<BeaconEvent[]>(`${instancePath(name, instanceId)}/events`),
+    getBeaconInstanceLogs: (name: string, instanceId: string) =>
+      fetchApi<BeaconLogEntry[]>(`${instancePath(name, instanceId)}/logs`),
 
     // Dynamic broadcast definitions (v1)
     getBroadcastDefinitions: () =>

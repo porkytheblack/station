@@ -37,3 +37,44 @@ export class BeaconDefinitionError extends Error {
     this.beaconName = beaconName;
   }
 }
+
+/** No instance exists with the given id. */
+export class BeaconInstanceNotFoundError extends Error {
+  readonly code = "BEACON_INSTANCE_NOT_FOUND" as const;
+  readonly instanceId: string;
+
+  constructor(instanceId: string) {
+    super(`Beacon instance "${instanceId}" not found`);
+    this.name = "BeaconInstanceNotFoundError";
+    this.instanceId = instanceId;
+  }
+}
+
+/** An instance id is already taken — ids are unique across all beacons. */
+export class BeaconInstanceExistsError extends Error {
+  readonly code = "BEACON_INSTANCE_EXISTS" as const;
+  readonly instanceId: string;
+
+  constructor(instanceId: string) {
+    super(`Beacon instance "${instanceId}" already exists`);
+    this.name = "BeaconInstanceExistsError";
+    this.instanceId = instanceId;
+  }
+}
+
+/** Creating another instance would exceed the beacon's instance cap. */
+export class BeaconInstanceLimitError extends Error {
+  readonly code = "BEACON_INSTANCE_LIMIT" as const;
+  readonly beaconName: string;
+  readonly limit: number;
+
+  constructor(beaconName: string, limit: number) {
+    super(
+      `Beacon "${beaconName}" already has ${limit} instance${limit === 1 ? "" : "s"} ` +
+        `(its limit). Delete an instance, or raise the cap with .maxInstances().`,
+    );
+    this.name = "BeaconInstanceLimitError";
+    this.beaconName = beaconName;
+    this.limit = limit;
+  }
+}

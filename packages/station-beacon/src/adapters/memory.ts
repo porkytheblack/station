@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
-import type { BeaconStateAdapter } from "./index.js";
+import type { BeaconInstanceFilter, BeaconStateAdapter } from "./index.js";
 import type { BeaconEvent, BeaconInstance, BeaconInstancePatch } from "../types.js";
 
 /**
  * In-process beacon state adapter. Fine for single-process supervisors and
  * tests. State is lost on restart, so the supervisor re-derives desired state
- * from each beacon's `autoStart` flag on the next boot. For durable state
- * across restarts, back this interface with SQLite/Postgres/etc.
+ * from each beacon's start mode on the next boot and runtime-created instances
+ * do not survive. For durable state across restarts, back this interface with
+ * SQLite/Postgres/etc.
  */
 export class BeaconMemoryAdapter implements BeaconStateAdapter {
   private instances = new Map<string, BeaconInstance>();
@@ -18,16 +19,16 @@ export class BeaconMemoryAdapter implements BeaconStateAdapter {
   }
 
   async upsertInstance(instance: BeaconInstance): Promise<void> {
-    this.instances.set(instance.beaconName, { ...instance });
+    this.instances.set(instance.id, { ...instance });
   }
 
-  async getInstance(beaconName: string): Promise<BeaconInstance | null> {
-    const found = this.instances.get(beaconName);
+  async getInstance(instanceId: string): Promise<BeaconInstance | null> {
+    const found = this.instances.get(instanceId);
     return found ? { ...found } : null;
   }
 
-  async updateInstance(beaconName: string, patch: BeaconInstancePatch): Promise<void> {
-    const instance = this.instances.get(beaconName);
+  async updateInstance(instanceId: string, patch: BeaconInstancePatch): Promise<void> {
+    const instance = this.instances.get(instanceId);
     if (!instance) return;
     const rec = instance as unknown as Record<string, unknown>;
     for (const [key, value] of Object.entries(patch)) {
@@ -41,12 +42,17 @@ export class BeaconMemoryAdapter implements BeaconStateAdapter {
     instance.updatedAt = patch.updatedAt ?? new Date();
   }
 
-  async listInstances(): Promise<BeaconInstance[]> {
-    return Array.from(this.instances.values()).map((i) => ({ ...i }));
+  async listInstances(filter?: BeaconInstanceFilter): Promise<BeaconInstance[]> {
+    const all = Array.from(this.instances.values());
+    const scoped = filter?.beaconName
+      ? all.filter((i) => i.beaconName === filter.beaconName)
+      : all;
+    return scoped.map((i) => ({ ...i })).sort((a, b) => a.id.localeCompare(b.id));
   }
 
-  async removeInstance(beaconName: string): Promise<void> {
-    this.instances.delete(beaconName);
+  async removeInstance(instanceId: string): Promise<void> {
+    this.instances.delete(instanceId);
+    this.events = this.events.filter((e) => e.instanceId !== instanceId);
   }
 
   async addEvent(event: BeaconEvent): Promise<void> {
@@ -56,7 +62,12 @@ export class BeaconMemoryAdapter implements BeaconStateAdapter {
     }
   }
 
-  async listEvents(beaconName: string, limit = 100): Promise<BeaconEvent[]> {
+  async listEvents(instanceId: string, limit = 100): Promise<BeaconEvent[]> {
+    const filtered = this.events.filter((e) => e.instanceId === instanceId);
+    return filtered.slice(-limit).reverse();
+  }
+
+  async listBeaconEvents(beaconName: string, limit = 100): Promise<BeaconEvent[]> {
     const filtered = this.events.filter((e) => e.beaconName === beaconName);
     return filtered.slice(-limit).reverse();
   }

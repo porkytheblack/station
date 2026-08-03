@@ -2285,10 +2285,47 @@ Two terminals finalize a beacon:
 | `.heartbeat(interval, opts?)` | Opt into stall detection. `opts.timeout` defaults to 3× interval. Handler must call `ctx.heartbeat()`. |
 | `.startupTimeout(value)` | Deadline from spawn to reach ready (`ctx.ready()`). Missing it kills+restarts with reason `startup-timeout` (per policy). Off by default; handler must call `ctx.ready()`. |
 | `.stopTimeout(value)` | Grace period after a stop request before force-kill. Default `"10s"`. |
-| `.manualStart()` | Don't auto-start on discovery. |
+| `.startMode(mode)` | `"auto"` (default) \| `"manual"` \| `"on-demand"` — how instances come into existence. |
+| `.manualStart()` | Shorthand for `.startMode("manual")`: seed one instance, leave it stopped. |
+| `.onDemand()` | Shorthand for `.startMode("on-demand")`: seed nothing; instances are created at runtime. |
+| `.maxInstances(n)` | Cap concurrent instances of this beacon. Defaults to the runner's `maxInstancesPerBeacon` (100). |
+| `.env(...keys)` | Require env var keys; a missing one marks the instance `errored` instead of spawning. |
 | `.run(handler)` / `.poll(interval, fn)` | Finalize. |
 
 Intervals accept `"100ms"`, `"30s"`, `"5m"`, `"1h"`, `"1d"`, `"1w"`, or a raw millisecond number.
+
+### Start modes and instances
+
+A beacon **definition** can back many running **instances**, each supervised independently with its own config, status, restart counter, and logs. The start mode decides how they come to exist:
+
+| Start mode | Behaviour |
+|------------|-----------|
+| `auto` (default) | One instance is seeded on discovery and started. Its id is the beacon name. |
+| `manual` (`.manualStart()`) | One instance is seeded but left stopped until started from the dashboard or API. |
+| `on-demand` (`.onDemand()`) | Nothing is seeded. Instances exist only once created at runtime, and are removed when deleted. |
+
+The instance seeded from the file has `origin: "definition"` and uses the beacon name as its id — so single-instance state written before instances existed keeps working unchanged, and definition-level calls (`startBeacon` / `stopBeacon` / `restartBeacon`) act on it. Any beacon, whatever its start mode, can *additionally* have instances created at runtime (`origin: "api"`); those are fully removable.
+
+```ts
+// One definition, many tenants.
+export const queueWorker = beacon("queue-worker")
+  .config(z.object({ queue: z.string(), batchSize: z.number().default(10) }))
+  .onDemand()
+  .maxInstances(8)
+  .run(async (ctx) => {
+    ctx.log(`instance ${ctx.instanceId} draining ${ctx.config.queue}`);
+    ctx.ready();
+    await ctx.untilStopped();
+  });
+
+await runner.createInstance("queue-worker", {
+  id: "worker-acme",                       // optional; generated when omitted
+  label: "acme",                           // optional
+  config: { queue: "acme", batchSize: 25 }, // validated against the config schema
+});                                        // starts immediately (start: false to stage it)
+```
+
+Instance ids are unique **across all beacons** (they are adapter primary keys and URL segments), must match `/^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/`, and are at most 128 characters. The bare beacon name is reserved for the definition-owned instance. Runtime-created instances are persisted, so a supervisor restart resumes them; an instance whose definition is no longer registered is marked `errored` with an explanatory message rather than silently dropped (restoring the file brings it back).
 
 ### `BeaconContext`
 
@@ -2297,6 +2334,7 @@ Passed to every handler:
 ```ts
 interface BeaconContext<TConfig> {
   readonly name: string;
+  readonly instanceId: string;      // which instance this process is; === name for the definition-owned one
   readonly config: TConfig;         // validated, defaults applied
   readonly incarnation: number;     // 1 on first start, +1 per restart
   readonly signal: AbortSignal;     // aborts on stop — pass to fetch / stream iterators
@@ -2333,8 +2371,18 @@ await runner.start();               // blocks until stop()
 | `signalAdapter` | `SignalQueueAdapter` | — | Alternative to `signalRunner`. |
 | `subscribers` | `BeaconSubscriber[]` | `[]` | Lifecycle event listeners. |
 | `pollIntervalMs` | `number` | `1000` | Milliseconds between reconcile ticks. |
+| `envProvider` | `EnvProvider` | — | Source of runtime env vars (station-env's `EnvStore`); satisfies `.env()` requirements. |
+| `maxInstancesPerBeacon` | `number` | `100` | Default instance cap for beacons without their own `.maxInstances()`. |
 
-Methods: `start()`, `stop({ graceful?, timeoutMs? })`, `startBeacon(name, { config? })`, `stopBeacon(name)`, `restartBeacon(name)`, `getInstance(name)`, `listInstances()`, `register(beacon, filePath)`, `listRegistered()`, `subscribe(sub)`, `getBeacon(name)`, `hasBeacon(name)`, `static create(beaconsDir, opts?)`.
+**Lifecycle:** `start()`, `whenReady()`, `stop({ graceful?, timeoutMs? })`, `register(beacon, filePath)`, `subscribe(sub)`, `static create(beaconsDir, opts?)`.
+
+`start()` only settles when the supervisor stops, so anything that needs the registry populated — an API served on top of the runner, or a `createInstance()` call at boot — should `await runner.whenReady()`, which resolves once discovery, hydration of persisted instances, and seeding are done.
+
+**Definitions:** `listRegistered()`, `getBeacon(name)`, `hasBeacon(name)`.
+
+**Instances:** `createInstance(beaconName, { id?, label?, config?, start? })`, `updateInstance(id, { config?, label?, restart? })`, `deleteInstance(id, { timeoutMs? })`, `startInstance(id, { config? })`, `stopInstance(id)`, `restartInstance(id)`, `getInstance(id)`, `listInstances({ beaconName? })`, `listInstanceEvents(id, limit?)`, `listBeaconEvents(name, limit?)`, `stopAllInstances(beaconName)`.
+
+**Definition-level shorthands** (act on the definition-owned instance, whose id is the beacon name): `startBeacon(name, { config? })`, `stopBeacon(name)`, `restartBeacon(name)`.
 
 Runtime control is desired-state based — the supervisor reconciles toward it every tick, including stopping a live child whose desired state became `stopped`:
 
@@ -2342,11 +2390,19 @@ Runtime control is desired-state based — the supervisor reconciles toward it e
 await runner.stopBeacon("consumer");                       // desired = stopped
 await runner.startBeacon("consumer", { config: { ... } }); // desired = running (+ config override)
 await runner.restartBeacon("consumer");                    // graceful stop, then relaunch
+
+// Per-instance, for beacons running more than one:
+const inst = await runner.createInstance("queue-worker", { config: { queue: "acme" } });
+await runner.stopInstance(inst.id);
+await runner.updateInstance(inst.id, { config: { queue: "acme2" }, restart: true });
+await runner.deleteInstance(inst.id);                      // stops, then removes the record
 ```
+
+`createInstance` throws `BeaconValidationError` on config that fails the schema, `BeaconInstanceExistsError` on a taken id, and `BeaconInstanceLimitError` at the cap. `deleteInstance` refuses a definition-owned instance — stop it instead. `startBeacon` on an `on-demand` beacon throws, since there is no definition instance to start.
 
 ### `BeaconInstance` and status model
 
-One record per beacon, mirrored in-memory and written through to the adapter.
+One record per **instance** (not per beacon), mirrored in-memory and written through to the adapter.
 
 ```ts
 type BeaconStatus = "stopped" | "starting" | "running" | "stopping" | "backoff" | "errored";
@@ -2355,7 +2411,10 @@ type ExitReason = "clean" | "failure" | "stopped" | "stalled" | "startup-timeout
 type RestartPolicy = "always" | "on-failure" | "never";
 
 interface BeaconInstance {
+  id: string;                  // unique instance id; === beaconName for the definition-owned instance
   beaconName: string;
+  label?: string;
+  origin: "definition" | "api"; // seeded from the beacon file, or created at runtime
   status: BeaconStatus;        // backoff = scheduled to (re)start at nextRestartAt; errored = terminal
   desiredState: DesiredState;
   incarnation: number;         // total starts
@@ -2375,33 +2434,57 @@ Restart decision (`shouldRestart`, exported from `station-beacon`): never restar
 
 Parent-only (the supervisor is the sole authority — no cross-process reconstruction).
 
+Records are keyed by **instance id**, not beacon name.
+
 ```ts
 interface BeaconStateAdapter {
   upsertInstance(instance: BeaconInstance): Promise<void>;
-  getInstance(beaconName: string): Promise<BeaconInstance | null>;
-  updateInstance(beaconName: string, patch: BeaconInstancePatch): Promise<void>;
-  listInstances(): Promise<BeaconInstance[]>;
-  removeInstance(beaconName: string): Promise<void>;
+  getInstance(instanceId: string): Promise<BeaconInstance | null>;
+  updateInstance(instanceId: string, patch: BeaconInstancePatch): Promise<void>;
+  listInstances(filter?: { beaconName?: string }): Promise<BeaconInstance[]>;
+  removeInstance(instanceId: string): Promise<void>;            // also drops the instance's events
   addEvent?(event: BeaconEvent): Promise<void>;                 // optional lifecycle log
-  listEvents?(beaconName: string, limit?: number): Promise<BeaconEvent[]>;
+  listEvents?(instanceId: string, limit?: number): Promise<BeaconEvent[]>;
+  listBeaconEvents?(beaconName: string, limit?: number): Promise<BeaconEvent[]>;
   generateId(): string;
   ping(): Promise<boolean>;
   close?(): Promise<void>;
 }
 ```
 
-Built-in: `BeaconMemoryAdapter` (single-process; state lost on restart — the supervisor re-derives desired state from each beacon's `autoStart` flag). Durable implementations ship as `/beacon` subpath exports of the adapter packages: `BeaconSqliteAdapter` (`station-adapter-sqlite/beacon`), `BeaconPostgresAdapter` (`station-adapter-postgres/beacon`), `BeaconMysqlAdapter` (`station-adapter-mysql/beacon`, async `.create()`), `BeaconRedisAdapter` (`station-adapter-redis/beacon`). Each persists both the instance record and the lifecycle event log.
+`BeaconEvent` carries both `instanceId` and `beaconName`, so a timeline can be read per instance or across every instance of a beacon.
+
+Built-in: `BeaconMemoryAdapter` (single-process; state lost on restart — the supervisor re-derives desired state from each beacon's start mode, and runtime-created instances do not survive). Durable implementations ship as `/beacon` subpath exports of the adapter packages: `BeaconSqliteAdapter` (`station-adapter-sqlite/beacon`), `BeaconPostgresAdapter` (`station-adapter-postgres/beacon`), `BeaconMysqlAdapter` (`station-adapter-mysql/beacon`, async `.create()`), `BeaconRedisAdapter` (`station-adapter-redis/beacon`). Each persists the instance record and the lifecycle event log, and each migrates a pre-multi-instance database in place on first open (the old `beacon_name` primary key becomes the instance `id`, with `beacon_name` backfilled) — existing records keep their desired state and counters.
 
 ### `BeaconSubscriber`
 
-All optional; errors are caught and logged. `onBeaconDiscovered`, `onBeaconStarting`, `onBeaconStarted`, `onBeaconReady`, `onBeaconHeartbeat`, `onBeaconExited` (`{ instance, reason, code }`), `onBeaconRestartScheduled` (`{ instance, delayMs, nextRestartAt }`), `onBeaconStopped`, `onBeaconErrored` (`{ instance, error }`), `onBeaconStalled`, `onBeaconLog` (`{ instance, level, message }`). Built-in `ConsoleBeaconSubscriber`.
+All optional; errors are caught and logged. `onBeaconDiscovered`, `onBeaconInstanceCreated`, `onBeaconInstanceRemoved`, `onBeaconStarting`, `onBeaconStarted`, `onBeaconReady`, `onBeaconHeartbeat`, `onBeaconExited` (`{ instance, reason, code }`), `onBeaconRestartScheduled` (`{ instance, delayMs, nextRestartAt }`), `onBeaconStopped`, `onBeaconErrored` (`{ instance, error }`), `onBeaconStalled`, `onBeaconLog` (`{ instance, level, message }`). Built-in `ConsoleBeaconSubscriber`.
 
 ### Notes
 
 - **Fatal errors** (invalid config, beacon not found) exit with `FATAL_EXIT_CODE` (78, exported) and go to `errored` without restarting — the sentinel exit code is authoritative so a bad config never restart-loops, even under `restart("always")`.
 - Child processes are `unref`'d and self-exit on IPC `disconnect`, so a dying supervisor never leaves orphans.
 - Triggering signals from a beacon requires a **persistent** signal adapter (SQLite/Postgres/…) wired via `signalRunner`; the default in-memory adapter does not cross the child-process boundary.
-- **Dashboard**: set `beaconsDir` (and optionally `beaconAdapter`) in `station-kit`'s `defineConfig` to supervise beacons and surface them on the dashboard `/beacons` page (live status, logs, lifecycle events, start/stop/restart controls). REST surface: `GET /api/beacons`, `GET /api/beacons/:name/{events,logs}`, `POST /api/beacons/:name/{start,stop,restart}`.
+- **Dashboard**: set `beaconsDir` (and optionally `beaconAdapter`) in `station-kit`'s `defineConfig` to supervise beacons and surface them on the dashboard `/beacons` page — live status, logs, lifecycle events, per-instance controls, and a **New instance** form built from the beacon's config schema. `beaconMaxInstances` sets the default instance cap.
+
+**Beacon REST surface** (dashboard API under `/api`, authenticated v1 under `/api/v1`):
+
+| Method + path | v1 scope | Purpose |
+|---|---|---|
+| `GET /beacons` | `read` | Definitions with their instances, `instanceCount`, `runningCount`. |
+| `GET /beacons/:name` | `read` | One definition + `configSchema` + every instance. |
+| `GET /beacons/:name/instances` | `read` | Instances of one beacon. |
+| `GET /beacons/:name/instances/:id` | `read` | One instance. |
+| `GET /beacons/:name/events` | `read` | Lifecycle events across all instances. |
+| `GET /beacons/:name/instances/:id/{events,logs}` | `read` | Per-instance history and captured output. |
+| `POST /beacons/:name/instances` | `trigger` | Create an instance — `{ id?, label?, config?, start? }`; 201 with the record. |
+| `POST /beacons/:name/instances/:id/{start,restart}` | `trigger` | Bring an instance up. |
+| `POST /beacons/:name/instances/:id/stop` | `cancel` | Take an instance down. |
+| `PATCH /beacons/:name/instances/:id` | `admin` | Change `config` / `label`; `restart: true` applies it now. |
+| `DELETE /beacons/:name/instances/:id` | `admin` | Stop and remove a runtime-created instance. |
+| `POST /beacons/:name/{start,stop,restart}` | `trigger` / `cancel` | Act on the definition-owned instance; `stop?all=true` stops every instance. |
+
+Creation failures are distinguishable: `400 invalid_config`, `404 not_found` (unknown beacon), `409 instance_exists`, `409 instance_limit`. An instance id only resolves under the beacon that owns it, so `/beacons/other/instances/:id` is a 404.
 
 ---
 

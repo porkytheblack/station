@@ -6,6 +6,7 @@ import {
   DEFAULT_BACKOFF,
   DEFAULT_STOP_TIMEOUT_MS,
   type RestartPolicy,
+  type StartMode,
 } from "./types.js";
 import { BEACON_BRAND } from "./util.js";
 
@@ -67,8 +68,22 @@ export interface Beacon<TConfig = unknown> {
   readonly heartbeatIntervalMs?: number;
   /** Deadline in ms after which a missed heartbeat is treated as a stall. */
   readonly heartbeatTimeoutMs?: number;
-  /** Whether the supervisor starts this beacon automatically on discovery. */
+  /**
+   * How instances of this beacon come into existence: seeded and started on
+   * discovery (`auto`), seeded but left stopped (`manual`), or created only at
+   * runtime through the API (`on-demand`).
+   */
+  readonly startMode: StartMode;
+  /**
+   * Whether the supervisor starts this beacon automatically on discovery.
+   * Equivalent to `startMode === "auto"`.
+   */
   readonly autoStart: boolean;
+  /**
+   * Cap on how many instances of this beacon may exist at once. Unset means the
+   * supervisor's own `maxInstancesPerBeacon` limit applies.
+   */
+  readonly maxInstances?: number;
   /** Env var keys that must be present (store-managed or process env) for the beacon to launch. */
   readonly requiredEnv?: string[];
 }
@@ -85,7 +100,8 @@ interface BuilderOpts<TConfig> {
   startupTimeoutMs?: number;
   heartbeatIntervalMs?: number;
   heartbeatTimeoutMs?: number;
-  autoStart: boolean;
+  startMode: StartMode;
+  maxInstances?: number;
   requiredEnv?: string[];
 }
 
@@ -109,7 +125,7 @@ export class BeaconBuilder<TConfig = Record<string, never>> {
       restartPolicy: "on-failure",
       backoff: { ...DEFAULT_BACKOFF },
       stopTimeoutMs: DEFAULT_STOP_TIMEOUT_MS,
-      autoStart: true,
+      startMode: "auto",
     };
   }
 
@@ -184,9 +200,40 @@ export class BeaconBuilder<TConfig = Record<string, never>> {
     return this._clone({ startupTimeoutMs: toMs(value) });
   }
 
+  /**
+   * Set how instances of this beacon come into existence. `.manualStart()` and
+   * `.onDemand()` are the named shorthands for the two non-default modes.
+   */
+  startMode(mode: StartMode): BeaconBuilder<TConfig> {
+    return this._clone({ startMode: mode });
+  }
+
   /** Don't auto-start on discovery — the beacon stays stopped until started explicitly. */
   manualStart(): BeaconBuilder<TConfig> {
-    return this._clone({ autoStart: false });
+    return this._clone({ startMode: "manual" });
+  }
+
+  /**
+   * Run only instances created at runtime. Nothing is seeded on discovery;
+   * callers create instances through the API (or `runner.createInstance()`),
+   * each with its own config, and delete them when they're done. Use this for
+   * beacons that are parameterised per tenant / stream / job rather than being
+   * a single always-on process.
+   */
+  onDemand(): BeaconBuilder<TConfig> {
+    return this._clone({ startMode: "on-demand" });
+  }
+
+  /**
+   * Cap how many instances of this beacon may exist at once — the guardrail on
+   * an API that can spawn processes. Defaults to the supervisor's
+   * `maxInstancesPerBeacon`.
+   */
+  maxInstances(limit: number): BeaconBuilder<TConfig> {
+    if (!Number.isInteger(limit) || limit < 1) {
+      throw new BeaconDefinitionError(this._name, "maxInstances must be a positive integer");
+    }
+    return this._clone({ maxInstances: limit });
   }
 
   /**
@@ -230,7 +277,9 @@ export class BeaconBuilder<TConfig = Record<string, never>> {
       startupTimeoutMs: this._opts.startupTimeoutMs,
       heartbeatIntervalMs: this._opts.heartbeatIntervalMs,
       heartbeatTimeoutMs: this._opts.heartbeatTimeoutMs,
-      autoStart: this._opts.autoStart,
+      startMode: this._opts.startMode,
+      autoStart: this._opts.startMode === "auto",
+      maxInstances: this._opts.maxInstances,
       requiredEnv: this._opts.requiredEnv,
     };
   }

@@ -14,6 +14,8 @@ export interface BeaconIPCMessage {
     | "beacon:stopping"
     | "beacon:error";
   beaconName: string;
+  /** The instance this child is an incarnation of. */
+  instanceId: string;
   incarnation: number;
   timestamp: string;
   data?: Record<string, unknown>;
@@ -49,6 +51,12 @@ export interface BeaconJobInitMessage {
 export interface BeaconSubscriber {
   /** A beacon definition was found during auto-discovery. */
   onBeaconDiscovered?(event: { beaconName: string; filePath: string }): void;
+
+  /** A new instance was created at runtime (dashboard / API). */
+  onBeaconInstanceCreated?(event: { instance: BeaconInstance }): void;
+
+  /** A runtime-created instance was stopped and removed. */
+  onBeaconInstanceRemoved?(event: { instance: BeaconInstance }): void;
 
   /** The supervisor is about to spawn a child process for a beacon. */
   onBeaconStarting?(event: { instance: BeaconInstance }): void;
