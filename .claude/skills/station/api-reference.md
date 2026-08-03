@@ -2,6 +2,20 @@
 
 Complete reference for all Station packages. Every export, type, interface, and method signature.
 
+> **Before you wire anything: `station-kit` is Station's entry point by design.**
+> An ordinary app is a `station.config.ts` calling `defineConfig` (§7), run with
+> `npx station`. That single call wires the signal / broadcast / beacon runners
+> and their shutdown ordering, the HTTP server, the dashboard, the authenticated
+> v1 API, API keys, the env store, run-log storage, and schedule reconciliation.
+>
+> The `SignalRunner` / `BroadcastRunner` / `BeaconRunner` constructors documented
+> below are the escape hatch — reach for them only when a requirement genuinely
+> cannot be met through `StationConfig` (§7): embedding Station inside a process
+> you already own, a headless worker that must not bind a port, tests, or a
+> desktop app (which should use `station-tauri`, §12). Check the `StationConfig`
+> fields and the pluggable adapters first; most "I need custom X" cases are a
+> config field.
+
 ---
 
 ## 1. station-signal
@@ -1225,6 +1239,9 @@ const broadcastAdapter = new BroadcastRedisAdapter({ redis, prefix: "myapp" });
 ---
 
 ## 7. station-kit
+
+**The entry point for a Station app.** Everything below is what `defineConfig` +
+`npx station` gives you without hand-wiring runners.
 
 npm: `station-kit`
 

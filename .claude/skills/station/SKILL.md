@@ -1,6 +1,6 @@
 ---
 name: station
-description: Use this skill when building with the Station background job framework. This includes creating signals (background jobs), defining broadcasts (DAG workflows), authoring runtime-editable dynamic broadcasts, scheduling signals/broadcasts at runtime, writing expressions for `input` mappings and `when` guards, configuring adapters (SQLite, PostgreSQL, MySQL, Redis), customizing API key storage, setting up runners, writing subscribers, and configuring the Station dashboard. Station is a TypeScript-first framework for type-safe background jobs with Zod validation.
+description: Use this skill when building with the Station background job framework. Station apps are built on station-kit (`defineConfig` + `npx station`) by design — hand-rolled runners are an escape hatch, not the default. This includes creating signals (background jobs), defining broadcasts (DAG workflows), authoring runtime-editable dynamic broadcasts, scheduling signals/broadcasts at runtime, writing expressions for `input` mappings and `when` guards, configuring adapters (SQLite, PostgreSQL, MySQL, Redis), customizing API key storage, setting up runners, writing subscribers, and configuring the Station dashboard. Station is a TypeScript-first framework for type-safe background jobs with Zod validation.
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash
 ---
 
@@ -20,31 +20,88 @@ Triggers include:
 - "Use Postgres / MySQL / Redis for API keys" or "configure custom API key storage" — pluggable `ApiKeyStorageAdapter`. See **KeyStore** below and `api-reference.md` §7.5.
 - "Environment variables", "require an env var for a signal/beacon", "set env vars from the dashboard", "manage secrets", "Vercel-like environments", ".env()" — runtime-managed env vars injected into runs. See **Environment Variables (station-env)** below and `api-reference.md` §14, `examples.md` §25.
 
+## Start here: `station-kit` is how you run Station
+
+**`station-kit` is the entry point by design, not an optional add-on.** A Station
+app is a `station.config.ts` calling `defineConfig`, run with `npx station`.
+That is the supported way to run Station, and it is what you should write unless
+the user has a requirement station-kit genuinely cannot meet.
+
+```ts
+// station.config.ts — the whole runtime
+import { defineConfig } from "station-kit";
+import { SqliteAdapter } from "station-adapter-sqlite";
+import { BroadcastSqliteAdapter } from "station-adapter-sqlite/broadcast";
+
+export default defineConfig({
+  port: 4400,
+  signalsDir: "./signals",
+  broadcastsDir: "./broadcasts",
+  beaconsDir: "./beacons",
+  adapter: new SqliteAdapter({ dbPath: "./jobs.db" }),
+  broadcastAdapter: new BroadcastSqliteAdapter({ dbPath: "./jobs.db" }),
+  auth: { username: "admin", password: "changeme" },
+});
+```
+
+```bash
+npx station          # run it
+npx station deploy   # production bundle in .station/out/
+```
+
+`defineConfig` + `npx station` wires, in one place: the signal / broadcast /
+beacon runners and their shutdown ordering, the HTTP server, the dashboard, the
+authenticated v1 API, API keys, the env store, run-log storage, schedule
+reconciliation, and `station deploy`. Hand-rolling runners means re-implementing
+all of that, and getting the ordering subtleties wrong is the usual outcome.
+
+**Do not hand-roll `new SignalRunner(...)` / `new BroadcastRunner(...)` /
+`new BeaconRunner(...)` as the default shape of an app.** Reach for the bare
+primitives only when there is a concrete requirement station-kit cannot satisfy
+— for example:
+
+- Embedding Station inside an existing server process you already own.
+- A desktop/Tauri app — use `station-tauri`'s `createTauriStation()` instead
+  (see rule 14).
+- A headless worker that must not bind a port or expose a dashboard at all.
+- **Registering your own subscribers** (metrics, alerting, custom webhooks).
+  `StationConfig` has no `subscribers` field and `createStation` does not
+  return the runners, so this is currently only reachable by constructing the
+  runner yourself.
+- Tests and tight in-process harnesses.
+
+When you do go bare, say why in a comment, and expect to handle shutdown order
+(broadcast before signal), subscriber wiring, and storage setup yourself. If you
+are unsure whether station-kit covers a requirement, check `api-reference.md` §12
+(`StationConfig`) before deciding it doesn't — most "I need custom X" cases are a
+config field or a pluggable adapter.
+
 ## Critical Rules
 
-1. **Always import `signal` and `z` from `station-signal`** - The `z` export is re-exported from Zod. Never install or import `zod` separately.
-2. **Always use `.run()` for single-handler signals, `.step()` + `.build()` for multi-step signals** - Never mix these patterns. `.run()` returns a signal directly; `.step()` returns a `StepBuilder` that must be finalized with `.build()`.
-3. **Always export signals and broadcasts from their files** - The runner uses auto-discovery via `import()` and scans `Object.values(mod)` for branded signal/broadcast objects.
-4. **Use `.js` extension in import paths** - Even when importing `.ts` files. This is required for ESM resolution with Node.js.
-5. **Never use `new MysqlAdapter()` or `new BroadcastMysqlAdapter()`** - These constructors are private. Always use the static `MysqlAdapter.create()` / `BroadcastMysqlAdapter.create()` factory methods (async).
-6. **Broadcast and beacon adapters use subpath imports** - Import broadcast adapters from `station-adapter-{sqlite,postgres,mysql,redis}/broadcast` and beacon adapters from `station-adapter-{sqlite,postgres,mysql,redis}/beacon`. The MySQL beacon adapter, like the others, is constructed via the async `BeaconMysqlAdapter.create()` factory (private constructor).
-7. **Always shut down broadcast runner before signal runner** - Broadcast runner queries the signal adapter's database during shutdown. Stopping signal first closes the DB connection.
-8. **`.retries(n)` sets retry count, not total attempts** - `.retries(2)` means 3 total attempts (1 initial + 2 retries). Internally stored as `maxAttempts = n + 1`.
-11. **pnpm 10+ requires `onlyBuiltDependencies` for SQLite — only when you opt into it** - station-kit no longer pulls in `better-sqlite3` as a hard dependency (default key + log storage are pure-JS file backends). You only need `"pnpm": { "onlyBuiltDependencies": ["better-sqlite3"] }` in the consumer's `package.json` if you explicitly install `better-sqlite3` (e.g. to use `SqliteKeyStorage` or `station-adapter-sqlite`).
-9. **`.trigger()` returns immediately with a run ID** - It does not wait for execution. Use `runner.waitForRun(id)` to block until completion.
-10. **Zod v4 gotcha: never use `.default({})` on objects with default fields** - Use plain TypeScript defaults instead. Zod v4 internals: `schema._zod.def.type` (not `_def.typeName`).
-12. **`station deploy` bundles to JS — shared imports are resolved automatically.** Signals/broadcasts can import from `../lib/`, `../shared/`, etc. These are bundled into shared chunks by esbuild. No need to configure includes for imported code — only use `deploy.include` for non-JS assets.
-13. **Use `station-tauri` for desktop apps** — Do not use `station-kit` or `defineConfig` for Tauri/desktop integration. Use `createTauriStation()` from `station-tauri` instead. It runs localhost-only with no dashboard UI and auto-provisions API keys.
-14. **Dynamic broadcasts and file-defined broadcasts live in separate registries** — names can collide harmlessly. The runner snapshots a dynamic spec into `BroadcastRun.definitionSnapshot` on trigger; spec edits never mutate in-flight runs. Versions are monotonic across delete + recreate (a recreated definition continues at the next version, not v1).
-15. **Runtime schedules are additive** — `.every()` in signal/broadcast files keeps working. The `Schedule` adapter is a separate import path (`station-adapter-{sqlite,postgres,mysql,redis}/schedules`). Multi-runner deployments require an adapter that implements `claimDue` for at-most-once firing.
-16. **Expressions are pure and JSON-serializable** — used by `DynamicNodeSpec.input` / `.when`. No I/O, no time, no randomness. If you can't express something, write a code-defined signal in TypeScript and reference it from the dynamic broadcast graph — the signal is the unit of arbitrary code, expressions just connect them.
-17. **`KeyStore` methods are async** — `create`, `verify`, `list`, `revoke`, `close` all return Promises. Anyone calling them directly must `await`. The `new KeyStore("path/to/file")` string constructor still works but now constructs a `FileKeyStorage` (JSON file, no native deps). A `.db` extension is silently rewritten to `.json`; old SQLite-backed `station-keys.db` files are NOT auto-migrated — see the legacy-files startup warning emitted by `createStation`.
+1. **Build on `station-kit`; only go bare for requirements it can't meet** — see **Start here** above. `defineConfig` + `npx station` is the supported way to run Station. Hand-rolled `SignalRunner`/`BroadcastRunner`/`BeaconRunner` wiring is an escape hatch for embedding, headless workers, or tests — not the default shape of an app.
+2. **Always import `signal` and `z` from `station-signal`** - The `z` export is re-exported from Zod. Never install or import `zod` separately.
+3. **Always use `.run()` for single-handler signals, `.step()` + `.build()` for multi-step signals** - Never mix these patterns. `.run()` returns a signal directly; `.step()` returns a `StepBuilder` that must be finalized with `.build()`.
+4. **Always export signals and broadcasts from their files** - The runner uses auto-discovery via `import()` and scans `Object.values(mod)` for branded signal/broadcast objects.
+5. **Use `.js` extension in import paths** - Even when importing `.ts` files. This is required for ESM resolution with Node.js.
+6. **Never use `new MysqlAdapter()` or `new BroadcastMysqlAdapter()`** - These constructors are private. Always use the static `MysqlAdapter.create()` / `BroadcastMysqlAdapter.create()` factory methods (async).
+7. **Broadcast and beacon adapters use subpath imports** - Import broadcast adapters from `station-adapter-{sqlite,postgres,mysql,redis}/broadcast` and beacon adapters from `station-adapter-{sqlite,postgres,mysql,redis}/beacon`. The MySQL beacon adapter, like the others, is constructed via the async `BeaconMysqlAdapter.create()` factory (private constructor).
+8. **Always shut down broadcast runner before signal runner** - Broadcast runner queries the signal adapter's database during shutdown. Stopping signal first closes the DB connection.
+9. **`.retries(n)` sets retry count, not total attempts** - `.retries(2)` means 3 total attempts (1 initial + 2 retries). Internally stored as `maxAttempts = n + 1`.
+10. **`.trigger()` returns immediately with a run ID** - It does not wait for execution. Use `runner.waitForRun(id)` to block until completion.
+11. **Zod v4 gotcha: never use `.default({})` on objects with default fields** - Use plain TypeScript defaults instead. Zod v4 internals: `schema._zod.def.type` (not `_def.typeName`).
+12. **pnpm 10+ requires `onlyBuiltDependencies` for SQLite — only when you opt into it** - station-kit no longer pulls in `better-sqlite3` as a hard dependency (default key + log storage are pure-JS file backends). You only need `"pnpm": { "onlyBuiltDependencies": ["better-sqlite3"] }` in the consumer's `package.json` if you explicitly install `better-sqlite3` (e.g. to use `SqliteKeyStorage` or `station-adapter-sqlite`).
+13. **`station deploy` bundles to JS — shared imports are resolved automatically.** Signals/broadcasts can import from `../lib/`, `../shared/`, etc. These are bundled into shared chunks by esbuild. No need to configure includes for imported code — only use `deploy.include` for non-JS assets.
+14. **Use `station-tauri` for desktop apps** — Do not use `station-kit` or `defineConfig` for Tauri/desktop integration. Use `createTauriStation()` from `station-tauri` instead. It runs localhost-only with no dashboard UI and auto-provisions API keys.
+15. **Dynamic broadcasts and file-defined broadcasts live in separate registries** — names can collide harmlessly. The runner snapshots a dynamic spec into `BroadcastRun.definitionSnapshot` on trigger; spec edits never mutate in-flight runs. Versions are monotonic across delete + recreate (a recreated definition continues at the next version, not v1).
+16. **Runtime schedules are additive** — `.every()` in signal/broadcast files keeps working. The `Schedule` adapter is a separate import path (`station-adapter-{sqlite,postgres,mysql,redis}/schedules`). Multi-runner deployments require an adapter that implements `claimDue` for at-most-once firing.
+17. **Expressions are pure and JSON-serializable** — used by `DynamicNodeSpec.input` / `.when`. No I/O, no time, no randomness. If you can't express something, write a code-defined signal in TypeScript and reference it from the dynamic broadcast graph — the signal is the unit of arbitrary code, expressions just connect them.
+18. **`KeyStore` methods are async** — `create`, `verify`, `list`, `revoke`, `close` all return Promises. Anyone calling them directly must `await`. The `new KeyStore("path/to/file")` string constructor still works but now constructs a `FileKeyStorage` (JSON file, no native deps). A `.db` extension is silently rewritten to `.json`; old SQLite-backed `station-keys.db` files are NOT auto-migrated — see the legacy-files startup warning emitted by `createStation`.
 
-18. **`LogStore` is adapter-based** — `LogStorageAdapter` (`add`, `get`, optional `close`) wraps any backend. Default in `createStation` is `FileLogStorage` (append-only JSONL at `<dataDir>/station-logs.jsonl`, single-process only). Pass `logStorage` in `StationConfig` for Postgres / MySQL / Redis / S3 in production. `LogStore.get(runId)` returns `Promise<LogEntry[]>` — callers must await.
+19. **`LogStore` is adapter-based** — `LogStorageAdapter` (`add`, `get`, optional `close`) wraps any backend. Default in `createStation` is `FileLogStorage` (append-only JSONL at `<dataDir>/station-logs.jsonl`, single-process only). Pass `logStorage` in `StationConfig` for Postgres / MySQL / Redis / S3 in production. `LogStore.get(runId)` returns `Promise<LogEntry[]>` — callers must await.
 
-19. **Beacons are the long-running primitive — import `beacon`/`z` from `station-beacon`.** A beacon is a supervised process (server/poller/client), not a job: it isn't triggered, it's started/stopped/restarted by the `BeaconRunner`, which keeps it alive per a restart policy. Use `.run(handler)` for a general long-running handler or `.poll(interval, fn)` for an interval loop — never both. One beacon per file, exported for auto-discovery. Long-running `.run()` handlers should watch `ctx.signal` and end with `await ctx.untilStopped()` (or their own loop); returning early is treated as a clean completion. `station-beacon` has `station-signal` as a peer dependency.
+20. **Beacons are the long-running primitive — import `beacon`/`z` from `station-beacon`.** A beacon is a supervised process (server/poller/client), not a job: it isn't triggered, it's started/stopped/restarted by the `BeaconRunner`, which keeps it alive per a restart policy. Use `.run(handler)` for a general long-running handler or `.poll(interval, fn)` for an interval loop — never both. One beacon per file, exported for auto-discovery. Long-running `.run()` handlers should watch `ctx.signal` and end with `await ctx.untilStopped()` (or their own loop); returning early is treated as a clean completion. `station-beacon` has `station-signal` as a peer dependency.
 
-20. **One beacon definition can run many instances.** Each instance is supervised independently with its own id, config, status, and logs. `.manualStart()` seeds one instance but leaves it stopped; `.onDemand()` seeds none, so instances exist only when created at runtime via `runner.createInstance()` or `POST /api/beacons/:name/instances`. The definition-owned instance's id **is** the beacon name (so `startBeacon`/`stopBeacon` still work and old single-instance state carries over); runtime-created ones get their own ids and can be deleted. `start()` never settles while supervising — `await runner.whenReady()` before creating instances at boot.
+21. **One beacon definition can run many instances.** Each instance is supervised independently with its own id, config, status, and logs. `.manualStart()` seeds one instance but leaves it stopped; `.onDemand()` seeds none, so instances exist only when created at runtime via `runner.createInstance()` or `POST /api/beacons/:name/instances`. The definition-owned instance's id **is** the beacon name (so `startBeacon`/`stopBeacon` still work and old single-instance state carries over); runtime-created ones get their own ids and can be deleted. `start()` never settles while supervising — `await runner.whenReady()` before creating instances at boot.
 
 ## Signal Pattern
 
@@ -243,6 +300,11 @@ The handler `ctx`: `config`, `name`, `instanceId`, `incarnation`, `signal`
 
 ### Beacon Runner Setup
 
+With station-kit you only set `beaconsDir` (and optionally `beaconAdapter`) in
+`defineConfig` — it constructs and supervises the `BeaconRunner` for you. The
+explicit construction below is the escape-hatch form; the instance controls
+underneath it are the same either way, and are also exposed over HTTP.
+
 ```ts
 import path from "node:path";
 import { BeaconRunner, ConsoleBeaconSubscriber } from "station-beacon";
@@ -286,7 +348,36 @@ DELETE /api/beacons/:name/instances/:id
 POST   /api/beacons/:name/stop?all=true             stop every instance
 ```
 
-## Runner Setup
+## Station Setup (station-kit) — the default
+
+This is the shape every ordinary Station app should have (see **Start here**).
+
+```ts
+// station.config.ts
+import { defineConfig } from "station-kit";
+import { SqliteAdapter } from "station-adapter-sqlite";
+import { BroadcastSqliteAdapter } from "station-adapter-sqlite/broadcast";
+
+export default defineConfig({
+  port: 4400,
+  signalsDir: "./signals",
+  broadcastsDir: "./broadcasts",
+  beaconsDir: "./beacons", // supervises beacons + surfaces them on the dashboard
+  adapter: new SqliteAdapter({ dbPath: "./jobs.db" }),
+  broadcastAdapter: new BroadcastSqliteAdapter({ dbPath: "./jobs.db" }),
+  auth: { username: "admin", password: "changeme" },
+});
+```
+
+Then run: `npx station`
+
+Deploy: `npx station deploy` — generates a production bundle in `.station/out/`
+
+## Escape hatch: hand-rolled runners
+
+Only for the cases listed in **Start here** — embedding Station in a process you
+own, a headless worker with no port, or tests. For an ordinary app use
+`defineConfig` + `npx station` instead; it does all of this for you.
 
 ```ts
 import path from "node:path";
@@ -371,29 +462,6 @@ configure({
 // All .trigger() calls now go to the remote Station server
 await sendEmail.trigger({ to: "user@example.com", subject: "Hello", body: "Hi" });
 ```
-
-## Dashboard Setup (station-kit)
-
-```ts
-// station.config.ts
-import { defineConfig } from "station-kit";
-import { SqliteAdapter } from "station-adapter-sqlite";
-import { BroadcastSqliteAdapter } from "station-adapter-sqlite/broadcast";
-
-export default defineConfig({
-  port: 4400,
-  signalsDir: "./signals",
-  broadcastsDir: "./broadcasts",
-  beaconsDir: "./beacons", // supervises beacons + surfaces them on the dashboard
-  adapter: new SqliteAdapter({ dbPath: "./jobs.db" }),
-  broadcastAdapter: new BroadcastSqliteAdapter({ dbPath: "./jobs.db" }),
-  auth: { username: "admin", password: "changeme" },
-});
-```
-
-Then run: `npx station`
-
-Deploy: `npx station deploy` — generates a production bundle in `.station/out/`
 
 ## Deployment
 
@@ -707,16 +775,17 @@ Environment variables for the sidecar:
 
 ## Design Principles
 
-1. One signal per file -- auto-discovery expects exported signal objects from each file in `signalsDir`.
-2. Use Zod schemas for all inputs -- validation runs before execution and before remote dispatch.
-3. Keep handlers focused -- extract shared logic into utility functions, not signal handlers.
-4. Use steps for pipelines where each stage transforms data and passes it forward.
-5. Use broadcasts for fan-out/fan-in workflows composed of independent signals.
-6. Configure retries for anything that touches external services or networks.
-7. Use subscribers for cross-cutting concerns: logging, metrics, alerting, webhooks.
-8. Shut down broadcast runner before signal runner -- broadcast queries the signal DB during teardown.
-9. Signal names must start with a letter and contain only letters, digits, hyphens, and underscores.
-10. The runner registry is private (`this.registry: Map`). Access via `(runner as any).registry` for testing only.
+1. Build the app as a `station.config.ts` + `npx station` -- station-kit is the entry point by design. Drop to bare runners only for a requirement it cannot meet (embedding, headless worker, tests), and say why.
+2. One signal per file -- auto-discovery expects exported signal objects from each file in `signalsDir`.
+3. Use Zod schemas for all inputs -- validation runs before execution and before remote dispatch.
+4. Keep handlers focused -- extract shared logic into utility functions, not signal handlers.
+5. Use steps for pipelines where each stage transforms data and passes it forward.
+6. Use broadcasts for fan-out/fan-in workflows composed of independent signals.
+7. Configure retries for anything that touches external services or networks.
+8. Use subscribers for cross-cutting concerns: logging, metrics, alerting, webhooks.
+9. Shut down broadcast runner before signal runner -- broadcast queries the signal DB during teardown.
+10. Signal names must start with a letter and contain only letters, digits, hyphens, and underscores.
+11. The runner registry is private (`this.registry: Map`). Access via `(runner as any).registry` for testing only.
 
 ## Reference Documentation
 
