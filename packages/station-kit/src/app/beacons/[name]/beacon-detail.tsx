@@ -186,7 +186,7 @@ export function BeaconDetail({ name }: { name: string }) {
     selected.status !== "errored";
   const canRestart =
     !!selected && (selected.status === "running" || selected.status === "starting");
-  const atCapacity = item.instanceCount >= item.maxInstances;
+  const atCapacity = item.maxInstances !== undefined && item.instanceCount >= item.maxInstances;
 
   return (
     <div>
@@ -321,16 +321,16 @@ export function BeaconDetail({ name }: { name: string }) {
         <div className="detail-section-label">Definition</div>
         <div className="detail-grid">
           <span className="detail-label">Mode</span>
-          <span className="detail-value">{item.mode}</span>
+          <span className="detail-value">{item.mode ?? "—"}</span>
 
           <span className="detail-label">Start mode</span>
-          <span className="detail-value mono">{item.startMode}</span>
+          <span className="detail-value mono">{item.startMode ?? "—"}</span>
 
           <span className="detail-label">Restart policy</span>
-          <span className="detail-value mono">{item.restartPolicy}</span>
+          <span className="detail-value mono">{item.restartPolicy ?? "—"}</span>
 
           <span className="detail-label">Max instances</span>
-          <span className="detail-value mono">{item.maxInstances}</span>
+          <span className="detail-value mono">{item.maxInstances ?? "—"}</span>
 
           {item.requiredEnv && item.requiredEnv.length > 0 && (
             <>
@@ -341,7 +341,7 @@ export function BeaconDetail({ name }: { name: string }) {
 
           <span className="detail-label">File</span>
           <span className="detail-value mono" style={{ fontSize: "0.75rem", color: "var(--muted)" }}>
-            {item.filePath}
+            {item.filePath ?? "Advertised by a remote station"}
           </span>
         </div>
       </div>

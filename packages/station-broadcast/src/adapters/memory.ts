@@ -257,9 +257,6 @@ export class BroadcastMemoryAdapter implements BroadcastQueueAdapter {
   }
 
   async close(): Promise<void> {
-    this.runs.clear();
-    this.nodeRuns.clear();
-    this.nodeRunIdsByBroadcast.clear();
-    this.definitions.clear();
+    // No resources to release; the adapter may be shared in process.
   }
 }

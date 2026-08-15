@@ -44,6 +44,9 @@ export interface BeaconContext<TConfig = unknown> {
    */
   heartbeat(): void;
 
+  /** Advertise an HTTP/WebSocket service for Headquarters proxy discovery. */
+  expose(exposure: BeaconExposure): void;
+
   /** Emit a structured log line, captured by the supervisor's subscribers. */
   log(message: string): void;
 
@@ -59,6 +62,13 @@ export interface BeaconContext<TConfig = unknown> {
    * handler: start the thing, `ctx.ready()`, then `await ctx.untilStopped()`.
    */
   untilStopped(): Promise<void>;
+}
+
+export interface BeaconExposure {
+  protocol: "http" | "https" | "ws" | "wss";
+  port: number;
+  path?: string;
+  healthPath?: string;
 }
 
 /** A beacon's long-running body. Runs until it returns, throws, or `ctx.signal` aborts. */

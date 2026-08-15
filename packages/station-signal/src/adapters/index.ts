@@ -2,6 +2,7 @@ import type {
   ListAllRunsOptions,
   ListRunsOptions,
   Run,
+  RunClaim,
   RunPatch,
   RunStatus,
   Step,
@@ -21,6 +22,21 @@ export interface SignalQueueAdapter {
   getRunsRunning(): Promise<Run[]>;
   getRun(id: string): Promise<Run | null>;
   updateRun(id: string, patch: RunPatch): Promise<void>;
+  /**
+   * Atomically claim one due pending run. A null result means another station
+   * won the race or the run is no longer eligible. Implement this for safe
+   * multi-station execution; runners retain a legacy fallback for custom
+   * single-process adapters.
+   */
+  claimRun?(id: string, claim: RunClaim): Promise<Run | null>;
+  /** Atomically cancel a pending or running run. */
+  cancelRun?(id: string, completedAt: Date): Promise<boolean>;
+  /** Extend a live lease only when `leaseToken` still owns the run. */
+  renewRunLease?(id: string, leaseToken: string, leaseExpiresAt: Date, now?: Date): Promise<boolean>;
+  /** Apply a patch only while `leaseToken` owns a running attempt. */
+  updateClaimedRun?(id: string, leaseToken: string, patch: RunPatch): Promise<boolean>;
+  /** Recover expired attempts. Exhausted attempts become failed. */
+  requeueExpiredRuns?(now: Date): Promise<number>;
   /**
    * Runs for one signal. With no `options`, returns the full history in the
    * adapter's natural order (back-compat). With `options`, returns

@@ -1,7 +1,8 @@
 {
   "name": "station-schedules",
-  "version": "2.0.0",
+  "version": "2.2.0",
   "description": "Runtime-editable schedule store and reconciler for station-signal and station-broadcast",
+  "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {

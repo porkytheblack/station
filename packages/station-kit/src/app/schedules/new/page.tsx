@@ -11,6 +11,11 @@ const INITIAL: ScheduleFormValue = {
   kind: "signal",
   target: "",
   interval: "5m",
+  timing: "interval",
+  cron: "0 17 * * *",
+  timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+  overlapPolicy: "skip",
+  misfirePolicy: "fire-once",
   input: "{}",
   enabled: true,
 };
@@ -44,6 +49,7 @@ export default function NewSchedulePage() {
   // Compute the next 5 fire times locally so users can see the cadence
   // before saving.
   const previewFires = useMemo(() => {
+    if (value.timing === "cron") return [];
     const ms = parseIntervalLocal(value.interval);
     if (ms === null || ms <= 0) return [];
     const now = Date.now();
@@ -52,7 +58,7 @@ export default function NewSchedulePage() {
       out.push(new Date(now + ms * i).toISOString());
     }
     return out;
-  }, [value.interval]);
+  }, [value.interval, value.timing]);
 
   async function handleSave() {
     setError(null);
@@ -74,7 +80,11 @@ export default function NewSchedulePage() {
       const res = await api.createSchedule({
         kind: value.kind,
         target: value.target,
-        interval: value.interval,
+        interval: value.timing === "interval" ? value.interval : undefined,
+        cron: value.timing === "cron" ? value.cron : undefined,
+        timezone: value.timing === "cron" ? value.timezone : undefined,
+        overlapPolicy: value.overlapPolicy,
+        misfirePolicy: value.misfirePolicy,
         input: inputParsed,
         enabled: value.enabled,
       });
@@ -121,7 +131,7 @@ export default function NewSchedulePage() {
           </h3>
           {previewFires.length === 0 ? (
             <div className="mono" style={{ fontSize: "0.75rem", color: "var(--error, #b00)" }}>
-              Invalid interval. Use formats like &quot;30s&quot;, &quot;5m&quot;, &quot;1h&quot;, &quot;1d&quot;, &quot;1w&quot;.
+              {value.timing === "cron" ? "Cron previews appear after the schedule is created." : "Invalid interval. Use formats like 30s, 5m, 1h, 1d, 1w."}
             </div>
           ) : (
             <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
@@ -150,7 +160,9 @@ export default function NewSchedulePage() {
             body: {
               kind: value.kind,
               target: value.target,
-              interval: value.interval,
+              ...(value.timing === "interval" ? { interval: value.interval } : { cron: value.cron, timezone: value.timezone }),
+              overlapPolicy: value.overlapPolicy,
+              misfirePolicy: value.misfirePolicy,
               enabled: value.enabled,
               input: tryParse(value.input),
             },

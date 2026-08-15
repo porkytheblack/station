@@ -1,4 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import { readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +16,7 @@ import {
   type ListAllRunsOptions,
   type ListRunsOptions,
   type Run,
+  type RunPatch,
   type RunStatus,
   type Step,
 } from "./types.js";
@@ -81,6 +83,16 @@ export interface EnvProvider {
   resolveFor(target: { kind: "signal" | "beacon"; name: string }): Promise<Record<string, string>>;
 }
 
+/** Structural subset of station-network used for distributed semaphore slots. */
+export interface SignalNetworkCoordinator {
+  acquireControllerLease(
+    lease: { name: string; holderId: string; token: string; expiresAt: Date },
+    now: Date,
+  ): Promise<boolean>;
+  renewControllerLease(name: string, holderId: string, token: string, expiresAt: Date, now?: Date): Promise<boolean>;
+  releaseControllerLease(name: string, holderId: string, token: string): Promise<boolean>;
+}
+
 export interface SignalRunnerOptions {
   signalsDir?: string;
   adapter?: SignalQueueAdapter;
@@ -115,6 +127,21 @@ export interface SignalRunnerOptions {
    * also what satisfies `.env()` requirements, alongside the host process env.
    */
   envProvider?: EnvProvider;
+  /** Stable identity used for distributed run ownership. */
+  stationId?: string;
+  /** Duration of a run ownership lease. Active leases are renewed every tick. @default 30000 */
+  leaseDurationMs?: number;
+  /**
+   * Fail runs whose definition is absent locally. Network stations should set
+   * this false so a differently-capable station may claim them. @default true
+   */
+  failUnknownSignals?: boolean;
+  /** Distributed lease backend used by `.concurrency({ network })`. */
+  networkCoordinator?: SignalNetworkCoordinator;
+  networkId?: string;
+  stationLabels?: Record<string, string>;
+  /** Dynamic admission gate used for station draining. */
+  canClaim?: () => Promise<boolean>;
 }
 
 export class SignalRunner {
@@ -132,6 +159,14 @@ export class SignalRunner {
   private maxConcurrent: number;
   private scheduleReconciler?: SignalScheduleReconciler;
   private envProvider?: EnvProvider;
+  private stationId: string;
+  private leaseDurationMs: number;
+  private failUnknownSignals: boolean;
+  private networkCoordinator?: SignalNetworkCoordinator;
+  private networkId: string;
+  private stationLabels: Record<string, string>;
+  private networkSlotByRunId = new Map<string, { name: string; token: string }>();
+  private canClaim?: () => Promise<boolean>;
   private activeCount = 0;
   private activePerSignal = new Map<string, number>();
   /** Map runId → child process for cancel/timeout kill. */
@@ -144,6 +179,7 @@ export class SignalRunner {
   private currentPollMs: number;
   private wake: (() => void) | null = null;
   private lastRunningSweepAt = 0;
+  private initialized = false;
   /** How often to scan for orphaned "running" runs when we own no children. */
   private static readonly ORPHAN_SWEEP_INTERVAL_MS = 30_000;
 
@@ -172,6 +208,13 @@ export class SignalRunner {
     this.maxConcurrent = options.maxConcurrent ?? 5;
     this.scheduleReconciler = options.scheduleReconciler;
     this.envProvider = options.envProvider;
+    this.stationId = options.stationId ?? `station-${process.pid}-${randomUUID()}`;
+    this.leaseDurationMs = Math.max(options.leaseDurationMs ?? 30_000, this.pollIntervalMs * 3);
+    this.failUnknownSignals = options.failUnknownSignals ?? true;
+    this.networkCoordinator = options.networkCoordinator;
+    this.networkId = options.networkId ?? "default";
+    this.stationLabels = { ...(options.stationLabels ?? {}) };
+    this.canClaim = options.canClaim;
   }
 
   /**
@@ -180,7 +223,7 @@ export class SignalRunner {
    * global `configure()` singleton — important when multiple SignalRunner
    * instances coexist or when the global adapter differs from this runner's.
    */
-  async triggerSignal(name: string, input: unknown): Promise<string> {
+  async triggerSignal(name: string, input: unknown, schedule?: { id: string; scheduledFor: Date }): Promise<string> {
     const sig = this.registry.get(name)?.signal;
     if (!sig) {
       throw new Error(`Signal "${name}" is not registered (no Signal object available)`);
@@ -191,7 +234,8 @@ export class SignalRunner {
     if (!result.success) {
       throw new Error(`Invalid input for signal "${name}": ${result.error.message}`);
     }
-    const id = this.adapter.generateId();
+    const idempotencyKey = schedule ? `schedule:${schedule.id}:${schedule.scheduledFor.toISOString()}` : undefined;
+    const id = idempotencyKey ? deterministicRunId(idempotencyKey) : this.adapter.generateId();
     const run: Run = {
       id,
       signalName: name,
@@ -202,8 +246,17 @@ export class SignalRunner {
       maxAttempts: sig.maxAttempts,
       timeout: sig.timeout,
       createdAt: new Date(),
+      scheduleId: schedule?.id,
+      scheduledFor: schedule?.scheduledFor,
+      idempotencyKey,
     };
-    await this.adapter.addRun(run);
+    try {
+      await this.adapter.addRun(run);
+    } catch (err) {
+      // Deterministic schedule IDs make enqueue idempotent across controller
+      // retries and ambiguous database/network failures.
+      if (!idempotencyKey || !(await this.adapter.getRun(id))) throw err;
+    }
     this.wakeUp();
     return id;
   }
@@ -217,15 +270,20 @@ export class SignalRunner {
     return this.adapter;
   }
 
+  /** Current child-process utilization, used by Station Network heartbeats. */
+  getActiveCount(): number {
+    return this.activeCount;
+  }
+
   static create(signalsDir: string, options: Omit<SignalRunnerOptions, "signalsDir"> = {}): SignalRunner {
     const subscribers = options.subscribers ?? [new ConsoleSubscriber()];
     return new SignalRunner({ ...options, signalsDir, subscribers });
   }
 
   /** List all registered signals with metadata. */
-  listRegistered(): Array<{ name: string; filePath: string; maxConcurrency?: number; requiredEnv?: string[] }> {
+  listRegistered(): Array<{ name: string; filePath: string; maxConcurrency?: number; networkConcurrency?: number; requiredEnv?: string[] }> {
     return Array.from(this.registry.values()).map(({ name, filePath, maxConcurrency, signal }) => ({
-      name, filePath, maxConcurrency, requiredEnv: signal?.requiredEnv,
+      name, filePath, maxConcurrency, networkConcurrency: signal?.networkConcurrency, requiredEnv: signal?.requiredEnv,
     }));
   }
 
@@ -348,9 +406,7 @@ export class SignalRunner {
       throw new Error("[station-signal] Runner is already started");
     }
 
-    if (this.signalsDir) {
-      await this.discover(resolve(this.signalsDir));
-    }
+    await this.initialize();
 
     // M5: Install default SIGINT/SIGTERM handlers for graceful shutdown
     const shutdown = () => {
@@ -381,6 +437,13 @@ export class SignalRunner {
     unsubscribeWake();
     process.removeListener("SIGINT", shutdown);
     process.removeListener("SIGTERM", shutdown);
+  }
+
+  /** Discover definitions without entering the polling loop (used by Headquarters controllers). */
+  async initialize(): Promise<void> {
+    if (this.initialized) return;
+    if (this.signalsDir) await this.discover(resolve(this.signalsDir));
+    this.initialized = true;
   }
 
   /**
@@ -446,10 +509,14 @@ export class SignalRunner {
       return false;
     }
 
-    await this.adapter.updateRun(runId, {
-      status: "cancelled",
-      completedAt: new Date(),
-    });
+    const completedAt = new Date();
+    const cancelled = this.adapter.cancelRun
+      ? await this.adapter.cancelRun(runId, completedAt)
+      : (await this.adapter.updateRun(runId, {
+          status: "cancelled", completedAt, leaseToken: undefined,
+          leaseExpiresAt: undefined, claimedAt: undefined,
+        }), true);
+    if (!cancelled) return false;
 
     // Kill the child process if running
     const child = this.childByRunId.get(runId);
@@ -577,6 +644,7 @@ export class SignalRunner {
     if (this.ticking) return true;
     this.ticking = true;
     try {
+    await this.recoverAndRenewLeases();
     await this.checkTimeouts();
     await this.tickRecurring();
     if (this.scheduleReconciler) {
@@ -585,6 +653,10 @@ export class SignalRunner {
       } catch (err) {
         console.error("[station-signal] Schedule reconciler error:", err);
       }
+    }
+
+    if (this.canClaim && !(await this.canClaim())) {
+      return this.childByRunId.size > 0;
     }
 
     // Bounded batch: we dispatch at most `maxConcurrent` per tick, but some
@@ -597,6 +669,7 @@ export class SignalRunner {
 
       const sig = this.registry.get(run.signalName);
       if (!sig) {
+        if (!this.failUnknownSignals) continue;
         const error = `No signal registered for "${run.signalName}"`;
         this.emit("onRunFailed", { run, error });
         await this.adapter.updateRun(run.id, {
@@ -604,6 +677,11 @@ export class SignalRunner {
           completedAt: new Date(),
           error,
         });
+        continue;
+      }
+
+      const requiredLabels = sig.signal?.placement?.labels;
+      if (requiredLabels && !Object.entries(requiredLabels).every(([key, value]) => this.stationLabels[key] === value)) {
         continue;
       }
 
@@ -668,16 +746,41 @@ export class SignalRunner {
         }
       }
 
-      // Mark as running — runner is single authority for run status (H1)
-      await this.adapter.updateRun(run.id, {
-        status: "running",
-        startedAt: new Date(),
-        lastRunAt: new Date(),
-        attempts: run.attempts + 1,
-      });
+      // Atomically acquire ownership. Durable built-in adapters implement
+      // claimRun; the fallback preserves compatibility for custom adapters but
+      // is only safe when a single runner consumes that adapter.
+      const claimedAt = new Date();
+      const leaseToken = randomUUID();
+      const networkSlot = await this.acquireNetworkSlot(sig.signal, leaseToken, claimedAt);
+      if (sig.signal?.networkConcurrency && !networkSlot) continue;
+      let freshRun: Run | null;
+      if (this.adapter.claimRun) {
+        freshRun = await this.adapter.claimRun(run.id, {
+          stationId: this.stationId,
+          leaseToken,
+          claimedAt,
+          leaseExpiresAt: new Date(claimedAt.getTime() + this.leaseDurationMs),
+        });
+        if (!freshRun) {
+          if (networkSlot) await this.releaseNetworkSlotValue(networkSlot);
+          continue;
+        }
+      } else {
+        await this.adapter.updateRun(run.id, {
+          status: "running",
+          startedAt: claimedAt,
+          lastRunAt: claimedAt,
+          attempts: run.attempts + 1,
+          stationId: this.stationId,
+          leaseToken,
+          claimedAt,
+          leaseExpiresAt: new Date(claimedAt.getTime() + this.leaseDurationMs),
+        });
+        freshRun = await this.adapter.getRun(run.id);
+      }
 
-      const freshRun = await this.adapter.getRun(run.id);
       this.activeCount++;
+      if (networkSlot) this.networkSlotByRunId.set(run.id, networkSlot);
       this.incrementPerSignal(run.signalName);
       const dispatchRun = freshRun ?? run;
       this.emit("onRunDispatched", { run: dispatchRun });
@@ -685,10 +788,78 @@ export class SignalRunner {
     }
     // Busy while there are due runs (including ones waiting out retry
     // back-off) or children still executing — keep the base poll cadence.
-    return due.length > 0 || this.childByRunId.size > 0;
+      return due.length > 0 || this.childByRunId.size > 0;
     } finally {
       this.ticking = false;
     }
+  }
+
+  private async recoverAndRenewLeases(): Promise<void> {
+    const now = new Date();
+    await this.adapter.requeueExpiredRuns?.(now);
+    if (!this.adapter.renewRunLease || this.childByRunId.size === 0) return;
+
+    const leaseExpiresAt = new Date(now.getTime() + this.leaseDurationMs);
+    for (const runId of this.childByRunId.keys()) {
+      const run = await this.adapter.getRun(runId);
+      if (!run || run.status !== "running" || !run.leaseToken || run.stationId !== this.stationId) {
+        this.childByRunId.get(runId)?.kill("SIGTERM");
+        continue;
+      }
+      const renewed = await this.adapter.renewRunLease(runId, run.leaseToken, leaseExpiresAt, now);
+      if (!renewed) {
+        // Ownership moved after a partition or expiry. Fence this process from
+        // producing more side effects as quickly as the host allows.
+        this.childByRunId.get(runId)?.kill("SIGTERM");
+      }
+      const slot = this.networkSlotByRunId.get(runId);
+      if (slot && this.networkCoordinator) {
+        const slotRenewed = await this.networkCoordinator.renewControllerLease(
+          slot.name, this.stationId, slot.token, leaseExpiresAt, now,
+        );
+        if (!slotRenewed) this.childByRunId.get(runId)?.kill("SIGTERM");
+      }
+    }
+  }
+
+  private async acquireNetworkSlot(
+    signal: AnySignal | undefined,
+    token: string,
+    now: Date,
+  ): Promise<{ name: string; token: string } | undefined> {
+    const limit = signal?.networkConcurrency;
+    if (!limit) return undefined;
+    if (!this.networkCoordinator) {
+      throw new Error(`Signal "${signal.name}" declares network concurrency but no networkCoordinator is configured.`);
+    }
+    const expiresAt = new Date(now.getTime() + this.leaseDurationMs);
+    for (let slot = 0; slot < limit; slot++) {
+      const name = `network:${this.networkId}:signal:${signal.name}:slot:${slot}`;
+      const acquired = await this.networkCoordinator.acquireControllerLease(
+        { name, holderId: this.stationId, token, expiresAt }, now,
+      );
+      if (acquired) return { name, token };
+    }
+    return undefined;
+  }
+
+  private async releaseNetworkSlotValue(slot: { name: string; token: string }): Promise<void> {
+    await this.networkCoordinator?.releaseControllerLease(slot.name, this.stationId, slot.token);
+  }
+
+  private async releaseNetworkSlot(runId: string): Promise<void> {
+    const slot = this.networkSlotByRunId.get(runId);
+    if (!slot) return;
+    this.networkSlotByRunId.delete(runId);
+    await this.releaseNetworkSlotValue(slot);
+  }
+
+  private async updateOwnedRun(run: Run, patch: RunPatch): Promise<boolean> {
+    if (run.leaseToken && this.adapter.updateClaimedRun) {
+      return this.adapter.updateClaimedRun(run.id, run.leaseToken, patch);
+    }
+    await this.adapter.updateRun(run.id, patch);
+    return true;
   }
 
   private async tickRecurring(): Promise<void> {
@@ -741,6 +912,7 @@ export class SignalRunner {
     const running = await this.adapter.getRunsRunning();
 
     for (const run of running) {
+      if (run.stationId && run.stationId !== this.stationId) continue;
       if (!run.startedAt) continue;
 
       const elapsed = Date.now() - run.startedAt.getTime();
@@ -762,18 +934,24 @@ export class SignalRunner {
 
       const error = `Timed out after ${current.timeout}ms`;
       if (current.attempts < maxAttempts) {
-        await this.adapter.updateRun(run.id, {
+        await this.updateOwnedRun(current, {
           status: "pending",
           startedAt: undefined,
           lastRunAt: new Date(),
           error,
+          stationId: undefined,
+          leaseToken: undefined,
+          leaseExpiresAt: undefined,
+          claimedAt: undefined,
         });
         this.emit("onRunRetry", { run: current, attempt: current.attempts, maxAttempts });
       } else {
-        await this.adapter.updateRun(run.id, {
+        await this.updateOwnedRun(current, {
           status: "failed",
           completedAt: new Date(),
           error: `${error} (${maxAttempts} attempts exhausted)`,
+          leaseToken: undefined,
+          leaseExpiresAt: undefined,
         });
         this.emit("onRunFailed", { run: current, error });
       }
@@ -837,6 +1015,9 @@ export class SignalRunner {
 
     const cleanup = () => {
       this.childByRunId.delete(run.id);
+      void this.releaseNetworkSlot(run.id).catch((err) => {
+        console.error(`[station-signal] Failed to release network slot for "${run.signalName}":`, err);
+      });
     };
 
     child.on("message", async (msg: IPCMessage) => {
@@ -861,7 +1042,14 @@ export class SignalRunner {
             break; // Don't overwrite
           }
 
-          await this.adapter.updateRun(run.id, { status: "completed", completedAt: new Date(), output });
+          const updated = await this.updateOwnedRun(run, {
+            status: "completed",
+            completedAt: new Date(),
+            output,
+            leaseToken: undefined,
+            leaseExpiresAt: undefined,
+          });
+          if (!updated) break;
           this.emit("onRunCompleted", { run: current ?? run, output });
           break;
         }
@@ -884,15 +1072,27 @@ export class SignalRunner {
           const maxAttempts = run.maxAttempts ?? this.defaultMaxAttempts;
 
           if (retryable && attempts < maxAttempts) {
-            await this.adapter.updateRun(run.id, {
+            const updated = await this.updateOwnedRun(run, {
               status: "pending",
               startedAt: undefined,
               lastRunAt: new Date(),
               error,
+              stationId: undefined,
+              leaseToken: undefined,
+              leaseExpiresAt: undefined,
+              claimedAt: undefined,
             });
+            if (!updated) break;
             this.emit("onRunRetry", { run: currentRun ?? run, attempt: attempts, maxAttempts });
           } else {
-            await this.adapter.updateRun(run.id, { status: "failed", completedAt: new Date(), error });
+            const updated = await this.updateOwnedRun(run, {
+              status: "failed",
+              completedAt: new Date(),
+              error,
+              leaseToken: undefined,
+              leaseExpiresAt: undefined,
+            });
+            if (!updated) break;
             this.emit("onRunFailed", { run: currentRun ?? run, error });
           }
           break;
@@ -963,12 +1163,34 @@ export class SignalRunner {
       const maxAttempts = run.maxAttempts ?? this.defaultMaxAttempts;
 
       if (attempts < maxAttempts) {
-        await this.adapter.updateRun(run.id, { status: "pending", startedAt: undefined, lastRunAt: new Date(), error });
+        const updated = await this.updateOwnedRun(run, {
+          status: "pending",
+          startedAt: undefined,
+          lastRunAt: new Date(),
+          error,
+          stationId: undefined,
+          leaseToken: undefined,
+          leaseExpiresAt: undefined,
+          claimedAt: undefined,
+        });
+        if (!updated) return;
         this.emit("onRunRetry", { run: currentRun, attempt: attempts, maxAttempts });
       } else {
-        await this.adapter.updateRun(run.id, { status: "failed", completedAt: new Date(), error });
+        const updated = await this.updateOwnedRun(run, {
+          status: "failed",
+          completedAt: new Date(),
+          error,
+          leaseToken: undefined,
+          leaseExpiresAt: undefined,
+        });
+        if (!updated) return;
         this.emit("onRunFailed", { run: currentRun, error });
       }
     });
   }
+}
+
+function deterministicRunId(key: string): string {
+  const hex = createHash("sha256").update(key).digest("hex").slice(0, 32);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }

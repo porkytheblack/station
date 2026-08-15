@@ -1,7 +1,8 @@
 {
   "name": "station-kit",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Dashboard for station-signal — inspect and control signals and broadcasts",
+  "license": "MIT",
   "type": "module",
   "engines": {
     "node": ">=18"
@@ -30,7 +31,7 @@
     "tsconfig.next.json"
   ],
   "scripts": {
-    "build": "tsc && next build && cp -r .next/static .next/standalone/packages/station-kit/.next/static",
+    "build": "tsc && next build && cp -r .next/static .next/standalone/packages/station-kit/.next/static && node scripts/prune-standalone.mjs",
     "dev": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test \"test/**/*.test.ts\""
@@ -44,11 +45,12 @@
     "@hono/node-server": "^1",
     "esbuild": "^0.25.12",
     "hono": "^4",
-    "next": "^15",
-    "react": "^19",
-    "react-dom": "^19",
+    "next": "15.5.12",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
     "station-env": "workspace:*",
     "station-expressions": "workspace:*",
+    "station-network": "workspace:*",
     "station-schedules": "workspace:*",
     "tsx": "^4.21.0",
     "ws": "^8"

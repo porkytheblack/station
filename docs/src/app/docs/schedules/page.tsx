@@ -13,8 +13,8 @@ export default function SchedulesPage() {
       <h2 style={{ marginTop: 0 }}>Schedules</h2>
       <p>
         Schedules let you fire signals or broadcasts at runtime-defined
-        intervals without redeploying. They&apos;re stored in the same
-        adapter as your runs and reconciled on every poll tick. Operators can
+        intervals or calendar-aware cron expressions without redeploying.
+        They&apos;re stored in a schedule adapter and reconciled on every poll tick. Operators can
         add, edit, pause and remove them through the dashboard or the v1 API.
       </p>
       <p>
@@ -79,8 +79,13 @@ export default function SchedulesPage() {
   kind: "signal" | "broadcast-static" | "broadcast-dynamic";
   /** Signal or broadcast name. */
   target: string;
-  /** Interval string, e.g. "5m", "1h", "100ms". */
-  interval: string;
+  /** Exactly one timing mode is set. */
+  interval?: string;
+  cron?: string;             // five fields: minute hour day month weekday
+  timezone?: string;         // IANA name, defaults to UTC
+  overlapPolicy?: "skip" | "allow";
+  misfirePolicy?: "skip" | "fire-once" | "catch-up";
+  misfireGraceMs?: number;
   /** JSON-serialisable payload sent to the target on each fire. */
   input?: unknown;
   enabled: boolean;
@@ -122,10 +127,22 @@ export default function SchedulesPage() {
         </tbody>
       </table>
       <p>
-        Intervals are absolute durations from the previous fire — there is no
-        cron expression support. If you need calendar-aware scheduling (&quot;the
-        first business day of the month&quot;), implement it as a signal that
-        runs frequently and short-circuits when the calendar isn&apos;t right.
+        Intervals are absolute durations from the previous planned fire, so a
+        late poll does not cause cumulative drift. For calendar time, set a
+        five-field <code>cron</code> expression and an IANA <code>timezone</code>
+        instead of <code>interval</code>. For example, <code>0 17 * * *</code>
+        with <code>Africa/Nairobi</code> becomes eligible every day at 5 PM in
+        Nairobi, including timezone offset changes.
+      </p>
+
+      <h4>Overlap and misfires</h4>
+      <p>
+        <code>overlapPolicy: &quot;skip&quot;</code> (the default) suppresses a fire
+        when the target already has pending or running work;
+        <code>&quot;allow&quot;</code> permits overlap. <code>misfirePolicy</code> controls
+        overdue occurrences after downtime: <code>fire-once</code> (default),
+        <code>skip</code> beyond <code>misfireGraceMs</code>, or
+        <code>catch-up</code> one occurrence per reconciliation pass.
       </p>
 
       <hr className="divider" />
@@ -145,7 +162,10 @@ export default function SchedulesPage() {
   -d '{
     "kind": "signal",
     "target": "syncInventory",
-    "interval": "15m",
+    "cron": "0 17 * * *",
+    "timezone": "Africa/Nairobi",
+    "overlapPolicy": "skip",
+    "misfirePolicy": "fire-once",
     "input": { "warehouseId": "WH-1" },
     "enabled": true
   }'`}</Code>
@@ -173,8 +193,9 @@ export default function SchedulesPage() {
           <tr>
             <td><code>PATCH /api/v1/schedules/:id</code></td>
             <td>
-              Partial update. Fields you can change: <code>interval</code>,{" "}
-              <code>input</code>, <code>enabled</code>, <code>nextRunAt</code>.
+              Partial update. Fields you can change include <code>interval</code>,{" "}
+              <code>cron</code>, <code>timezone</code>, overlap/misfire policy,
+              <code>input</code>, <code>enabled</code>, and <code>nextRunAt</code>.
               Identity fields (<code>kind</code>, <code>target</code>,{" "}
               <code>createdAt</code>) are immutable.
             </td>

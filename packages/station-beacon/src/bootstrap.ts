@@ -63,6 +63,7 @@ function sendIPC(
     | "beacon:started"
     | "beacon:ready"
     | "beacon:heartbeat"
+    | "beacon:exposed"
     | "beacon:log"
     | "beacon:stopping"
     | "beacon:error",
@@ -176,6 +177,21 @@ function buildContext<TConfig>(config: TConfig): BeaconContext<TConfig> {
     },
     heartbeat(): void {
       sendIPC("beacon:heartbeat");
+    },
+    expose(exposure): void {
+      if (!["http", "https", "ws", "wss"].includes(exposure.protocol)) {
+        throw new Error("Beacon exposure protocol must be http, https, ws, or wss.");
+      }
+      if (!Number.isInteger(exposure.port) || exposure.port < 1 || exposure.port > 65535) {
+        throw new Error("Beacon exposure port must be an integer between 1 and 65535.");
+      }
+      if (exposure.path !== undefined && (typeof exposure.path !== "string" || !exposure.path.startsWith("/"))) {
+        throw new Error("Beacon exposure path must start with '/'.");
+      }
+      if (exposure.healthPath !== undefined && (typeof exposure.healthPath !== "string" || !exposure.healthPath.startsWith("/"))) {
+        throw new Error("Beacon exposure healthPath must start with '/'.");
+      }
+      sendIPC("beacon:exposed", { exposure });
     },
     log(message: string): void {
       sendIPC("beacon:log", { message });

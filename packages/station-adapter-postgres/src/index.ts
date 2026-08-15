@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 export type { Pool as PgPool } from "pg";
-import type { SerializableAdapter, AdapterManifest, Run, RunPatch, RunStatus, Step, StepPatch, ListRunsOptions, ListAllRunsOptions } from "station-signal";
+import type { SerializableAdapter, AdapterManifest, Run, RunClaim, RunPatch, RunStatus, Step, StepPatch, ListRunsOptions, ListAllRunsOptions } from "station-signal";
 import { registerAdapter } from "station-signal";
 
 const MODULE_URL = import.meta.url;
@@ -16,8 +16,15 @@ const { toColumn, toField } = createColumnMapper({
   startedAt: "started_at",
   completedAt: "completed_at",
   createdAt: "created_at",
+  stationId: "station_id",
+  leaseToken: "lease_token",
+  leaseExpiresAt: "lease_expires_at",
+  claimedAt: "claimed_at",
+  scheduleId: "schedule_id",
+  scheduledFor: "scheduled_for",
+  idempotencyKey: "idempotency_key",
 });
-const DATE_FIELDS = new Set(["nextRunAt", "lastRunAt", "startedAt", "completedAt", "createdAt"]);
+const DATE_FIELDS = new Set(["nextRunAt", "lastRunAt", "startedAt", "completedAt", "createdAt", "leaseExpiresAt", "claimedAt", "scheduledFor"]);
 
 const { toColumn: toStepColumn, toField: toStepField } = createColumnMapper({
   runId: "run_id",
@@ -86,9 +93,24 @@ export class PostgresAdapter implements SerializableAdapter {
         completed_at  TIMESTAMPTZ,
         created_at    TIMESTAMPTZ NOT NULL,
         output        TEXT,
-        error         TEXT
+        error         TEXT,
+        station_id    TEXT,
+        lease_token   TEXT,
+        lease_expires_at TIMESTAMPTZ,
+        claimed_at    TIMESTAMPTZ,
+        schedule_id   TEXT,
+        scheduled_for TIMESTAMPTZ,
+        idempotency_key TEXT
       )
     `);
+
+    await this.pool.query(`ALTER TABLE ${this.tableName} ADD COLUMN IF NOT EXISTS station_id TEXT`);
+    await this.pool.query(`ALTER TABLE ${this.tableName} ADD COLUMN IF NOT EXISTS lease_token TEXT`);
+    await this.pool.query(`ALTER TABLE ${this.tableName} ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ`);
+    await this.pool.query(`ALTER TABLE ${this.tableName} ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ`);
+    await this.pool.query(`ALTER TABLE ${this.tableName} ADD COLUMN IF NOT EXISTS schedule_id TEXT`);
+    await this.pool.query(`ALTER TABLE ${this.tableName} ADD COLUMN IF NOT EXISTS scheduled_for TIMESTAMPTZ`);
+    await this.pool.query(`ALTER TABLE ${this.tableName} ADD COLUMN IF NOT EXISTS idempotency_key TEXT`);
 
     await this.pool.query(`
       CREATE INDEX IF NOT EXISTS idx_${this.tableName}_status_next
@@ -103,6 +125,10 @@ export class PostgresAdapter implements SerializableAdapter {
     await this.pool.query(`
       CREATE INDEX IF NOT EXISTS idx_${this.tableName}_signal_name
         ON ${this.tableName} (signal_name)
+    `);
+    await this.pool.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_${this.tableName}_idempotency_key
+        ON ${this.tableName} (idempotency_key) WHERE idempotency_key IS NOT NULL
     `);
 
     await this.pool.query(`
@@ -150,9 +176,11 @@ export class PostgresAdapter implements SerializableAdapter {
       `INSERT INTO ${this.tableName}
         (id, signal_name, kind, input, status, attempts, max_attempts,
          timeout, interval, next_run_at, last_run_at, started_at,
-         completed_at, created_at, output, error)
+         completed_at, created_at, output, error, station_id, lease_token,
+         lease_expires_at, claimed_at, schedule_id, scheduled_for, idempotency_key)
        VALUES
-        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+         $17, $18, $19, $20, $21, $22, $23)`,
       [
         run.id,
         run.signalName,
@@ -170,6 +198,13 @@ export class PostgresAdapter implements SerializableAdapter {
         run.createdAt,
         run.output ?? null,
         run.error ?? null,
+        run.stationId ?? null,
+        run.leaseToken ?? null,
+        run.leaseExpiresAt ?? null,
+        run.claimedAt ?? null,
+        run.scheduleId ?? null,
+        run.scheduledFor ?? null,
+        run.idempotencyKey ?? null,
       ],
     );
   }
@@ -220,6 +255,8 @@ export class PostgresAdapter implements SerializableAdapter {
   private static readonly RUN_PATCH_KEYS = new Set([
     "input", "output", "error", "status", "attempts", "maxAttempts",
     "timeout", "interval", "nextRunAt", "lastRunAt", "startedAt", "completedAt",
+    "stationId", "leaseToken", "leaseExpiresAt", "claimedAt", "scheduleId",
+    "scheduledFor", "idempotencyKey",
   ]);
 
   async updateRun(id: string, patch: RunPatch): Promise<void> {
@@ -247,6 +284,82 @@ export class PostgresAdapter implements SerializableAdapter {
       `UPDATE ${this.tableName} SET ${setClauses.join(", ")} WHERE id = $${paramIndex}`,
       values,
     );
+  }
+
+  async claimRun(id: string, claim: RunClaim): Promise<Run | null> {
+    await this.ready();
+    const result = await this.pool.query(
+      `UPDATE ${this.tableName}
+       SET status = 'running', station_id = $2, lease_token = $3,
+           lease_expires_at = $4, claimed_at = $5, started_at = $5,
+           last_run_at = $5, attempts = attempts + 1
+       WHERE id = $1 AND status = 'pending'
+         AND (next_run_at IS NULL OR next_run_at <= $5)
+       RETURNING *`,
+      [id, claim.stationId, claim.leaseToken, claim.leaseExpiresAt, claim.claimedAt],
+    );
+    return result.rows.length > 0 ? rowToRun(result.rows[0]) : null;
+  }
+
+  async cancelRun(id: string, completedAt: Date): Promise<boolean> {
+    await this.ready();
+    const result = await this.pool.query(
+      `UPDATE ${this.tableName}
+       SET status='cancelled', completed_at=$2, lease_token=NULL, lease_expires_at=NULL, claimed_at=NULL
+       WHERE id=$1 AND status IN ('pending','running')`,
+      [id, completedAt],
+    );
+    return result.rowCount === 1;
+  }
+
+  async renewRunLease(id: string, leaseToken: string, leaseExpiresAt: Date, now = new Date()): Promise<boolean> {
+    await this.ready();
+    const result = await this.pool.query(
+      `UPDATE ${this.tableName} SET lease_expires_at = $3
+       WHERE id = $1 AND status = 'running' AND lease_token = $2 AND lease_expires_at > $4`,
+      [id, leaseToken, leaseExpiresAt, now],
+    );
+    return result.rowCount === 1;
+  }
+
+  async updateClaimedRun(id: string, leaseToken: string, patch: RunPatch): Promise<boolean> {
+    await this.ready();
+    const setClauses: string[] = [];
+    const values: unknown[] = [];
+    for (const [key, value] of Object.entries(patch)) {
+      if (!PostgresAdapter.RUN_PATCH_KEYS.has(key)) continue;
+      values.push(value === undefined ? null : value);
+      setClauses.push(`${toColumn(key)} = $${values.length}`);
+    }
+    if (setClauses.length === 0) return false;
+    values.push(id, leaseToken);
+    const result = await this.pool.query(
+      `UPDATE ${this.tableName} SET ${setClauses.join(", ")}
+       WHERE id = $${values.length - 1} AND status = 'running' AND lease_token = $${values.length}`,
+      values,
+    );
+    return result.rowCount === 1;
+  }
+
+  async requeueExpiredRuns(now: Date): Promise<number> {
+    await this.ready();
+    const failed = await this.pool.query(
+      `UPDATE ${this.tableName}
+       SET status = 'failed', completed_at = $1,
+           error = 'Station lease expired and all attempts were exhausted',
+           lease_token = NULL, lease_expires_at = NULL
+       WHERE status = 'running' AND lease_expires_at <= $1 AND attempts >= max_attempts`,
+      [now],
+    );
+    const pending = await this.pool.query(
+      `UPDATE ${this.tableName}
+       SET status = 'pending', started_at = NULL, last_run_at = $1,
+           error = 'Station lease expired; run recovered for retry',
+           station_id = NULL, lease_token = NULL, lease_expires_at = NULL, claimed_at = NULL
+       WHERE status = 'running' AND lease_expires_at <= $1 AND attempts < max_attempts`,
+      [now],
+    );
+    return (failed.rowCount ?? 0) + (pending.rowCount ?? 0);
   }
 
   async listRuns(signalName: string, options?: ListRunsOptions): Promise<Run[]> {

@@ -150,6 +150,10 @@ export interface BeaconInstance {
   lastError?: string;
   /** When, in `backoff`, the next restart is scheduled. */
   nextRestartAt?: Date;
+  /** Station that owns the current incarnation. */
+  stationId?: string;
+  /** JSON-serialized BeaconExposure advertised by the handler. */
+  exposure?: string;
   createdAt: Date;
   updatedAt: Date;
 }

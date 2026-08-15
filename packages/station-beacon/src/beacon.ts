@@ -86,6 +86,7 @@ export interface Beacon<TConfig = unknown> {
   readonly maxInstances?: number;
   /** Env var keys that must be present (store-managed or process env) for the beacon to launch. */
   readonly requiredEnv?: string[];
+  readonly placement?: { labels?: Record<string, string> };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -103,6 +104,7 @@ interface BuilderOpts<TConfig> {
   startMode: StartMode;
   maxInstances?: number;
   requiredEnv?: string[];
+  placement?: { labels?: Record<string, string> };
 }
 
 /**
@@ -256,6 +258,11 @@ export class BeaconBuilder<TConfig = Record<string, never>> {
     return this._clone({ requiredEnv: Array.from(new Set(merged)) });
   }
 
+  /** Restrict this beacon to stations with matching labels. */
+  placement(policy: { labels?: Record<string, string> }): BeaconBuilder<TConfig> {
+    return this._clone({ placement: { labels: policy.labels ? { ...policy.labels } : undefined } });
+  }
+
   private _finalize(
     mode: "run" | "poll",
     handler: BeaconHandler<TConfig>,
@@ -281,6 +288,7 @@ export class BeaconBuilder<TConfig = Record<string, never>> {
       autoStart: this._opts.startMode === "auto",
       maxInstances: this._opts.maxInstances,
       requiredEnv: this._opts.requiredEnv,
+      placement: this._opts.placement,
     };
   }
 

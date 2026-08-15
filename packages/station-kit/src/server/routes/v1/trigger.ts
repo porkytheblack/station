@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { SignalRunner, SignalQueueAdapter } from "station-signal";
 import type { BroadcastRunner, BroadcastQueueAdapter } from "station-broadcast";
 import type { StationSignalSubscriber } from "../../subscriber.js";
+import type { StationNetworkAdapter } from "station-network";
 
 export interface V1TriggerDeps {
   signalRunner?: SignalRunner;
@@ -9,24 +10,31 @@ export interface V1TriggerDeps {
   broadcastRunner?: BroadcastRunner;
   broadcastAdapter?: BroadcastQueueAdapter;
   signalSubscriber?: StationSignalSubscriber;
+  networkAdapter?: StationNetworkAdapter;
+  networkId?: string;
 }
 
 export function v1TriggerRoutes(deps: V1TriggerDeps) {
   const app = new Hono();
 
   app.post("/trigger", async (c) => {
-    if (!deps.signalRunner) {
-      return c.json({ error: "unavailable", message: "Station is in read-only mode." }, 503);
-    }
-
     const body = await c.req.json().catch(() => null);
-    if (!body?.signalName) {
+    if (typeof body?.signalName !== "string" || body.signalName.trim().length === 0) {
       return c.json({ error: "bad_request", message: "Missing signalName." }, 400);
     }
 
-    const { signalName, input } = body;
+    const signalName = body.signalName.trim();
+    const { input } = body;
 
-    if (!deps.signalRunner.hasSignal(signalName)) {
+    const knownLocally = deps.signalRunner?.hasSignal(signalName) ?? false;
+    if (deps.networkAdapter && deps.networkId) {
+      await deps.networkAdapter.markOfflineBefore(new Date(), deps.networkId);
+    }
+    const knownInNetwork = deps.networkAdapter && deps.networkId
+      ? (await deps.networkAdapter.listStations({ networkId: deps.networkId, status: "online" }))
+          .some((station) => station.definitions.signals.includes(signalName))
+      : false;
+    if (!knownLocally && !knownInNetwork) {
       return c.json(
         { error: "not_found", message: `Signal "${signalName}" not registered.` },
         404,
@@ -69,9 +77,6 @@ export function v1TriggerRoutes(deps: V1TriggerDeps) {
 
   app.post("/runs/:id/rerun", async (c) => {
     const id = c.req.param("id");
-    if (!deps.signalRunner) {
-      return c.json({ error: "unavailable", message: "Station is in read-only mode." }, 503);
-    }
     const run = await deps.signalAdapter.getRun(id);
     if (!run) {
       return c.json({ error: "not_found", message: "Run not found." }, 404);
@@ -111,9 +116,6 @@ export function v1TriggerRoutes(deps: V1TriggerDeps) {
 
   app.post("/runs/:id/retry", async (c) => {
     const id = c.req.param("id");
-    if (!deps.signalRunner) {
-      return c.json({ error: "unavailable", message: "Station is in read-only mode." }, 503);
-    }
     const run = await deps.signalAdapter.getRun(id);
     if (!run) {
       return c.json({ error: "not_found", message: "Run not found." }, 404);
@@ -139,6 +141,10 @@ export function v1TriggerRoutes(deps: V1TriggerDeps) {
       startedAt: undefined,
       completedAt: undefined,
       lastRunAt: undefined,
+      stationId: undefined,
+      leaseToken: undefined,
+      leaseExpiresAt: undefined,
+      claimedAt: undefined,
     });
 
     return c.json({ data: { retried: true } });

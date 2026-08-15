@@ -48,8 +48,18 @@ export class SchedulePostgresAdapter implements ScheduleAdapter {
         created_at      TIMESTAMPTZ NOT NULL,
         updated_at      TIMESTAMPTZ NOT NULL,
         created_by      TEXT
+        ,cron           TEXT
+        ,timezone       TEXT
+        ,overlap_policy TEXT
+        ,misfire_policy TEXT
+        ,misfire_grace_ms INTEGER
       )
     `);
+    await this.pool.query(`ALTER TABLE ${this.table} ADD COLUMN IF NOT EXISTS cron TEXT`);
+    await this.pool.query(`ALTER TABLE ${this.table} ADD COLUMN IF NOT EXISTS timezone TEXT`);
+    await this.pool.query(`ALTER TABLE ${this.table} ADD COLUMN IF NOT EXISTS overlap_policy TEXT`);
+    await this.pool.query(`ALTER TABLE ${this.table} ADD COLUMN IF NOT EXISTS misfire_policy TEXT`);
+    await this.pool.query(`ALTER TABLE ${this.table} ADD COLUMN IF NOT EXISTS misfire_grace_ms INTEGER`);
     await this.pool.query(`
       CREATE INDEX IF NOT EXISTS idx_${this.table}_due
         ON ${this.table} (enabled, next_run_at)
@@ -66,13 +76,13 @@ export class SchedulePostgresAdapter implements ScheduleAdapter {
       `INSERT INTO ${this.table}
         (id, kind, target, interval, input, enabled, next_run_at,
          last_run_at, last_run_status, last_run_id,
-         created_at, updated_at, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+         created_at, updated_at, created_by, cron, timezone, overlap_policy, misfire_policy, misfire_grace_ms)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
       [
         schedule.id,
         schedule.kind,
         schedule.target,
-        schedule.interval,
+        schedule.interval ?? "",
         schedule.input !== undefined ? JSON.stringify(schedule.input) : null,
         schedule.enabled,
         schedule.nextRunAt,
@@ -82,6 +92,11 @@ export class SchedulePostgresAdapter implements ScheduleAdapter {
         schedule.createdAt,
         schedule.updatedAt,
         schedule.createdBy ?? null,
+        schedule.cron ?? null,
+        schedule.timezone ?? null,
+        schedule.overlapPolicy ?? null,
+        schedule.misfirePolicy ?? null,
+        schedule.misfireGraceMs ?? null,
       ],
     );
   }
@@ -133,6 +148,11 @@ export class SchedulePostgresAdapter implements ScheduleAdapter {
       lastRunId: "last_run_id",
       updatedAt: "updated_at",
       createdBy: "created_by",
+      cron: "cron",
+      timezone: "timezone",
+      overlapPolicy: "overlap_policy",
+      misfirePolicy: "misfire_policy",
+      misfireGraceMs: "misfire_grace_ms",
     };
 
     let touched = false;
@@ -141,7 +161,7 @@ export class SchedulePostgresAdapter implements ScheduleAdapter {
       if (!col) continue;
       touched = true;
       setClauses.push(`${col} = $${i++}`);
-      if (value === undefined) values.push(null);
+      if (value === undefined) values.push(key === "interval" ? "" : null);
       else if (key === "input") values.push(JSON.stringify(value));
       else values.push(value);
     }
@@ -205,7 +225,12 @@ function rowToSchedule(row: Record<string, unknown>): Schedule {
     id: row.id as string,
     kind: row.kind as Schedule["kind"],
     target: row.target as string,
-    interval: row.interval as string,
+    interval: row.interval ? row.interval as string : undefined,
+    cron: (row.cron as string | null) ?? undefined,
+    timezone: (row.timezone as string | null) ?? undefined,
+    overlapPolicy: (row.overlap_policy as Schedule["overlapPolicy"] | null) ?? undefined,
+    misfirePolicy: (row.misfire_policy as Schedule["misfirePolicy"] | null) ?? undefined,
+    misfireGraceMs: (row.misfire_grace_ms as number | null) ?? undefined,
     input: row.input ? JSON.parse(row.input as string) : undefined,
     enabled: Boolean(row.enabled),
     nextRunAt: row.next_run_at as Date,

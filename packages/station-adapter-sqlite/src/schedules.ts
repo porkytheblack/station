@@ -49,8 +49,16 @@ export class ScheduleSqliteAdapter implements ScheduleAdapter {
         created_at      TEXT NOT NULL,
         updated_at      TEXT NOT NULL,
         created_by      TEXT
+        ,cron           TEXT
+        ,timezone       TEXT
+        ,overlap_policy TEXT
+        ,misfire_policy TEXT
+        ,misfire_grace_ms INTEGER
       )
     `);
+    for (const column of ["cron TEXT","timezone TEXT","overlap_policy TEXT","misfire_policy TEXT","misfire_grace_ms INTEGER"]) {
+      try { this.db.exec(`ALTER TABLE ${this.table} ADD COLUMN ${column}`); } catch { /* exists */ }
+    }
 
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_${this.table}_due
@@ -63,16 +71,16 @@ export class ScheduleSqliteAdapter implements ScheduleAdapter {
       INSERT INTO ${this.table}
         (id, kind, target, interval, input, enabled, next_run_at,
          last_run_at, last_run_status, last_run_id,
-         created_at, updated_at, created_by)
+         created_at, updated_at, created_by, cron, timezone, overlap_policy, misfire_policy, misfire_grace_ms)
       VALUES
         (@id, @kind, @target, @interval, @input, @enabled, @next_run_at,
          @last_run_at, @last_run_status, @last_run_id,
-         @created_at, @updated_at, @created_by)
+         @created_at, @updated_at, @created_by, @cron, @timezone, @overlap_policy, @misfire_policy, @misfire_grace_ms)
     `).run({
       id: schedule.id,
       kind: schedule.kind,
       target: schedule.target,
-      interval: schedule.interval,
+      interval: schedule.interval ?? "",
       input: schedule.input !== undefined ? JSON.stringify(schedule.input) : null,
       enabled: schedule.enabled ? 1 : 0,
       next_run_at: dateToStr(schedule.nextRunAt),
@@ -82,6 +90,11 @@ export class ScheduleSqliteAdapter implements ScheduleAdapter {
       created_at: dateToStr(schedule.createdAt),
       updated_at: dateToStr(schedule.updatedAt),
       created_by: schedule.createdBy ?? null,
+      cron: schedule.cron ?? null,
+      timezone: schedule.timezone ?? null,
+      overlap_policy: schedule.overlapPolicy ?? null,
+      misfire_policy: schedule.misfirePolicy ?? null,
+      misfire_grace_ms: schedule.misfireGraceMs ?? null,
     });
   }
 
@@ -126,6 +139,11 @@ export class ScheduleSqliteAdapter implements ScheduleAdapter {
       lastRunId: "last_run_id",
       updatedAt: "updated_at",
       createdBy: "created_by",
+      cron: "cron",
+      timezone: "timezone",
+      overlapPolicy: "overlap_policy",
+      misfirePolicy: "misfire_policy",
+      misfireGraceMs: "misfire_grace_ms",
     };
 
     let touched = false;
@@ -136,7 +154,7 @@ export class ScheduleSqliteAdapter implements ScheduleAdapter {
       const param = `p_${col}`;
       setClauses.push(`${col} = @${param}`);
       if (value === undefined) {
-        values[param] = null;
+        values[param] = key === "interval" ? "" : null;
       } else if (key === "input") {
         values[param] = JSON.stringify(value);
       } else if (key === "enabled") {
@@ -205,7 +223,12 @@ function rowToSchedule(row: Record<string, unknown>): Schedule {
     id: row.id as string,
     kind: row.kind as Schedule["kind"],
     target: row.target as string,
-    interval: row.interval as string,
+    interval: row.interval ? row.interval as string : undefined,
+    cron: (row.cron as string | null) ?? undefined,
+    timezone: (row.timezone as string | null) ?? undefined,
+    overlapPolicy: (row.overlap_policy as Schedule["overlapPolicy"] | null) ?? undefined,
+    misfirePolicy: (row.misfire_policy as Schedule["misfirePolicy"] | null) ?? undefined,
+    misfireGraceMs: (row.misfire_grace_ms as number | null) ?? undefined,
     input: row.input ? JSON.parse(row.input as string) : undefined,
     enabled: Boolean(row.enabled),
     nextRunAt: strToDate(row.next_run_at)!,

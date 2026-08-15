@@ -7,11 +7,10 @@ export interface BeaconInstanceFilter {
 }
 
 /**
- * Persistence for beacon supervision state. Unlike the signal queue adapter,
- * this is only ever touched by the supervisor process (the authority over which
- * beacons run), so it needs no cross-process reconstruction. Storing state here
- * lets a dashboard observe beacons and lets a restarted supervisor recover both
- * the last desired state and any instances created at runtime.
+ * Persistence for beacon supervision state. In a station network this is
+ * shared by Headquarters and every execution station, while controller leases
+ * decide which station may run an instance. Storing state here lets dashboards
+ * observe beacons and supervisors recover desired state and runtime instances.
  *
  * Records are keyed by **instance id**, not beacon name — one definition can
  * have many instances. The definition-owned instance uses the beacon name as

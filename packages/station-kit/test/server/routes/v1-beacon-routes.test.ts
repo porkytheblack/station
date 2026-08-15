@@ -3,11 +3,13 @@ import assert from "node:assert/strict";
 import { Hono } from "hono";
 import { fileURLToPath } from "node:url";
 import { BeaconMemoryAdapter, BeaconRunner } from "station-beacon";
+import { StationNetworkMemoryAdapter, type StationNode } from "station-network";
 import {
   v1BeaconReadRoutes,
   v1BeaconStartRoutes,
   v1BeaconStopRoutes,
   v1BeaconAdminRoutes,
+  v1BeaconProxyRoutes,
 } from "../../../src/server/routes/v1/beacons.js";
 import { serverBeacon, workerBeacon } from "./fixtures/beacons.js";
 
@@ -261,4 +263,61 @@ test("POST /beacons/:name/stop?all=true stops every instance of the beacon", asy
       ["stopped", "stopped"],
     );
   } finally { await cleanup(); }
+});
+
+test("Headquarters creates shared beacon intent and proxies its advertised HTTP service", async () => {
+  const beaconAdapter = new BeaconMemoryAdapter();
+  const networkAdapter = new StationNetworkMemoryAdapter();
+  const now = new Date();
+  const station: StationNode = {
+    id: "station-a", networkId: "fleet", name: "Station A", role: "station", status: "online",
+    labels: {}, capacity: { maxConcurrent: 4, activeRuns: 0 },
+    definitions: {
+      signals: [], broadcasts: [], beacons: ["web"],
+      beaconMetadata: [{
+        name: "web", filePath: "/srv/beacons/web.ts", mode: "run",
+        restartPolicy: "on-failure", startMode: "manual", autoStart: false,
+        maxInstances: 1, requiredEnv: ["WEB_ORIGIN"],
+      }],
+    },
+    endpoint: "http://station.internal:4000", startedAt: now, lastHeartbeatAt: now,
+    leaseExpiresAt: new Date(now.getTime() + 30_000),
+  };
+  await networkAdapter.upsertStation(station);
+  const deps = { beaconAdapter, networkAdapter, networkId: "fleet" };
+  const app = new Hono();
+  app.route("/api/v1", v1BeaconReadRoutes(deps));
+  app.route("/api/v1", v1BeaconStartRoutes(deps));
+  app.route("/api/v1", v1BeaconProxyRoutes(deps));
+
+  const catalog = await req(app, "GET", "/api/v1/beacons");
+  assert.equal(catalog.status, 200);
+  assert.equal(catalog.data.data[0].mode, "run");
+  assert.equal(catalog.data.data[0].startMode, "manual");
+  assert.deepEqual(catalog.data.data[0].requiredEnv, ["WEB_ORIGIN"]);
+
+  const created = await req(app, "POST", "/api/v1/beacons/web/instances", { id: "web-1", start: true });
+  assert.equal(created.status, 201);
+  assert.equal((await beaconAdapter.getInstance("web-1"))?.desiredState, "running");
+
+  await beaconAdapter.updateInstance("web-1", {
+    status: "running",
+    stationId: "station-a",
+    exposure: JSON.stringify({ protocol: "http", port: 8080, path: "/service" }),
+  });
+
+  const originalFetch = globalThis.fetch;
+  let target = "";
+  globalThis.fetch = (async (input: URL | RequestInfo) => {
+    target = String(input);
+    return new Response("proxied", { status: 200, headers: { "x-upstream": "yes" } });
+  }) as typeof fetch;
+  try {
+    const response = await app.request("http://localhost/api/v1/beacons/web/instances/web-1/proxy/health?full=1");
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), "proxied");
+    assert.equal(target, "http://station.internal:8080/service/health?full=1");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

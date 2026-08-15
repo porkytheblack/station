@@ -66,6 +66,8 @@ export class BeaconSqliteAdapter implements BeaconStateAdapter {
         next_restart_at    TEXT,
         created_at         TEXT NOT NULL,
         updated_at         TEXT NOT NULL
+        ,station_id        TEXT
+        ,exposure          TEXT
       )
     `);
 
@@ -83,6 +85,8 @@ export class BeaconSqliteAdapter implements BeaconStateAdapter {
     `);
 
     this.migrateToMultiInstance();
+    if (!this.columns(this.table).has("station_id")) this.db.exec(`ALTER TABLE ${this.table} ADD COLUMN station_id TEXT`);
+    if (!this.columns(this.table).has("exposure")) this.db.exec(`ALTER TABLE ${this.table} ADD COLUMN exposure TEXT`);
 
     // Monotonic sequence so events list newest-first even when the `at`
     // timestamps collide (same-millisecond bursts).
@@ -142,11 +146,11 @@ export class BeaconSqliteAdapter implements BeaconStateAdapter {
       INSERT OR REPLACE INTO ${this.table}
         (id, beacon_name, label, origin, status, desired_state, incarnation, restart_count, pid, config,
          started_at, ready_at, last_heartbeat_at, last_exit_at, last_exit_reason,
-         last_error, next_restart_at, created_at, updated_at)
+         last_error, next_restart_at, created_at, updated_at, station_id, exposure)
       VALUES
         (@id, @beacon_name, @label, @origin, @status, @desired_state, @incarnation, @restart_count, @pid, @config,
          @started_at, @ready_at, @last_heartbeat_at, @last_exit_at, @last_exit_reason,
-         @last_error, @next_restart_at, @created_at, @updated_at)
+         @last_error, @next_restart_at, @created_at, @updated_at, @station_id, @exposure)
     `).run({
       id: instance.id,
       beacon_name: instance.beaconName,
@@ -167,6 +171,8 @@ export class BeaconSqliteAdapter implements BeaconStateAdapter {
       next_restart_at: dateToStr(instance.nextRestartAt),
       created_at: dateToStr(instance.createdAt),
       updated_at: dateToStr(instance.updatedAt),
+      station_id: instance.stationId ?? null,
+      exposure: instance.exposure ?? null,
     });
   }
 
@@ -194,6 +200,8 @@ export class BeaconSqliteAdapter implements BeaconStateAdapter {
       lastError: { col: "last_error", kind: "str" },
       nextRestartAt: { col: "next_restart_at", kind: "date" },
       updatedAt: { col: "updated_at", kind: "date" },
+      stationId: { col: "station_id", kind: "str" },
+      exposure: { col: "exposure", kind: "str" },
     };
 
     const setClauses: string[] = [];
@@ -321,6 +329,8 @@ function rowToInstance(row: Record<string, unknown>): BeaconInstance {
     lastExitReason: (row.last_exit_reason as BeaconInstance["lastExitReason"] | null) ?? undefined,
     lastError: (row.last_error as string | null) ?? undefined,
     nextRestartAt: strToDate(row.next_restart_at),
+    stationId: (row.station_id as string | null) ?? undefined,
+    exposure: (row.exposure as string | null) ?? undefined,
     createdAt: strToDate(row.created_at)!,
     updatedAt: strToDate(row.updated_at)!,
   };

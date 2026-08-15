@@ -10,7 +10,10 @@ export type {
   AuthConfig,
   DeployConfig,
   SubscribersConfig,
+  StationNetworkConfig,
 } from "./config/schema.js";
+export type { StationRole, StationNode, StationNetworkAdapter } from "station-network";
+export { StationNetworkMemoryAdapter } from "station-network";
 export { resolveConfig } from "./config/schema.js";
 export { loadConfig } from "./config/loader.js";
 

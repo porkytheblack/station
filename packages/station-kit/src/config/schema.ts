@@ -5,6 +5,7 @@ import type { ScheduleAdapter } from "station-schedules";
 import type { EnvStorageAdapter } from "station-env";
 import type { ApiKeyStorageAdapter } from "../server/auth/keys.js";
 import type { LogStorageAdapter } from "../server/log-store.js";
+import type { StationNetworkAdapter, StationRole } from "station-network";
 
 export interface AuthConfig {
   username: string;
@@ -34,6 +35,23 @@ export interface DeployConfig {
   include?: string[];
 }
 
+export interface StationNetworkConfig {
+  /** Logical network/fleet name. @default "default" */
+  id?: string;
+  /** Stable node identity. Defaults to STATION_ID or a generated process identity. */
+  stationId?: string;
+  /** Human-readable node name. Defaults to stationId. */
+  name?: string;
+  /** Durable membership/leader-lease backend. Memory is only suitable for standalone mode. */
+  adapter?: StationNetworkAdapter;
+  /** Labels used by placement policies, for example `{ region: "ke", gpu: "true" }`. */
+  labels?: Record<string, string>;
+  /** Public or tunnel endpoint advertised to Headquarters. */
+  endpoint?: string;
+  heartbeatIntervalMs?: number;
+  leaseDurationMs?: number;
+}
+
 /**
  * Your own lifecycle subscribers, registered alongside the ones Station wires
  * for the dashboard and event stream. Use them for metrics, alerting, audit
@@ -54,6 +72,9 @@ export interface SubscribersConfig {
 }
 
 export interface StationConfig {
+  role: StationRole;
+  network: Required<Pick<StationNetworkConfig, "id" | "stationId" | "name" | "labels" | "heartbeatIntervalMs" | "leaseDurationMs">> &
+    Omit<StationNetworkConfig, "id" | "stationId" | "name" | "labels" | "heartbeatIntervalMs" | "leaseDurationMs">;
   port: number;
   host: string;
   adapter?: SignalQueueAdapter;
@@ -112,12 +133,22 @@ export interface StationConfig {
   deploy?: DeployConfig;
 }
 
-export type StationUserConfig = Partial<Omit<StationConfig, "runner" | "broadcastRunner">> & {
+export type StationUserConfig = Partial<Omit<StationConfig, "runner" | "broadcastRunner" | "network">> & {
   runner?: Partial<RunnerConfig>;
   broadcastRunner?: Partial<BroadcastRunnerConfig>;
+  network?: StationNetworkConfig;
 };
 
 const DEFAULTS: StationConfig = {
+  role: "standalone",
+  network: {
+    id: "default",
+    stationId: "",
+    name: "",
+    labels: {},
+    heartbeatIntervalMs: 5_000,
+    leaseDurationMs: 15_000,
+  },
   port: 4400,
   host: "localhost",
   stationDir: ".station",
@@ -153,7 +184,24 @@ export function resolveConfig(input: StationUserConfig): StationConfig {
     auth = { username: envAuthUser, password: envAuthPass };
   }
 
+  const role = input.role ?? DEFAULTS.role;
+  const stationId = input.network?.stationId ?? process.env.STATION_ID ?? `station-${process.pid}`;
+
   return {
+    role,
+    network: {
+      id: input.network?.id ?? process.env.STATION_NETWORK_ID ?? DEFAULTS.network.id,
+      stationId,
+      name: input.network?.name ?? process.env.STATION_NAME ?? stationId,
+      adapter: input.network?.adapter,
+      labels: input.network?.labels ?? {},
+      endpoint: input.network?.endpoint,
+      heartbeatIntervalMs: input.network?.heartbeatIntervalMs ?? DEFAULTS.network.heartbeatIntervalMs,
+      leaseDurationMs: Math.max(
+        input.network?.leaseDurationMs ?? DEFAULTS.network.leaseDurationMs,
+        (input.network?.heartbeatIntervalMs ?? DEFAULTS.network.heartbeatIntervalMs) * 2,
+      ),
+    },
     port: input.port ?? envPort ?? DEFAULTS.port,
     host: input.host ?? envHost ?? DEFAULTS.host,
     adapter: input.adapter,
@@ -177,7 +225,7 @@ export function resolveConfig(input: StationUserConfig): StationConfig {
     broadcastRunner: {
       pollIntervalMs: input.broadcastRunner?.pollIntervalMs ?? DEFAULTS.broadcastRunner.pollIntervalMs,
     },
-    runRunners: input.runRunners ?? DEFAULTS.runRunners,
+    runRunners: input.runRunners ?? (role !== "headquarters"),
     open: input.open ?? DEFAULTS.open,
     logLevel: input.logLevel ?? DEFAULTS.logLevel,
     auth,

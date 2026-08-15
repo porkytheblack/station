@@ -81,7 +81,6 @@ export class BeaconMemoryAdapter implements BeaconStateAdapter {
   }
 
   async close(): Promise<void> {
-    this.instances.clear();
-    this.events = [];
+    // No resources to release; the adapter may be shared in process.
   }
 }

@@ -8,3 +8,4 @@ export {
   ScheduleReconciler,
   type ScheduleReconcilerOptions,
 } from "./reconciler.js";
+export { nextScheduleOccurrence, nextCronOccurrence, validateCron } from "./cron.js";

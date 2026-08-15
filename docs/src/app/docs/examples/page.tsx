@@ -72,6 +72,12 @@ const examples = [
     desc: "A supervised server, poller, and reconnecting client with restart + backoff.",
     tags: ["beacon", "server", "poll", "backoff"],
   },
+  {
+    href: "/docs/examples/station-network",
+    title: "12 — Station Network",
+    desc: "One Headquarters and two workers with fleet limits, placement, schedules, and draining.",
+    tags: ["network", "headquarters", "scaling", "sqlite"],
+  },
 ];
 
 export default function ExamplesPage() {
@@ -80,8 +86,8 @@ export default function ExamplesPage() {
       <div className="eyebrow">Showcase</div>
       <h2 style={{ marginTop: 0 }}>Examples</h2>
       <p>
-        Eleven working examples from a single signal to full production
-        workflows. Each one runs standalone with <code>pnpm start</code>.
+        Twelve guided examples from one signal to a multi-process Station
+        Network. Each links concepts to working source in the repository.
       </p>
 
       <div className="examples-grid">

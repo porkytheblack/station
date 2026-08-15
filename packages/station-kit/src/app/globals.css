@@ -1431,6 +1431,67 @@ a:hover {
   }
 }
 
+/* ─── Dashboard shell on phones ─────────────────────────── */
+
+@media (max-width: 640px) {
+  .station-sidebar,
+  [data-collapsed="false"] .station-sidebar,
+  [data-collapsed="true"] .station-sidebar {
+    width: 48px;
+  }
+
+  .station-main,
+  [data-collapsed="false"] .station-main,
+  [data-collapsed="true"] .station-main {
+    margin-left: 48px;
+    min-width: 0;
+  }
+
+  .station-sidebar-logo h1,
+  .station-sidebar-logo > span,
+  .station-sidebar-nav-label,
+  .nav-label,
+  .sidebar-collapse-btn {
+    display: none;
+  }
+
+  .station-sidebar-logo {
+    padding: 0.75rem;
+    display: flex;
+    justify-content: center;
+  }
+
+  .station-sidebar-mark,
+  .station-sidebar-nav a {
+    justify-content: center;
+  }
+
+  .station-sidebar-nav a {
+    padding: 0.625rem 0.5rem;
+    border-left-color: transparent;
+  }
+
+  .station-sidebar-nav a.active {
+    border-left-color: transparent;
+    background: var(--wire);
+  }
+
+  .station-header {
+    padding: 0 0.875rem;
+  }
+
+  .station-content {
+    min-width: 0;
+    max-width: 100%;
+    padding: 1rem;
+    overflow-x: auto;
+  }
+
+  .station-table {
+    min-width: 720px;
+  }
+}
+
 /* ─── Collapsible Sections ───────────────────────────────── */
 
 .collapsible-header {

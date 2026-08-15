@@ -34,6 +34,7 @@ const BEACON_PATCH_KEYS = new Set([
   "label", "status", "desiredState", "incarnation", "restartCount", "pid", "config",
   "startedAt", "readyAt", "lastHeartbeatAt", "lastExitAt", "lastExitReason",
   "lastError", "nextRestartAt", "updatedAt",
+  "stationId", "exposure",
 ]);
 
 /** Durable {@link BeaconStateAdapter} backed by Redis (ioredis). */

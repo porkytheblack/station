@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -69,6 +69,8 @@ interface Supervised {
   fatal?: boolean;
   /** After this incarnation exits, restart it immediately regardless of policy. */
   forceRestart: boolean;
+  /** Set once the distributed controller lease can no longer be renewed. */
+  leaseLost?: boolean;
   /**
    * The instance is being deleted — exit handling must not schedule a restart
    * or resurrect the record that `deleteInstance` is about to remove.
@@ -137,6 +139,17 @@ export interface BeaconRunnerOptions {
    * runtime caller can spawn. @default 100
    */
   maxInstancesPerBeacon?: number;
+  networkCoordinator?: {
+    acquireControllerLease(lease: { name:string; holderId:string; token:string; expiresAt:Date }, now:Date):Promise<boolean>;
+    renewControllerLease(name:string,holderId:string,token:string,expiresAt:Date,now?:Date):Promise<boolean>;
+    releaseControllerLease(name:string,holderId:string,token:string):Promise<boolean>;
+    getControllerLease?(name:string):Promise<{holderId:string;token:string;expiresAt:Date}|null>;
+  };
+  networkId?: string;
+  stationId?: string;
+  stationLabels?: Record<string,string>;
+  leaseDurationMs?: number;
+  canClaim?: () => Promise<boolean>;
 }
 
 /**
@@ -166,6 +179,13 @@ export class BeaconRunner {
   private signalAdapterOptions?: Record<string, unknown>;
   private signalAdapterImport?: string;
   private envProvider?: EnvProvider;
+  private networkCoordinator?: BeaconRunnerOptions["networkCoordinator"];
+  private networkId: string;
+  private stationId: string;
+  private stationLabels: Record<string,string>;
+  private leaseDurationMs: number;
+  private canClaim?: () => Promise<boolean>;
+  private networkLeaseByInstance = new Map<string,{name:string;token:string}>();
 
   private running = false;
   private stopping = false;
@@ -192,6 +212,12 @@ export class BeaconRunner {
       this.signalAdapterImport = manifest.moduleUrl;
     }
     this.envProvider = options.envProvider;
+    this.networkCoordinator = options.networkCoordinator;
+    this.networkId = options.networkId ?? "default";
+    this.stationId = options.stationId ?? `station-${process.pid}`;
+    this.stationLabels = { ...(options.stationLabels ?? {}) };
+    this.leaseDurationMs = Math.max(options.leaseDurationMs ?? 30_000, this.pollIntervalMs * 3);
+    this.canClaim = options.canClaim;
     this.readyPromise = this.armReady();
   }
 
@@ -748,6 +774,10 @@ export class BeaconRunner {
       this.supervised.set(instance.id, this.freshSupervised());
 
       if (!this.registry.has(instance.beaconName)) {
+        // A network is intentionally heterogeneous: another station may own a
+        // definition this station does not have. Never corrupt its shared
+        // lifecycle record by declaring it orphaned here.
+        if (this.networkCoordinator) continue;
         // The beacon file is gone (renamed, deleted, or not in beaconsDir).
         // Keep the record so it stays visible and recoverable, but surface why
         // nothing is happening. Desired state is left alone, so restoring the
@@ -761,12 +791,14 @@ export class BeaconRunner {
       // On boot no child is live, so any desired-running instance is
       // rescheduled to launch; desired-stopped ones stay put.
       if (instance.desiredState === "running") {
-        await this.patch(instance.id, {
+        const restartPatch: BeaconInstancePatch = {
           status: "backoff",
           nextRestartAt: new Date(),
           restartCount: 0,
           pid: undefined,
-        });
+        };
+        if (this.networkCoordinator) this.patchLocal(instance.id, restartPatch);
+        else await this.patch(instance.id, restartPatch);
       } else if (
         instance.status === "running" ||
         instance.status === "starting" ||
@@ -774,7 +806,9 @@ export class BeaconRunner {
       ) {
         // Desired-stopped but the record shows an active status — a crash left
         // it stale (no process is actually live on boot). Normalize to stopped.
-        await this.patch(instance.id, { status: "stopped", pid: undefined });
+        if (!this.networkCoordinator) {
+          await this.patch(instance.id, { status: "stopped", pid: undefined });
+        }
       }
     }
   }
@@ -793,12 +827,14 @@ export class BeaconRunner {
       this.instances.set(instance.id, instance);
       this.supervised.set(instance.id, this.freshSupervised());
       if (instance.desiredState === "running") {
-        await this.patch(instance.id, {
+        const restartPatch: BeaconInstancePatch = {
           status: "backoff",
           nextRestartAt: new Date(),
           restartCount: 0,
           pid: undefined,
-        });
+        };
+        if (this.networkCoordinator) this.patchLocal(instance.id, restartPatch);
+        else await this.patch(instance.id, restartPatch);
       }
       return;
     }
@@ -831,6 +867,8 @@ export class BeaconRunner {
     this.ticking = true;
     try {
       const now = Date.now();
+      await this.renewNetworkLeases(new Date(now));
+      if (this.networkCoordinator) await this.syncNetworkInstances();
       // Snapshot: reconcile awaits, and an API call can add or delete an
       // instance in the meantime.
       for (const id of Array.from(this.instances.keys())) {
@@ -842,6 +880,61 @@ export class BeaconRunner {
       }
     } finally {
       this.ticking = false;
+    }
+  }
+
+  /**
+   * Adopt instances and operator intent written through Headquarters. A
+   * standalone runner owns its in-memory view directly, but networked runners
+   * share the beacon adapter with the control plane. Polling that adapter here
+   * makes create/start/stop requests converge on every eligible station; the
+   * per-instance controller lease still guarantees that only one of them can
+   * spawn the child.
+   */
+  private async syncNetworkInstances(): Promise<void> {
+    const stored = await this.adapter.listInstances();
+    const storedIds = new Set(stored.map((instance) => instance.id));
+    for (const remote of stored) {
+      if (!this.registry.has(remote.beaconName)) continue;
+      const local = this.instances.get(remote.id);
+      if (!local) {
+        this.instances.set(remote.id, remote.desiredState === "running"
+          ? { ...remote, status: "backoff", nextRestartAt: new Date(), pid: undefined }
+          : { ...remote });
+        this.supervised.set(remote.id, this.freshSupervised());
+        continue;
+      }
+
+      // Lifecycle state is written by the station holding the execution
+      // lease. Other stations only consume operator-controlled fields so a
+      // stale observer cannot overwrite the owner's pid/status/heartbeats.
+      if (remote.updatedAt > local.updatedAt) {
+        const previousDesired = local.desiredState;
+        local.desiredState = remote.desiredState;
+        local.config = remote.config;
+        local.label = remote.label;
+        local.updatedAt = remote.updatedAt;
+
+        const supervised = this.supervised.get(remote.id);
+        if (remote.desiredState === "running" && remote.status === "backoff" && remote.nextRestartAt) {
+          if (supervised?.child) {
+            supervised.forceRestart = true;
+            if (!supervised.stopRequested) this.initiateStop(remote.id);
+          } else {
+            local.status = "backoff";
+            local.nextRestartAt = remote.nextRestartAt;
+            local.lastError = remote.lastError;
+          }
+        } else if (previousDesired === "stopped" && remote.desiredState === "running" && !supervised?.child) {
+          local.status = "backoff";
+          local.nextRestartAt = new Date();
+        }
+      }
+    }
+    for (const [id, local] of this.instances) {
+      if (local.origin !== "api" || storedIds.has(id) || this.supervised.get(id)?.child) continue;
+      this.instances.delete(id);
+      this.supervised.delete(id);
     }
   }
 
@@ -971,12 +1064,20 @@ export class BeaconRunner {
       }
     }
 
+    const requiredLabels = beacon.placement?.labels;
+    if (requiredLabels && !Object.entries(requiredLabels).every(([key,value]) => this.stationLabels[key] === value)) return;
+    if (this.canClaim && !(await this.canClaim())) return;
+    const networkLease = await this.acquireNetworkLease(beacon.name, instanceId);
+    if (this.networkCoordinator && !networkLease) return;
+
     await this.patch(instanceId, {
       status: "starting",
       incarnation,
       startedAt: new Date(),
       readyAt: undefined,
       nextRestartAt: undefined,
+      stationId: this.stationId,
+      exposure: undefined,
     });
     this.emit("onBeaconStarting", { instance: { ...this.instances.get(instanceId)! } });
     await this.addEvent(this.instances.get(instanceId)!, "starting");
@@ -996,9 +1097,15 @@ export class BeaconRunner {
 
     // A stop may have been requested while we prepared to launch. Bail before
     // spawning so we never leave a child the stop sweep has already passed.
-    if (this.stopping) return;
+    if (this.stopping) {
+      await this.releaseNetworkLease(instanceId);
+      return;
+    }
     const supBefore = this.supervised.get(instanceId);
-    if (!supBefore || supBefore.removing) return;
+    if (!supBefore || supBefore.removing) {
+      await this.releaseNetworkLease(instanceId);
+      return;
+    }
 
     const tsxImport = getTsxImport();
     const nodeArgs = tsxImport ? ["--import", tsxImport, BOOTSTRAP] : [BOOTSTRAP];
@@ -1062,7 +1169,12 @@ export class BeaconRunner {
 
   private async handleMessage(instanceId: string, msg: BeaconIPCMessage): Promise<void> {
     const sup = this.supervised.get(instanceId);
-    if (!sup) return;
+    if (!sup || sup.leaseLost) return;
+    if (!(await this.ownsNetworkLease(instanceId))) {
+      sup.leaseLost = true;
+      sup.child?.kill("SIGTERM");
+      return;
+    }
     switch (msg.type) {
       case "beacon:started": {
         sup.runningSinceMs = Date.now();
@@ -1083,6 +1195,13 @@ export class BeaconRunner {
         sup.lastHeartbeatMs = Date.now();
         await this.patch(instanceId, { lastHeartbeatAt: new Date() });
         this.emit("onBeaconHeartbeat", { instance: { ...this.instances.get(instanceId)! } });
+        break;
+      }
+      case "beacon:exposed": {
+        const exposure = msg.data?.exposure;
+        if (exposure && typeof exposure === "object") {
+          await this.patch(instanceId, { exposure: JSON.stringify(exposure), stationId: this.stationId });
+        }
         break;
       }
       case "beacon:error": {
@@ -1124,6 +1243,12 @@ export class BeaconRunner {
     const child = sup.child;
     sup.child = undefined;
     child?.removeAllListeners();
+    const ownedAtExit = await this.ownsNetworkLease(instanceId);
+    await this.releaseNetworkLease(instanceId);
+
+    // A new station may already own this instance. The stale process must not
+    // publish exit/restart state over the new owner's record.
+    if (sup.leaseLost || !ownedAtExit) return;
 
     // The instance is being deleted — deleteInstance() is waiting on the child
     // to clear and will drop the record. Recording state or scheduling a
@@ -1198,6 +1323,65 @@ export class BeaconRunner {
       await this.patch(instanceId, patch);
       this.emit("onBeaconStopped", { instance: { ...this.instances.get(instanceId)! } });
       await this.addEvent(inst, "stopped");
+    }
+  }
+
+  private async acquireNetworkLease(
+    beaconName: string,
+    instanceId: string,
+  ): Promise<{ name: string; token: string } | undefined> {
+    if (!this.networkCoordinator) return undefined;
+    const now = new Date();
+    const token = randomUUID();
+    const name = `network:${this.networkId}:beacon:${beaconName}:${instanceId}`;
+    const acquired = await this.networkCoordinator.acquireControllerLease({
+      name,
+      holderId: this.stationId,
+      token,
+      expiresAt: new Date(now.getTime() + this.leaseDurationMs),
+    }, now);
+    if (!acquired) return undefined;
+    const lease = { name, token };
+    this.networkLeaseByInstance.set(instanceId, lease);
+    return lease;
+  }
+
+  private async renewNetworkLeases(now: Date): Promise<void> {
+    if (!this.networkCoordinator) return;
+    for (const [instanceId, lease] of this.networkLeaseByInstance) {
+      const renewed = await this.networkCoordinator.renewControllerLease(
+        lease.name,
+        this.stationId,
+        lease.token,
+        new Date(now.getTime() + this.leaseDurationMs),
+        now,
+      );
+      if (!renewed) {
+        const supervised = this.supervised.get(instanceId);
+        if (supervised) supervised.leaseLost = true;
+        supervised?.child?.kill("SIGTERM");
+      }
+    }
+  }
+
+  private async releaseNetworkLease(instanceId: string): Promise<void> {
+    const lease = this.networkLeaseByInstance.get(instanceId);
+    if (!lease || !this.networkCoordinator) return;
+    this.networkLeaseByInstance.delete(instanceId);
+    await this.networkCoordinator.releaseControllerLease(lease.name, this.stationId, lease.token);
+  }
+
+  private async ownsNetworkLease(instanceId: string): Promise<boolean> {
+    if (!this.networkCoordinator) return true;
+    const local = this.networkLeaseByInstance.get(instanceId);
+    if (!local) return false;
+    if (!this.networkCoordinator.getControllerLease) return true;
+    try {
+      const current = await this.networkCoordinator.getControllerLease(local.name);
+      return Boolean(current && current.holderId === this.stationId && current.token === local.token
+        && current.expiresAt > new Date());
+    } catch {
+      return false;
     }
   }
 
@@ -1303,6 +1487,14 @@ export class BeaconRunner {
     } catch (err) {
       console.error(`[station-beacon] Failed to persist instance "${instanceId}":`, err);
     }
+  }
+
+  /** Update a contender's private view without overwriting the shared owner. */
+  private patchLocal(instanceId: string, patch: BeaconInstancePatch): void {
+    const inst = this.instances.get(instanceId);
+    if (!inst) return;
+    Object.assign(inst, patch);
+    this.instances.set(instanceId, inst);
   }
 
   private async addEvent(

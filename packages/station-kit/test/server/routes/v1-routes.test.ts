@@ -266,6 +266,27 @@ test("POST /schedules 400s on invalid interval", async () => {
   } finally { cleanup(); }
 });
 
+test("POST /schedules accepts timezone cron and requires exactly one timing mode", async () => {
+  const { app, cleanup } = makeApp();
+  try {
+    const created = await jsonRequest(app, "POST", "/api/v1/schedules", {
+      kind: "signal", target: "ping", cron: "0 17 * * *", timezone: "Africa/Nairobi",
+      overlapPolicy: "skip", misfirePolicy: "fire-once",
+    });
+    assert.equal(created.status, 201);
+    const record = (created.data as { data: Record<string, unknown> }).data;
+    assert.equal(record.cron, "0 17 * * *");
+    assert.equal(record.timezone, "Africa/Nairobi");
+
+    assert.equal((await jsonRequest(app, "POST", "/api/v1/schedules", {
+      kind: "signal", target: "ping", interval: "5m", cron: "* * * * *",
+    })).status, 400);
+    assert.equal((await jsonRequest(app, "POST", "/api/v1/schedules", {
+      kind: "signal", target: "ping", cron: "* * * * *", timezone: "Not/AZone",
+    })).status, 400);
+  } finally { cleanup(); }
+});
+
 test("POST /schedules 400s on circular-ref input", async () => {
   const { app, cleanup } = makeApp();
   try {
@@ -297,6 +318,30 @@ test("PATCH /schedules/:id 400s on invalid nextRunAt", async () => {
       nextRunAt: "not-a-date",
     });
     assert.equal(res.status, 400);
+  } finally { cleanup(); }
+});
+
+test("PATCH /schedules switches timing modes and validates typed fields", async () => {
+  const { app, cleanup } = makeApp();
+  try {
+    const create = await jsonRequest(app, "POST", "/api/v1/schedules", {
+      kind: "signal", target: "ping", interval: "5m",
+    });
+    const id = (create.data as { data: { id: string } }).data.id;
+    const changed = await jsonRequest(app, "PATCH", `/api/v1/schedules/${id}`, {
+      cron: "0 17 * * *", timezone: "Africa/Nairobi",
+    });
+    assert.equal(changed.status, 200);
+    const record = (changed.data as { data: Record<string, unknown> }).data;
+    assert.equal(record.interval, undefined);
+    assert.equal(record.cron, "0 17 * * *");
+    assert.equal(record.timezone, "Africa/Nairobi");
+
+    assert.equal((await jsonRequest(app, "PATCH", `/api/v1/schedules/${id}`, {
+      interval: "5m", cron: "* * * * *",
+    })).status, 400);
+    assert.equal((await jsonRequest(app, "PATCH", `/api/v1/schedules/${id}`, { enabled: "false" })).status, 400);
+    assert.equal((await jsonRequest(app, "PATCH", `/api/v1/schedules/${id}`, { misfireGraceMs: "nope" })).status, 400);
   } finally { cleanup(); }
 });
 

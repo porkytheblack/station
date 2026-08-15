@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import Redis from "ioredis";
 export type { Redis } from "ioredis";
-import type { SerializableAdapter, AdapterManifest, ListAllRunsOptions, ListRunsOptions, Run, RunPatch, RunStatus, Step, StepPatch } from "station-signal";
+import type { SerializableAdapter, AdapterManifest, ListAllRunsOptions, ListRunsOptions, Run, RunClaim, RunPatch, RunStatus, Step, StepPatch } from "station-signal";
 import { registerAdapter } from "station-signal";
 
 import {
@@ -33,6 +33,87 @@ import {
 const ALL_RUN_STATUSES: RunStatus[] = ["pending", "running", "completed", "failed", "cancelled"];
 
 const MODULE_URL = import.meta.url;
+
+const ADD_RUN_LUA = `
+if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end
+local fields = cjson.decode(ARGV[8])
+for k, v in pairs(fields) do redis.call('HSET', KEYS[1], k, v) end
+if ARGV[3] == 'pending' then redis.call('ZADD', KEYS[2], ARGV[4], ARGV[1])
+elseif ARGV[3] == 'running' then redis.call('ZADD', KEYS[3], ARGV[5], ARGV[1]) end
+redis.call('ZADD', KEYS[4], ARGV[6], ARGV[1])
+redis.call('SADD', KEYS[5], ARGV[2])
+redis.call('SADD', KEYS[6], ARGV[1])
+if ARGV[7] ~= '' then redis.call('ZADD', KEYS[7], ARGV[7], ARGV[1]) end
+return 1
+`;
+
+const CLAIM_RUN_LUA = `
+local hashKey = KEYS[1]
+if redis.call('HGET', hashKey, 'status') ~= 'pending' then return 0 end
+local due = redis.call('ZSCORE', KEYS[2], ARGV[1])
+if not due or tonumber(due) > tonumber(ARGV[2]) then return 0 end
+redis.call('HSET', hashKey,
+  'status', 'running', 'stationId', ARGV[3], 'leaseToken', ARGV[4],
+  'leaseExpiresAt', ARGV[5], 'claimedAt', ARGV[6], 'startedAt', ARGV[6],
+  'lastRunAt', ARGV[6])
+redis.call('HINCRBY', hashKey, 'attempts', 1)
+redis.call('ZREM', KEYS[2], ARGV[1])
+redis.call('ZADD', KEYS[3], ARGV[2], ARGV[1])
+redis.call('SREM', KEYS[4], ARGV[1])
+redis.call('SADD', KEYS[5], ARGV[1])
+return 1
+`;
+
+const CANCEL_RUN_LUA = `
+local oldStatus = redis.call('HGET', KEYS[1], 'status')
+if oldStatus ~= 'pending' and oldStatus ~= 'running' then return 0 end
+local signalName = redis.call('HGET', KEYS[1], 'signalName')
+if not signalName then return 0 end
+redis.call('HSET', KEYS[1], 'status', 'cancelled', 'completedAt', ARGV[2])
+redis.call('HDEL', KEYS[1], 'leaseToken', 'leaseExpiresAt', 'claimedAt')
+redis.call('ZREM', KEYS[2], ARGV[1])
+redis.call('ZREM', KEYS[3], ARGV[1])
+redis.call('SREM', ARGV[4] .. signalName .. ':' .. oldStatus, ARGV[1])
+redis.call('SADD', ARGV[4] .. signalName .. ':cancelled', ARGV[1])
+redis.call('ZADD', KEYS[4], ARGV[3], ARGV[1])
+return 1
+`;
+
+const RENEW_LEASE_LUA = `
+if redis.call('HGET', KEYS[1], 'status') ~= 'running' then return 0 end
+if redis.call('HGET', KEYS[1], 'leaseToken') ~= ARGV[1] then return 0 end
+local currentExpiry = redis.call('HGET', KEYS[1], 'leaseExpiresAt')
+if not currentExpiry or currentExpiry <= ARGV[3] then return 0 end
+redis.call('HSET', KEYS[1], 'leaseExpiresAt', ARGV[2])
+return 1
+`;
+
+const FENCED_UPDATE_LUA = `
+local hashKey = KEYS[1]
+if redis.call('EXISTS', hashKey) == 0 then return 0 end
+if redis.call('HGET', hashKey, 'status') ~= 'running' then return 0 end
+if redis.call('HGET', hashKey, 'leaseToken') ~= ARGV[1] then return 0 end
+local id = ARGV[2]
+local statusBase = ARGV[3]
+local oldStatus = redis.call('HGET', hashKey, 'status')
+local setArgs = cjson.decode(ARGV[4])
+for k, v in pairs(setArgs) do redis.call('HSET', hashKey, k, v) end
+local delFields = cjson.decode(ARGV[5])
+for _, f in ipairs(delFields) do redis.call('HDEL', hashKey, f) end
+local newStatus = ARGV[6]
+if newStatus ~= '' and newStatus ~= oldStatus then
+  if oldStatus then redis.call('SREM', statusBase .. oldStatus, id) end
+  redis.call('SADD', statusBase .. newStatus, id)
+  if oldStatus == 'pending' then redis.call('ZREM', KEYS[2], id)
+  elseif oldStatus == 'running' then redis.call('ZREM', KEYS[3], id) end
+  if newStatus == 'pending' then redis.call('ZADD', KEYS[2], ARGV[7], id)
+  elseif newStatus == 'running' then redis.call('ZADD', KEYS[3], ARGV[8], id) end
+end
+local completedOp = ARGV[9]
+if completedOp == 'DEL' then redis.call('ZREM', KEYS[4], id)
+elseif completedOp ~= '' then redis.call('ZADD', KEYS[4], completedOp, id) end
+return 1
+`;
 
 export interface RedisAdapterOptions {
   /** Redis connection URL. Defaults to "redis://localhost:6379". */
@@ -83,37 +164,28 @@ export class RedisAdapter implements SerializableAdapter {
   async addRun(run: Run): Promise<void> {
     const hash = runToHash(run);
     const hashKey = runHashKey(this.prefix, run.id);
-
-    const pipeline = this.redis.multi();
-
-    // Store run data as a hash
-    pipeline.hset(hashKey, hash);
-
-    // Index by status
-    if (run.status === "pending") {
-      pipeline.zadd(pendingRunsKey(this.prefix), String(dateToScore(run.nextRunAt)), run.id);
-    } else if (run.status === "running") {
-      pipeline.zadd(runningRunsKey(this.prefix), String(dateToScore(run.startedAt)), run.id);
+    const inserted = await this.redis.eval(
+      ADD_RUN_LUA,
+      7,
+      hashKey,
+      pendingRunsKey(this.prefix),
+      runningRunsKey(this.prefix),
+      signalRunsKey(this.prefix, run.signalName),
+      signalNamesKey(this.prefix),
+      statusRunsKey(this.prefix, run.signalName, run.status),
+      completedAtRunsKey(this.prefix),
+      run.id,
+      run.signalName,
+      run.status,
+      String(dateToScore(run.nextRunAt)),
+      String(dateToScore(run.startedAt)),
+      String(run.createdAt.getTime()),
+      run.completedAt ? String(run.completedAt.getTime()) : "",
+      JSON.stringify(hash),
+    );
+    if (Number(inserted) !== 1) {
+      throw new Error(`Run with id "${run.id}" already exists`);
     }
-
-    // Index by signal name (score = createdAt timestamp for ordering)
-    pipeline.zadd(signalRunsKey(this.prefix, run.signalName), String(run.createdAt.getTime()), run.id);
-
-    // Track the signal name so listAllRuns/countRunsByStatus can enumerate
-    // signals. Forward-populated: runs written by older versions are still
-    // reachable via listRuns(name); they just won't appear in cross-signal
-    // queries until a new run for that signal is added.
-    pipeline.sadd(signalNamesKey(this.prefix), run.signalName);
-
-    // Index by signal name + status (set for hasRunWithStatus)
-    pipeline.sadd(statusRunsKey(this.prefix, run.signalName, run.status), run.id);
-
-    // Track completedAt for purge support
-    if (run.completedAt) {
-      pipeline.zadd(completedAtRunsKey(this.prefix), String(run.completedAt.getTime()), run.id);
-    }
-
-    await pipeline.exec();
   }
 
   async removeRun(id: string): Promise<void> {
@@ -204,6 +276,109 @@ export class RedisAdapter implements SerializableAdapter {
       statusKeyBase,
       ...argv,
     );
+  }
+
+  async claimRun(id: string, claim: RunClaim): Promise<Run | null> {
+    const run = await this.getRun(id);
+    if (!run) return null;
+    const claimed = await this.redis.eval(
+      CLAIM_RUN_LUA,
+      5,
+      runHashKey(this.prefix, id),
+      pendingRunsKey(this.prefix),
+      runningRunsKey(this.prefix),
+      statusRunsKey(this.prefix, run.signalName, "pending"),
+      statusRunsKey(this.prefix, run.signalName, "running"),
+      id,
+      String(claim.claimedAt.getTime()),
+      claim.stationId,
+      claim.leaseToken,
+      claim.leaseExpiresAt.toISOString(),
+      claim.claimedAt.toISOString(),
+    );
+    return Number(claimed) === 1 ? this.getRun(id) : null;
+  }
+
+  async cancelRun(id: string, completedAt: Date): Promise<boolean> {
+    const cancelled = await this.redis.eval(
+      CANCEL_RUN_LUA,
+      4,
+      runHashKey(this.prefix, id),
+      pendingRunsKey(this.prefix),
+      runningRunsKey(this.prefix),
+      completedAtRunsKey(this.prefix),
+      id,
+      completedAt.toISOString(),
+      String(completedAt.getTime()),
+      `${this.prefix}:runs:status:`,
+    );
+    return Number(cancelled) === 1;
+  }
+
+  async renewRunLease(id: string, leaseToken: string, leaseExpiresAt: Date, now = new Date()): Promise<boolean> {
+    const renewed = await this.redis.eval(
+      RENEW_LEASE_LUA,
+      1,
+      runHashKey(this.prefix, id),
+      leaseToken,
+      leaseExpiresAt.toISOString(),
+      now.toISOString(),
+    );
+    return Number(renewed) === 1;
+  }
+
+  async updateClaimedRun(id: string, leaseToken: string, patch: RunPatch): Promise<boolean> {
+    const currentRun = await this.getRun(id);
+    if (!currentRun) return false;
+    const { setArgs, delFields } = patchToHashArgs(
+      patch as Record<string, unknown>,
+      RUN_DATE_FIELDS,
+      RUN_NUMBER_FIELDS,
+      RUN_PATCH_KEYS,
+    );
+    if (Object.keys(setArgs).length === 0 && delFields.length === 0) return false;
+    const statusKeyBase = statusRunsKey(this.prefix, currentRun.signalName, "");
+    const args = atomicUpdateArgs(setArgs, delFields, patch, currentRun);
+    const updated = await this.redis.eval(
+      FENCED_UPDATE_LUA,
+      4,
+      runHashKey(this.prefix, id),
+      pendingRunsKey(this.prefix),
+      runningRunsKey(this.prefix),
+      completedAtRunsKey(this.prefix),
+      leaseToken,
+      id,
+      statusKeyBase,
+      ...args,
+    );
+    return Number(updated) === 1;
+  }
+
+  async requeueExpiredRuns(now: Date): Promise<number> {
+    const running = await this.getRunsRunning();
+    let recovered = 0;
+    for (const run of running) {
+      if (!run.leaseToken || !run.leaseExpiresAt || run.leaseExpiresAt > now) continue;
+      const exhausted = run.attempts >= run.maxAttempts;
+      const updated = await this.updateClaimedRun(run.id, run.leaseToken, exhausted ? {
+        status: "failed",
+        completedAt: now,
+        error: "Station lease expired and all attempts were exhausted",
+        leaseToken: undefined,
+        leaseExpiresAt: undefined,
+      } : {
+        status: "pending",
+        startedAt: undefined,
+        lastRunAt: now,
+        error: "Station lease expired; run recovered for retry",
+        stationId: undefined,
+        leaseToken: undefined,
+        leaseExpiresAt: undefined,
+        claimedAt: undefined,
+      });
+      if (updated) recovered++;
+    }
+    return recovered;
   }
 
   async listRuns(signalName: string, options?: ListRunsOptions): Promise<Run[]> {

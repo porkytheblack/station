@@ -130,13 +130,14 @@ export interface BeaconInstance {
 
 export interface BeaconListItem {
   name: string;
-  filePath: string;
-  mode: "run" | "poll";
-  restartPolicy: string;
+  /** Optional while a Headquarters is connected to an older station. */
+  filePath?: string;
+  mode?: "run" | "poll";
+  restartPolicy?: string;
   /** How instances come into existence: seeded and started, seeded stopped, or API-only. */
-  startMode: "auto" | "manual" | "on-demand";
-  autoStart: boolean;
-  maxInstances: number;
+  startMode?: "auto" | "manual" | "on-demand";
+  autoStart?: boolean;
+  maxInstances?: number;
   requiredEnv?: string[];
   /** The definition-owned instance, or null for an on-demand beacon. */
   instance: BeaconInstance | null;
@@ -177,7 +178,7 @@ export interface BeaconLogEntry {
 }
 
 const instancePath = (name: string, instanceId: string) =>
-  `/beacons/${encodeURIComponent(name)}/instances/${encodeURIComponent(instanceId)}`;
+  `/v1/beacons/${encodeURIComponent(name)}/instances/${encodeURIComponent(instanceId)}`;
 
 // ─── Dynamic broadcasts / schedules / expressions ───────────────────
 
@@ -187,7 +188,12 @@ export interface Schedule {
   id: string;
   kind: ScheduleKind;
   target: string;
-  interval: string;
+  interval?: string;
+  cron?: string;
+  timezone?: string;
+  overlapPolicy?: "allow" | "skip";
+  misfirePolicy?: "skip" | "fire-once" | "catch-up";
+  misfireGraceMs?: number;
   input?: unknown;
   enabled: boolean;
   nextRunAt: string;
@@ -224,8 +230,30 @@ export interface DynamicValidationResult {
   errors: Array<{ node: string; field?: string; message: string }>;
 }
 
+export interface StationNode {
+  id: string;
+  networkId: string;
+  name: string;
+  role: "headquarters" | "station" | "standalone";
+  status: "online" | "draining" | "offline";
+  labels: Record<string, string>;
+  capacity: { maxConcurrent: number; activeRuns: number };
+  definitions: { signals: string[]; broadcasts: string[]; beacons: string[] };
+  endpoint?: string;
+  version?: string;
+  startedAt: string;
+  lastHeartbeatAt: string;
+  leaseExpiresAt: string;
+}
+
 export function useApi() {
   return {
+    getStations: () => fetchApi<StationNode[]>("/v1/stations"),
+    updateStationStatus: (id: string, status: StationNode["status"]) =>
+      fetchApi<StationNode>(`/v1/stations/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status }),
+      }),
     // Health
     getHealth: () => fetchApi<{ ok: boolean; signal: boolean; broadcast: boolean | null }>("/health"),
 
@@ -273,20 +301,20 @@ export function useApi() {
     rerunBroadcastRun: (id: string) => fetchApi<{ id: string; broadcastName: string; status: string }>(`/broadcast-runs/${id}/rerun`, { method: "POST" }),
 
     // Beacons
-    getBeacons: () => fetchApi<BeaconListItem[]>("/beacons"),
-    getBeacon: (name: string) => fetchApi<BeaconDetail>(`/beacons/${encodeURIComponent(name)}`),
-    getBeaconEvents: (name: string) => fetchApi<BeaconEvent[]>(`/beacons/${encodeURIComponent(name)}/events`),
+    getBeacons: () => fetchApi<BeaconListItem[]>("/v1/beacons"),
+    getBeacon: (name: string) => fetchApi<BeaconDetail>(`/v1/beacons/${encodeURIComponent(name)}`),
+    getBeaconEvents: (name: string) => fetchApi<BeaconEvent[]>(`/v1/beacons/${encodeURIComponent(name)}/events`),
     getBeaconLogs: (name: string) =>
       fetchApi<BeaconLogEntry[]>(`/beacons/${encodeURIComponent(name)}/logs`),
-    startBeacon: (name: string) => fetchApi<{ started: boolean }>(`/beacons/${encodeURIComponent(name)}/start`, { method: "POST" }),
-    stopBeacon: (name: string) => fetchApi<{ stopped: boolean }>(`/beacons/${encodeURIComponent(name)}/stop`, { method: "POST" }),
-    restartBeacon: (name: string) => fetchApi<{ restarted: boolean }>(`/beacons/${encodeURIComponent(name)}/restart`, { method: "POST" }),
+    startBeacon: (name: string) => fetchApi<{ started: boolean }>(`/v1/beacons/${encodeURIComponent(name)}/start`, { method: "POST" }),
+    stopBeacon: (name: string) => fetchApi<{ stopped: boolean }>(`/v1/beacons/${encodeURIComponent(name)}/stop`, { method: "POST" }),
+    restartBeacon: (name: string) => fetchApi<{ restarted: boolean }>(`/v1/beacons/${encodeURIComponent(name)}/restart`, { method: "POST" }),
 
     // Beacon instances — a beacon can run many at once, each with its own config
     getBeaconInstances: (name: string) =>
-      fetchApi<BeaconInstance[]>(`/beacons/${encodeURIComponent(name)}/instances`),
+      fetchApi<BeaconInstance[]>(`/v1/beacons/${encodeURIComponent(name)}/instances`),
     createBeaconInstance: (name: string, body: CreateBeaconInstanceBody) =>
-      fetchApi<BeaconInstance>(`/beacons/${encodeURIComponent(name)}/instances`, {
+      fetchApi<BeaconInstance>(`/v1/beacons/${encodeURIComponent(name)}/instances`, {
         method: "POST",
         body: JSON.stringify(body),
       }),
@@ -348,9 +376,9 @@ export function useApi() {
       return fetchApi<Schedule[]>(`/v1/schedules${qs ? `?${qs}` : ""}`);
     },
     getSchedule: (id: string) => fetchApi<Schedule>(`/v1/schedules/${id}`),
-    createSchedule: (input: { kind: ScheduleKind; target: string; interval: string; input?: unknown; enabled?: boolean }) =>
+    createSchedule: (input: { kind: ScheduleKind; target: string; interval?: string; cron?: string; timezone?: string; overlapPolicy?: Schedule["overlapPolicy"]; misfirePolicy?: Schedule["misfirePolicy"]; input?: unknown; enabled?: boolean }) =>
       fetchApi<Schedule>("/v1/schedules", { method: "POST", body: JSON.stringify(input) }),
-    updateSchedule: (id: string, patch: Partial<{ interval: string; input: unknown; enabled: boolean; nextRunAt: string }>) =>
+    updateSchedule: (id: string, patch: Partial<{ interval: string; cron: string; timezone: string; overlapPolicy: Schedule["overlapPolicy"]; misfirePolicy: Schedule["misfirePolicy"]; input: unknown; enabled: boolean; nextRunAt: string }>) =>
       fetchApi<Schedule>(`/v1/schedules/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
     deleteSchedule: (id: string) =>
       fetchApi<{ deleted: boolean }>(`/v1/schedules/${id}`, { method: "DELETE" }),

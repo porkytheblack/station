@@ -173,6 +173,17 @@ const sendEmail = signal("sendEmail")
       currency: "usd",
     });
   });`}</Code>
+      <p>
+        In a <Link href="/docs/network">Station Network</Link>, use
+        <code>.concurrency({`{ station, network }`})</code> to set both the
+        per-station limit and a fleet-wide limit enforced with shared leases.
+        <code>.placement({`{ labels }`})</code> restricts claims to stations
+        whose advertised labels match.
+      </p>
+      <Code>{`const render = signal("render")
+  .concurrency({ station: 2, network: 10 })
+  .placement({ labels: { gpu: "true" } })
+  .run(renderJob);`}</Code>
 
       <h4>
         <code>.every(interval)</code>

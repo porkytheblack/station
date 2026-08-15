@@ -28,6 +28,36 @@ Complete, copy-pasteable examples for the Station background job framework.
 > workers, and tests — **not** the shape to copy for a normal app. Prefer the
 > config above and let station-kit wire the runners.
 
+## Contents
+
+1. [Basic Signal](#1-basic-signal----send-email)
+2. [Signal with Output](#2-signal-with-output----image-processing)
+3. [Multi-Step Signal](#3-multi-step-signal----order-processing)
+4. [Recurring Signals](#4-recurring-signal----health-check)
+5. [Recurring Signal with Input](#5-recurring-signal-with-input)
+6. [Broadcast](#6-broadcast----ci-pipeline)
+7. [Conditional Broadcast](#7-broadcast-with-conditional-nodes)
+8. [ETL Pipeline](#8-etl-pipeline)
+9. [Complete Runner Setup](#9-complete-runner-setup)
+10. [Custom Subscriber](#10-custom-subscriber----slack-alerts)
+11. [Remote Trigger](#11-remote-trigger-setup)
+12. [Separate Processes](#12-shared-adapter-for-separate-processes)
+13. [Dashboard Configuration](#13-station-dashboard-configuration)
+14. [PostgreSQL](#14-postgresql-setup)
+15. [Redis](#15-redis-setup)
+16. [MySQL](#16-mysql-setup)
+17. [Project Structure](#17-project-structure)
+18. [Deployment](#18-deployment)
+19. [Tauri](#19-tauri-v2-desktop-app)
+20. [Dynamic Broadcasts](#20-dynamic-broadcasts-runtime-editable)
+21. [Runtime Schedules](#21-schedules-runtime)
+22. [Expressions](#22-expressions)
+23. [Custom API Key Storage](#23-custom-api-key-storage)
+24. [Beacons](#24-beacon----server-poller-client)
+25. [Environment Variables](#25-environment-variables)
+26. [Station Network](#26-station-network----headquarters-and-workers)
+27. [Quick Reference](#quick-reference)
+
 ---
 
 ## 1. Basic Signal -- Send Email
@@ -2176,6 +2206,135 @@ const runner = new SignalRunner({
 
 ---
 
+## 26. Station Network -- Headquarters and Workers
+
+Use a Station Network when multiple processes or machines must consume one job
+queue, enforce fleet-wide limits, or provide single-owner beacon services. This
+example uses PostgreSQL so every node can reach the same storage.
+
+Define a constrained signal:
+
+```ts
+// signals/render.ts
+import { signal, z } from "station-signal";
+
+export const render = signal("render")
+  .input(z.object({ assetId: z.string() }))
+  .concurrency({ station: 2, network: 6 })
+  .placement({ labels: { gpu: "true" } })
+  .run(async ({ assetId }) => {
+    return renderOnGpu(assetId);
+  });
+```
+
+Configure the control plane:
+
+```ts
+// station.hq.config.ts
+import { defineConfig } from "station-kit";
+import { PostgresAdapter } from "station-adapter-postgres";
+import { StationNetworkPostgresAdapter } from "station-adapter-postgres/network";
+import { SchedulePostgresAdapter } from "station-adapter-postgres/schedules";
+
+const connectionString = process.env.DATABASE_URL!;
+
+export default defineConfig({
+  role: "headquarters",
+  port: 4400,
+  host: "0.0.0.0",
+  open: false,
+  signalsDir: "./signals",
+  adapter: new PostgresAdapter({ connectionString }),
+  scheduleAdapter: new SchedulePostgresAdapter({ connectionString }),
+  network: {
+    id: "production",
+    stationId: "hq-1",
+    name: "Production Headquarters",
+    adapter: new StationNetworkPostgresAdapter({ connectionString }),
+  },
+  auth: {
+    username: process.env.STATION_AUTH_USERNAME!,
+    password: process.env.STATION_AUTH_PASSWORD!,
+  },
+});
+```
+
+Headquarters loads signal definitions for catalog and validation, reconciles
+schedules, and enqueues runs. It never claims signal jobs.
+
+Configure workers from environment-provided identities and labels:
+
+```ts
+// station.worker.config.ts
+import { defineConfig } from "station-kit";
+import { PostgresAdapter } from "station-adapter-postgres";
+import { StationNetworkPostgresAdapter } from "station-adapter-postgres/network";
+
+const connectionString = process.env.DATABASE_URL!;
+
+export default defineConfig({
+  role: "station",
+  host: "0.0.0.0",
+  open: false,
+  signalsDir: "./signals",
+  adapter: new PostgresAdapter({ connectionString }),
+  network: {
+    id: "production",
+    stationId: process.env.STATION_ID!,
+    name: process.env.STATION_NAME,
+    adapter: new StationNetworkPostgresAdapter({ connectionString }),
+    labels: {
+      region: process.env.REGION!,
+      gpu: process.env.HAS_GPU!,
+    },
+    endpoint: process.env.STATION_ENDPOINT,
+  },
+  runner: { maxConcurrent: 12 },
+});
+```
+
+Start one Headquarters and two uniquely identified workers:
+
+```bash
+npx station --config station.hq.config.ts --no-open
+
+STATION_ID=worker-ke-1 STATION_NAME="Kenya 1" REGION=ke HAS_GPU=true \
+  npx station --config station.worker.config.ts --port 4410 --no-open
+
+STATION_ID=worker-ke-2 STATION_NAME="Kenya 2" REGION=ke HAS_GPU=true \
+  npx station --config station.worker.config.ts --port 4420 --no-open
+```
+
+Use a scoped API key or authenticated session at Headquarters to enqueue work:
+
+```bash
+curl -X POST http://localhost:4400/api/v1/trigger \
+  -H "Authorization: Bearer $STATION_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"signalName":"render","input":{"assetId":"asset-42"}}'
+
+curl http://localhost:4400/api/v1/stations \
+  -H "Authorization: Bearer $STATION_API_KEY"
+```
+
+Operational requirements:
+
+- Use a stable and unique `stationId`; do not generate a new identity on every
+  restart in production.
+- Share the signal and network backends across all nodes. Share beacon state
+  when using beacons and schedule state across Headquarters replicas.
+- Use `PATCH /api/v1/stations/:id` with `{ "status": "draining" }` before
+  maintenance. Draining blocks new claims but lets active work complete.
+- Size `leaseDurationMs` above ordinary event-loop and network jitter. A dead
+  station's work becomes recoverable after that lease, not instantly.
+- Treat cron time as eligibility time. Assert a business-specific start-delay
+  tolerance instead of promising hard real-time execution.
+- Test with at least two worker processes and the production adapter before
+  deployment. Assert single ownership, placement, station/network concurrency,
+  schedule deduplication, expired-lease recovery, and graceful shutdown.
+
+---
+
 ## Quick Reference
 
 | Concept | Syntax |
@@ -2187,7 +2346,9 @@ const runner = new SignalRunner({
 | Multi-step | `.step("name", fn).step("name", fn).build()` |
 | Timeout | `.timeout(ms)` |
 | Retries | `.retries(n)` (n retries = n+1 total attempts) |
-| Concurrency limit | `.concurrency(n)` |
+| Per-station concurrency | `.concurrency(n)` or `.concurrency({ station: n })` |
+| Fleet concurrency | `.concurrency({ station: n, network: m })` |
+| Station placement | `.placement({ labels: { region: "ke" } })` |
 | Recurring | `.every("5m")` (units: `s`, `m`, `h`, `d`) |
 | Recurring input | `.withInput({ ... })` |
 | On complete hook | `.onComplete(async (output, input) => { ... })` |
@@ -2221,6 +2382,13 @@ import { MysqlAdapter } from "station-adapter-mysql";
 import { BroadcastMysqlAdapter } from "station-adapter-mysql/broadcast";
 import { defineConfig } from "station-kit";
 import { createTauriStation } from "station-tauri";
+
+// Station Network
+import { StationNetworkMemoryAdapter } from "station-network";
+import { StationNetworkSqliteAdapter } from "station-adapter-sqlite/network";
+import { StationNetworkPostgresAdapter } from "station-adapter-postgres/network";
+import { StationNetworkMysqlAdapter } from "station-adapter-mysql/network"; // await .create(...)
+import { StationNetworkRedisAdapter } from "station-adapter-redis/network";
 
 // Runtime schedules
 import { ScheduleReconciler, ScheduleMemoryAdapter } from "station-schedules";

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
-import type { SerializableAdapter, AdapterManifest, Run, RunPatch, RunStatus, Step, StepPatch, ListRunsOptions, ListAllRunsOptions } from "station-signal";
+import type { SerializableAdapter, AdapterManifest, Run, RunClaim, RunPatch, RunStatus, Step, StepPatch, ListRunsOptions, ListAllRunsOptions } from "station-signal";
 import { registerAdapter } from "station-signal";
 
 const MODULE_URL = import.meta.url;
@@ -15,8 +15,15 @@ const { toColumn, toField } = createColumnMapper({
   startedAt: "started_at",
   completedAt: "completed_at",
   createdAt: "created_at",
+  stationId: "station_id",
+  leaseToken: "lease_token",
+  leaseExpiresAt: "lease_expires_at",
+  claimedAt: "claimed_at",
+  scheduleId: "schedule_id",
+  scheduledFor: "scheduled_for",
+  idempotencyKey: "idempotency_key",
 });
-const DATE_FIELDS = new Set(["nextRunAt", "lastRunAt", "startedAt", "completedAt", "createdAt"]);
+const DATE_FIELDS = new Set(["nextRunAt", "lastRunAt", "startedAt", "completedAt", "createdAt", "leaseExpiresAt", "claimedAt", "scheduledFor"]);
 
 const { toColumn: toStepColumn, toField: toStepField } = createColumnMapper({
   runId: "run_id",
@@ -82,13 +89,27 @@ export class SqliteAdapter implements SerializableAdapter {
         completed_at  TEXT,
         created_at    TEXT NOT NULL,
         output        TEXT,
-        error         TEXT
+        error         TEXT,
+        station_id    TEXT,
+        lease_token   TEXT,
+        lease_expires_at TEXT,
+        claimed_at    TEXT,
+        schedule_id   TEXT,
+        scheduled_for TEXT,
+        idempotency_key TEXT
       )
     `);
 
     // Migrate existing databases: add columns if missing
     try { this.db.exec(`ALTER TABLE ${this.tableName} ADD COLUMN output TEXT`); } catch { /* already exists */ }
     try { this.db.exec(`ALTER TABLE ${this.tableName} ADD COLUMN error TEXT`); } catch { /* already exists */ }
+    try { this.db.exec(`ALTER TABLE ${this.tableName} ADD COLUMN station_id TEXT`); } catch { /* already exists */ }
+    try { this.db.exec(`ALTER TABLE ${this.tableName} ADD COLUMN lease_token TEXT`); } catch { /* already exists */ }
+    try { this.db.exec(`ALTER TABLE ${this.tableName} ADD COLUMN lease_expires_at TEXT`); } catch { /* already exists */ }
+    try { this.db.exec(`ALTER TABLE ${this.tableName} ADD COLUMN claimed_at TEXT`); } catch { /* already exists */ }
+    try { this.db.exec(`ALTER TABLE ${this.tableName} ADD COLUMN schedule_id TEXT`); } catch { /* already exists */ }
+    try { this.db.exec(`ALTER TABLE ${this.tableName} ADD COLUMN scheduled_for TEXT`); } catch { /* already exists */ }
+    try { this.db.exec(`ALTER TABLE ${this.tableName} ADD COLUMN idempotency_key TEXT`); } catch { /* already exists */ }
 
     // Indexes for the two hot queries (getRunsDue / getRunsRunning)
     this.db.exec(`
@@ -104,6 +125,10 @@ export class SqliteAdapter implements SerializableAdapter {
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_${this.tableName}_signal_name
         ON ${this.tableName} (signal_name)
+    `);
+    this.db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_${this.tableName}_idempotency_key
+        ON ${this.tableName} (idempotency_key) WHERE idempotency_key IS NOT NULL
     `);
 
     // Steps table with foreign key
@@ -144,11 +169,13 @@ export class SqliteAdapter implements SerializableAdapter {
         `INSERT INTO ${this.tableName}
           (id, signal_name, kind, input, status, attempts, max_attempts,
            timeout, interval, next_run_at, last_run_at, started_at,
-           completed_at, created_at, output, error)
+           completed_at, created_at, output, error, station_id, lease_token,
+           lease_expires_at, claimed_at, schedule_id, scheduled_for, idempotency_key)
          VALUES
           (@id, @signal_name, @kind, @input, @status, @attempts, @max_attempts,
            @timeout, @interval, @next_run_at, @last_run_at, @started_at,
-           @completed_at, @created_at, @output, @error)`,
+           @completed_at, @created_at, @output, @error, @station_id, @lease_token,
+           @lease_expires_at, @claimed_at, @schedule_id, @scheduled_for, @idempotency_key)`,
       )
       .run({
         id: run.id,
@@ -167,6 +194,13 @@ export class SqliteAdapter implements SerializableAdapter {
         created_at: dateToStr(run.createdAt),
         output: run.output ?? null,
         error: run.error ?? null,
+        station_id: run.stationId ?? null,
+        lease_token: run.leaseToken ?? null,
+        lease_expires_at: dateToStr(run.leaseExpiresAt),
+        claimed_at: dateToStr(run.claimedAt),
+        schedule_id: run.scheduleId ?? null,
+        scheduled_for: dateToStr(run.scheduledFor),
+        idempotency_key: run.idempotencyKey ?? null,
       });
   }
 
@@ -212,6 +246,8 @@ export class SqliteAdapter implements SerializableAdapter {
   private static readonly RUN_PATCH_KEYS = new Set([
     "input", "output", "error", "status", "attempts", "maxAttempts",
     "timeout", "interval", "nextRunAt", "lastRunAt", "startedAt", "completedAt",
+    "stationId", "leaseToken", "leaseExpiresAt", "claimedAt", "scheduleId",
+    "scheduledFor", "idempotencyKey",
   ]);
 
   async updateRun(id: string, patch: RunPatch): Promise<void> {
@@ -240,6 +276,81 @@ export class SqliteAdapter implements SerializableAdapter {
         `UPDATE ${this.tableName} SET ${setClauses.join(", ")} WHERE id = @id`,
       )
       .run(values);
+  }
+
+  async claimRun(id: string, claim: RunClaim): Promise<Run | null> {
+    const row = this.prep(
+      `UPDATE ${this.tableName}
+       SET status = 'running', station_id = @station_id, lease_token = @lease_token,
+           lease_expires_at = @lease_expires_at, claimed_at = @claimed_at,
+           started_at = @claimed_at, last_run_at = @claimed_at, attempts = attempts + 1
+       WHERE id = @id AND status = 'pending'
+         AND (next_run_at IS NULL OR next_run_at <= @claimed_at)
+       RETURNING *`,
+    ).get({
+      id,
+      station_id: claim.stationId,
+      lease_token: claim.leaseToken,
+      lease_expires_at: dateToStr(claim.leaseExpiresAt),
+      claimed_at: dateToStr(claim.claimedAt),
+    }) as Record<string, unknown> | undefined;
+    return row ? rowToRun(row) : null;
+  }
+
+  async cancelRun(id: string, completedAt: Date): Promise<boolean> {
+    const result = this.prep(
+      `UPDATE ${this.tableName}
+       SET status='cancelled', completed_at=?, lease_token=NULL, lease_expires_at=NULL, claimed_at=NULL
+       WHERE id=? AND status IN ('pending','running')`,
+    ).run(dateToStr(completedAt), id);
+    return result.changes === 1;
+  }
+
+  async renewRunLease(id: string, leaseToken: string, leaseExpiresAt: Date, now = new Date()): Promise<boolean> {
+    const result = this.prep(
+      `UPDATE ${this.tableName} SET lease_expires_at = ?
+       WHERE id = ? AND status = 'running' AND lease_token = ? AND lease_expires_at > ?`,
+    ).run(dateToStr(leaseExpiresAt), id, leaseToken, dateToStr(now));
+    return result.changes === 1;
+  }
+
+  async updateClaimedRun(id: string, leaseToken: string, patch: RunPatch): Promise<boolean> {
+    const setClauses: string[] = [];
+    const values: Record<string, unknown> = { id, lease_token_guard: leaseToken };
+    for (const [key, value] of Object.entries(patch)) {
+      if (!SqliteAdapter.RUN_PATCH_KEYS.has(key)) continue;
+      const col = toColumn(key);
+      const param = `p_${col}`;
+      setClauses.push(`${col} = @${param}`);
+      values[param] = value === undefined ? null : DATE_FIELDS.has(key) ? dateToStr(value) : value;
+    }
+    if (setClauses.length === 0) return false;
+    const result = this.prep(
+      `UPDATE ${this.tableName} SET ${setClauses.join(", ")}
+       WHERE id = @id AND status = 'running' AND lease_token = @lease_token_guard`,
+    ).run(values);
+    return result.changes === 1;
+  }
+
+  async requeueExpiredRuns(now: Date): Promise<number> {
+    const stamp = dateToStr(now);
+    const failed = this.prep(
+      `UPDATE ${this.tableName}
+       SET status = 'failed', completed_at = ?,
+           error = 'Station lease expired and all attempts were exhausted',
+           lease_token = NULL, lease_expires_at = NULL
+       WHERE status = 'running' AND lease_expires_at IS NOT NULL
+         AND lease_expires_at <= ? AND attempts >= max_attempts`,
+    ).run(stamp, stamp).changes;
+    const pending = this.prep(
+      `UPDATE ${this.tableName}
+       SET status = 'pending', started_at = NULL, last_run_at = ?,
+           error = 'Station lease expired; run recovered for retry',
+           station_id = NULL, lease_token = NULL, lease_expires_at = NULL, claimed_at = NULL
+       WHERE status = 'running' AND lease_expires_at IS NOT NULL
+         AND lease_expires_at <= ? AND attempts < max_attempts`,
+    ).run(stamp, stamp).changes;
+    return failed + pending;
   }
 
   async listRuns(signalName: string, options?: ListRunsOptions): Promise<Run[]> {

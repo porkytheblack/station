@@ -77,6 +77,7 @@ export const streamConsumer = beacon("stream-consumer")
 | `.onDemand()` | Seed nothing — instances are created at runtime, each with its own config. |
 | `.maxInstances(n)` | Cap concurrent instances (default: the runner's `maxInstancesPerBeacon`, 100). |
 | `.env(...keys)` | Require env var keys; a missing one marks the instance `errored` instead of spawning. |
+| `.placement({ labels })` | Restrict execution to Station Network nodes whose labels exactly match. |
 | `.run(handler)` | Finalize with a long-running handler. |
 | `.poll(interval, fn)` | Finalize as a poller — `fn` runs every `interval`. |
 
@@ -96,6 +97,7 @@ Every handler receives a `ctx`:
 | `ctx.signal` | An `AbortSignal` that fires when the beacon should stop. Pass it to `fetch`, stream iterators, etc. |
 | `ctx.ready()` | Mark the beacon ready/healthy (records `readyAt`). |
 | `ctx.heartbeat()` | Report liveness (required if you declared `.heartbeat()`). |
+| `ctx.expose({ protocol, port, path? })` | Advertise an HTTP/WebSocket service and its owning station for Headquarters discovery/proxying. |
 | `ctx.log(msg)` | Emit a structured log line to subscribers. |
 | `ctx.onStop(fn)` | Register cleanup to run when a stop is requested. |
 | `ctx.untilStopped()` | Resolves when `ctx.signal` aborts — the idiomatic tail of a server handler. |

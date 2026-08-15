@@ -21,6 +21,16 @@ export interface ScheduleRedisAdapterOptions {
 
 const SCHEDULE_DATE_FIELDS = new Set(["nextRunAt", "lastRunAt", "createdAt", "updatedAt"]);
 
+const ADD_SCHEDULE_LUA = `
+if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end
+local fields = cjson.decode(ARGV[4])
+for k, v in pairs(fields) do redis.call('HSET', KEYS[1], k, v) end
+redis.call('SADD', KEYS[2], ARGV[1])
+redis.call('SADD', KEYS[3], ARGV[1])
+if ARGV[2] == '1' then redis.call('ZADD', KEYS[4], ARGV[3], ARGV[1]) end
+return 1
+`;
+
 export class ScheduleRedisAdapter implements ScheduleAdapter {
   private redis: Redis;
   private prefix: string;
@@ -41,21 +51,22 @@ export class ScheduleRedisAdapter implements ScheduleAdapter {
   }
 
   async add(schedule: Schedule): Promise<void> {
-    // Match the SQL adapters' "fail on duplicate ID" semantics — runners
-    // depend on `add` rejecting collisions for at-least-once correctness.
-    const exists = await this.redis.exists(scheduleHashKey(this.prefix, schedule.id));
-    if (exists) {
+    const hash = scheduleToHash(schedule);
+    const inserted = await this.redis.eval(
+      ADD_SCHEDULE_LUA,
+      4,
+      scheduleHashKey(this.prefix, schedule.id),
+      scheduleAllKey(this.prefix),
+      scheduleByKindKey(this.prefix, schedule.kind),
+      scheduleDueKey(this.prefix),
+      schedule.id,
+      schedule.enabled ? "1" : "0",
+      String(schedule.nextRunAt.getTime()),
+      JSON.stringify(hash),
+    );
+    if (Number(inserted) !== 1) {
       throw new Error(`Schedule with id "${schedule.id}" already exists`);
     }
-    const hash = scheduleToHash(schedule);
-    const pipeline = this.redis.multi();
-    pipeline.hset(scheduleHashKey(this.prefix, schedule.id), hash);
-    pipeline.sadd(scheduleAllKey(this.prefix), schedule.id);
-    pipeline.sadd(scheduleByKindKey(this.prefix, schedule.kind), schedule.id);
-    if (schedule.enabled) {
-      pipeline.zadd(scheduleDueKey(this.prefix), String(schedule.nextRunAt.getTime()), schedule.id);
-    }
-    await pipeline.exec();
   }
 
   async get(id: string): Promise<Schedule | null> {
@@ -115,7 +126,7 @@ export class ScheduleRedisAdapter implements ScheduleAdapter {
       } else if (SCHEDULE_DATE_FIELDS.has(key)) {
         if (value instanceof Date) setArgs[key] = value.toISOString();
         else if (value === undefined) delFields.push(key);
-      } else if (key === "interval" || key === "lastRunStatus" || key === "lastRunId" || key === "createdBy") {
+      } else if (key === "interval" || key === "cron" || key === "timezone" || key === "overlapPolicy" || key === "misfirePolicy" || key === "misfireGraceMs" || key === "lastRunStatus" || key === "lastRunId" || key === "createdBy") {
         if (value === undefined) delFields.push(key);
         else setArgs[key] = String(value);
       }
@@ -225,12 +236,17 @@ function scheduleToHash(s: Schedule): Record<string, string> {
     id: s.id,
     kind: s.kind,
     target: s.target,
-    interval: s.interval,
     enabled: s.enabled ? "1" : "0",
     nextRunAt: s.nextRunAt.toISOString(),
     createdAt: s.createdAt.toISOString(),
     updatedAt: s.updatedAt.toISOString(),
   };
+  if (s.interval) hash.interval = s.interval;
+  if (s.cron) hash.cron = s.cron;
+  if (s.timezone) hash.timezone = s.timezone;
+  if (s.overlapPolicy) hash.overlapPolicy = s.overlapPolicy;
+  if (s.misfirePolicy) hash.misfirePolicy = s.misfirePolicy;
+  if (s.misfireGraceMs !== undefined) hash.misfireGraceMs = String(s.misfireGraceMs);
   if (s.input !== undefined) hash.input = JSON.stringify(s.input);
   if (s.lastRunAt) hash.lastRunAt = s.lastRunAt.toISOString();
   if (s.lastRunStatus) hash.lastRunStatus = s.lastRunStatus;
@@ -244,7 +260,12 @@ function hashToSchedule(hash: Record<string, string>): Schedule {
     id: hash.id,
     kind: hash.kind as Schedule["kind"],
     target: hash.target,
-    interval: hash.interval,
+    interval: hash.interval || undefined,
+    cron: hash.cron || undefined,
+    timezone: hash.timezone || undefined,
+    overlapPolicy: hash.overlapPolicy as Schedule["overlapPolicy"] || undefined,
+    misfirePolicy: hash.misfirePolicy as Schedule["misfirePolicy"] || undefined,
+    misfireGraceMs: hash.misfireGraceMs ? Number(hash.misfireGraceMs) : undefined,
     input: hash.input ? JSON.parse(hash.input) : undefined,
     enabled: hash.enabled === "1",
     nextRunAt: new Date(hash.nextRunAt),

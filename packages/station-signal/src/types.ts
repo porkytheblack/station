@@ -21,10 +21,32 @@ export interface Run {
   startedAt?: Date;
   completedAt?: Date;
   createdAt: Date;
+  /** Station currently responsible for this run. Set atomically when claimed. */
+  stationId?: string;
+  /** Opaque fencing token. Only the holder may renew or complete this attempt. */
+  leaseToken?: string;
+  /** When another station may recover this run if its owner disappears. */
+  leaseExpiresAt?: Date;
+  /** When the current station claimed this attempt. */
+  claimedAt?: Date;
+  /** Runtime schedule occurrence that created this run, when applicable. */
+  scheduleId?: string;
+  /** Planned wall-clock time of a scheduled occurrence. */
+  scheduledFor?: Date;
+  /** Stable deduplication key, normally `schedule:<id>:<scheduledFor>`. */
+  idempotencyKey?: string;
 }
 
 /** Patchable fields on a Run — identity fields (id, signalName, kind, createdAt) are immutable. */
 export type RunPatch = Partial<Omit<Run, "id" | "signalName" | "kind" | "createdAt">>;
+
+/** Ownership written during an atomic pending -> running transition. */
+export interface RunClaim {
+  stationId: string;
+  leaseToken: string;
+  leaseExpiresAt: Date;
+  claimedAt: Date;
+}
 
 /**
  * Query options for paginated run listings. When any field is set, results

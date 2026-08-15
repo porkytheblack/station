@@ -678,6 +678,57 @@ test("an instance whose beacon definition is gone is surfaced as errored, not ru
   }
 });
 
+test("a heterogeneous network station does not mark another station's beacon orphaned", async () => {
+  const adapter = new BeaconMemoryAdapter();
+  const now = new Date();
+  await adapter.upsertInstance({
+    id: "remote", beaconName: "remote-only", origin: "api", status: "running",
+    desiredState: "running", incarnation: 1, restartCount: 0, stationId: "station-a",
+    pid: 123, createdAt: now, updatedAt: now,
+  });
+  const coordinator = {
+    acquireControllerLease: async () => false,
+    renewControllerLease: async () => false,
+    releaseControllerLease: async () => false,
+  };
+  const runner = new BeaconRunner({ adapter, networkCoordinator: coordinator, stationId: "station-b" });
+  runner.start().catch(() => {});
+  try {
+    await runner.whenReady();
+    assert.equal((await adapter.getInstance("remote"))?.status, "running");
+    assert.equal((await adapter.getInstance("remote"))?.lastError, undefined);
+  } finally {
+    await runner.stop();
+  }
+});
+
+test("a network contender keeps its restart state local until it owns the lease", async () => {
+  const adapter = new BeaconMemoryAdapter();
+  const now = new Date();
+  await adapter.upsertInstance({
+    id: "ready-b", beaconName: "ready-b", origin: "definition", status: "running",
+    desiredState: "running", incarnation: 1, restartCount: 0, stationId: "station-a",
+    pid: 123, createdAt: now, updatedAt: now,
+  });
+  const coordinator = {
+    acquireControllerLease: async () => false,
+    renewControllerLease: async () => false,
+    releaseControllerLease: async () => false,
+  };
+  const runner = new BeaconRunner({ adapter, networkCoordinator: coordinator, stationId: "station-b", pollIntervalMs: 25 });
+  runner.register(readyBeacon, fx("ready-beacon"));
+  runner.start().catch(() => {});
+  try {
+    await runner.whenReady();
+    await sleep(50);
+    assert.equal((await runner.getInstance("ready-b"))?.status, "backoff");
+    assert.equal((await adapter.getInstance("ready-b"))?.status, "running");
+    assert.equal((await adapter.getInstance("ready-b"))?.stationId, "station-a");
+  } finally {
+    await runner.stop();
+  }
+});
+
 test("stopAllInstances stops the definition instance and every runtime one", async () => {
   const rec = makeRecorder();
   const runner = new BeaconRunner({

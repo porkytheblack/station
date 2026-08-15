@@ -13,8 +13,9 @@ export default function AgentSkillPage() {
       <p>
         Station ships with a Claude Code skill that teaches the AI assistant how
         to build with every Station package. Once installed, Claude knows how to
-        create signals, broadcasts, adapters, runners, subscribers, and dashboard
-        configs without you having to explain the API.
+        create signals, broadcasts, beacons, schedules, Station Networks,
+        adapters, subscribers, and dashboard configs without you having to
+        explain the API.
       </p>
 
       <hr className="divider" />
@@ -26,7 +27,8 @@ export default function AgentSkillPage() {
         A Claude Code skill is a set of markdown files that get injected into
         Claude&rsquo;s context when relevant. Skills contain API references,
         code patterns, and rules that guide the assistant&rsquo;s output. The
-        Station skill covers all seven packages and the REST API.
+        Station skill covers the framework packages, official adapters,
+        Station Networks, and the REST API.
       </p>
 
       <hr className="divider" />
@@ -51,25 +53,24 @@ export default function AgentSkillPage() {
             <td><code>SKILL.md</code></td>
             <td>
               Main skill file. Contains critical rules, code patterns, builder
-              method tables, subscriber events, and design principles. This is
-              what Claude reads first.
+              workflows, network operations, and verification guidance. This
+              concise file is what Claude reads first.
             </td>
           </tr>
           <tr>
             <td><code>api-reference.md</code></td>
             <td>
-              Exhaustive API reference for all seven packages: station-signal,
-              station-broadcast, station-adapter-sqlite, station-adapter-postgres,
-              station-adapter-mysql, station-adapter-redis, and station-kit. Also
-              covers the Station v1 REST API.
+              Exhaustive package and v1 REST API reference, including signals,
+              broadcasts, beacons, schedules, environment variables, expressions,
+              Station Networks, adapters, station-kit, and station-tauri.
             </td>
           </tr>
           <tr>
             <td><code>examples.md</code></td>
             <td>
-              Seventeen complete, copy-pasteable examples covering basic signals,
-              multi-step pipelines, recurring jobs, broadcasts, remote triggers,
-              all four adapter backends, and a full project structure template.
+              Twenty-six complete examples covering signals, pipelines, beacons,
+              runtime schedules, environment variables, all four adapter
+              backends, deployment, and a Headquarters/worker topology.
             </td>
           </tr>
         </tbody>
@@ -92,6 +93,7 @@ export default function AgentSkillPage() {
         <li>&ldquo;Create a signal that sends welcome emails with retry&rdquo;</li>
         <li>&ldquo;Set up a broadcast DAG for my CI pipeline&rdquo;</li>
         <li>&ldquo;Configure PostgreSQL adapters for signals and broadcasts&rdquo;</li>
+        <li>&ldquo;Scale this across a Headquarters and three GPU stations&rdquo;</li>
         <li>&ldquo;Add a runner with SQLite persistence and graceful shutdown&rdquo;</li>
         <li>&ldquo;Write a subscriber that posts failures to Slack&rdquo;</li>
       </ul>
@@ -114,6 +116,7 @@ export default function AgentSkillPage() {
             <td>
               Builder chain (<code>.input()</code>, <code>.output()</code>,{" "}
               <code>.timeout()</code>, <code>.retries()</code>,{" "}
+              <code>.concurrency()</code>, <code>.placement()</code>,{" "}
               <code>.every()</code>, <code>.onComplete()</code>,{" "}
               <code>.run()</code>), multi-step pipelines (<code>.step()</code> +{" "}
               <code>.build()</code>), triggering, validation
@@ -130,15 +133,38 @@ export default function AgentSkillPage() {
           <tr>
             <td>Adapters</td>
             <td>
-              All four backends (SQLite, PostgreSQL, MySQL, Redis) for both signals
-              and broadcasts. Constructor patterns, connection options, subpath
-              imports
+              SQLite, PostgreSQL, MySQL, and Redis for signals, broadcasts,
+              beacons, schedules, environment variables, and network state.
+              Constructor patterns, connection options, and subpath imports
+            </td>
+          </tr>
+          <tr>
+            <td>Station Networks</td>
+            <td>
+              Headquarters and station roles, shared storage, atomic run claims,
+              fencing and recovery, per-station/fleet concurrency, placement,
+              draining, inventory, and beacon HTTP proxying
+            </td>
+          </tr>
+          <tr>
+            <td>Schedules</td>
+            <td>
+              Editable interval and timezone-aware cron schedules, overlap and
+              misfire policies, atomic occurrence claims, and timing semantics
+            </td>
+          </tr>
+          <tr>
+            <td>Beacons</td>
+            <td>
+              Supervised servers, pollers, and clients; restart policies,
+              instances, placement, exposure, and graceful shutdown
             </td>
           </tr>
           <tr>
             <td>Runners</td>
             <td>
-              <code>SignalRunner</code> and <code>BroadcastRunner</code> setup,
+              <code>SignalRunner</code>, <code>BroadcastRunner</code>, and
+              <code>BeaconRunner</code> setup,
               auto-discovery, manual registration, graceful shutdown, poll
               intervals
             </td>
@@ -146,7 +172,7 @@ export default function AgentSkillPage() {
           <tr>
             <td>Subscribers</td>
             <td>
-              All lifecycle events for both signal and broadcast runners.
+              Lifecycle events for signal, broadcast, and beacon runners.
               Custom subscriber patterns for logging, metrics, and alerting
             </td>
           </tr>

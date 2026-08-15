@@ -73,12 +73,12 @@ test("update applies a patch and bumps updatedAt", async () => {
   assert.ok(after!.updatedAt.getTime() > before.getTime());
 });
 
-test("update drops undefined keys (no accidental field clearing)", async () => {
+test("update uses explicit undefined to clear optional fields", async () => {
   const a = new ScheduleMemoryAdapter();
   await a.add(fixture({ lastRunId: "run-123" }));
   await a.update("s1", { lastRunId: undefined as unknown as string });
   const after = await a.get("s1");
-  assert.equal(after?.lastRunId, "run-123");
+  assert.equal(after?.lastRunId, undefined);
 });
 
 test("claimDue returns true and advances when nextRunAt matches", async () => {
@@ -102,6 +102,14 @@ test("claimDue returns false when nextRunAt has changed (lost the race)", async 
   await a.update("s1", { nextRunAt: otherWinner });
   const ok = await a.claimDue("s1", expected, ours);
   assert.equal(ok, false);
+});
+
+test("claimDue returns false when a schedule was disabled after listing", async () => {
+  const a = new ScheduleMemoryAdapter();
+  const expected = new Date(Date.now() - 1000);
+  await a.add(fixture({ nextRunAt: expected }));
+  await a.update("s1", { enabled: false });
+  assert.equal(await a.claimDue("s1", expected, new Date(Date.now() + 60_000)), false);
 });
 
 test("delete removes the schedule", async () => {

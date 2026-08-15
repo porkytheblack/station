@@ -20,10 +20,24 @@ export interface Signal<TInput = unknown, TOutput = void> {
   readonly timeout: number;
   readonly maxAttempts: number;
   readonly maxConcurrency?: number;
+  readonly networkConcurrency?: number;
+  readonly placement?: SignalPlacement;
   readonly recurringInput?: TInput;
   /** Env var keys that must be present (store-managed or process env) for a run to dispatch. */
   readonly requiredEnv?: string[];
   trigger(input: TInput): Promise<string>;
+}
+
+export interface SignalPlacement {
+  /** Station labels that must match exactly before this signal may be claimed. */
+  labels?: Record<string, string>;
+}
+
+export interface SignalConcurrency {
+  /** Concurrent runs of this signal allowed in one station. */
+  station?: number;
+  /** Concurrent runs of this signal allowed across the Station Network. */
+  network?: number;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -40,6 +54,8 @@ interface SignalConfig<TInput, TOutput> {
   timeout: number;
   maxAttempts: number;
   maxConcurrency?: number;
+  networkConcurrency?: number;
+  placement?: SignalPlacement;
   recurringInput?: TInput;
   requiredEnv?: string[];
 }
@@ -48,7 +64,7 @@ function buildSignal<TInput, TOutput>(config: SignalConfig<TInput, TOutput>): Si
   const {
     name, inputSchema, outputSchema, handler, steps,
     onCompleteHandler, interval, timeout, maxAttempts,
-    maxConcurrency, recurringInput, requiredEnv,
+    maxConcurrency, networkConcurrency, placement, recurringInput, requiredEnv,
   } = config;
 
   return {
@@ -63,6 +79,8 @@ function buildSignal<TInput, TOutput>(config: SignalConfig<TInput, TOutput>): Si
     timeout,
     maxAttempts,
     maxConcurrency,
+    networkConcurrency,
+    placement,
     recurringInput,
     requiredEnv,
     async trigger(input: TInput): Promise<string> {
@@ -109,6 +127,8 @@ export class StepBuilder<TInput, TLast> {
   private _timeout: number;
   private _maxAttempts: number;
   private _maxConcurrency?: number;
+  private _networkConcurrency?: number;
+  private _placement?: SignalPlacement;
   private _recurringInput?: TInput;
   private _requiredEnv?: string[];
 
@@ -117,7 +137,7 @@ export class StepBuilder<TInput, TLast> {
     name: string,
     inputSchema: z.ZodType<TInput>,
     steps: StepDefinition[],
-    opts: { interval?: string; timeout: number; maxAttempts: number; maxConcurrency?: number; recurringInput?: TInput; requiredEnv?: string[] },
+    opts: { interval?: string; timeout: number; maxAttempts: number; maxConcurrency?: number; networkConcurrency?: number; placement?: SignalPlacement; recurringInput?: TInput; requiredEnv?: string[] },
   ) {
     this._name = name;
     this._inputSchema = inputSchema;
@@ -126,6 +146,8 @@ export class StepBuilder<TInput, TLast> {
     this._timeout = opts.timeout;
     this._maxAttempts = opts.maxAttempts;
     this._maxConcurrency = opts.maxConcurrency;
+    this._networkConcurrency = opts.networkConcurrency;
+    this._placement = opts.placement;
     this._recurringInput = opts.recurringInput;
     this._requiredEnv = opts.requiredEnv;
   }
@@ -135,7 +157,7 @@ export class StepBuilder<TInput, TLast> {
       this._name,
       this._inputSchema,
       [...this._steps, { name, fn: fn as unknown as (prev: unknown) => Promise<unknown> }],
-      { interval: this._interval, timeout: this._timeout, maxAttempts: this._maxAttempts, maxConcurrency: this._maxConcurrency, recurringInput: this._recurringInput, requiredEnv: this._requiredEnv },
+      { interval: this._interval, timeout: this._timeout, maxAttempts: this._maxAttempts, maxConcurrency: this._maxConcurrency, networkConcurrency: this._networkConcurrency, placement: this._placement, recurringInput: this._recurringInput, requiredEnv: this._requiredEnv },
     );
   }
 
@@ -149,6 +171,8 @@ export class StepBuilder<TInput, TLast> {
       timeout: this._timeout,
       maxAttempts: this._maxAttempts,
       maxConcurrency: this._maxConcurrency,
+      networkConcurrency: this._networkConcurrency,
+      placement: this._placement,
       recurringInput: this._recurringInput,
       requiredEnv: this._requiredEnv,
     });
@@ -163,6 +187,8 @@ export class StepBuilder<TInput, TLast> {
       timeout: this._timeout,
       maxAttempts: this._maxAttempts,
       maxConcurrency: this._maxConcurrency,
+      networkConcurrency: this._networkConcurrency,
+      placement: this._placement,
       recurringInput: this._recurringInput,
       requiredEnv: this._requiredEnv,
     });
@@ -184,6 +210,8 @@ export class SignalBuilder<TInput = unknown, TOutput = void> {
   private _timeout: number = DEFAULT_TIMEOUT_MS;
   private _maxAttempts: number = DEFAULT_MAX_ATTEMPTS;
   private _maxConcurrency?: number;
+  private _networkConcurrency?: number;
+  private _placement?: SignalPlacement;
   private _recurringInput?: TInput;
   private _requiredEnv?: string[];
 
@@ -207,6 +235,8 @@ export class SignalBuilder<TInput = unknown, TOutput = void> {
     b._timeout = this._timeout;
     b._maxAttempts = this._maxAttempts;
     b._maxConcurrency = this._maxConcurrency;
+    b._networkConcurrency = this._networkConcurrency;
+    b._placement = this._placement;
     b._recurringInput = this._recurringInput;
     b._requiredEnv = this._requiredEnv;
     return b;
@@ -220,6 +250,8 @@ export class SignalBuilder<TInput = unknown, TOutput = void> {
     b._timeout = this._timeout;
     b._maxAttempts = this._maxAttempts;
     b._maxConcurrency = this._maxConcurrency;
+    b._networkConcurrency = this._networkConcurrency;
+    b._placement = this._placement;
     b._requiredEnv = this._requiredEnv;
     return b;
   }
@@ -232,6 +264,8 @@ export class SignalBuilder<TInput = unknown, TOutput = void> {
     b._timeout = this._timeout;
     b._maxAttempts = this._maxAttempts;
     b._maxConcurrency = this._maxConcurrency;
+    b._networkConcurrency = this._networkConcurrency;
+    b._placement = this._placement;
     b._recurringInput = this._recurringInput as unknown as TInput | undefined;
     b._requiredEnv = this._requiredEnv;
     return b;
@@ -256,9 +290,27 @@ export class SignalBuilder<TInput = unknown, TOutput = void> {
     return b;
   }
 
-  concurrency(n: number): SignalBuilder<TInput, TOutput> {
+  concurrency(value: number | SignalConcurrency): SignalBuilder<TInput, TOutput> {
     const b = this._clone();
-    b._maxConcurrency = n;
+    if (typeof value === "number") {
+      if (!Number.isInteger(value) || value < 1) throw new Error("Signal concurrency must be a positive integer.");
+      b._maxConcurrency = value;
+    } else {
+      if (value.station !== undefined && (!Number.isInteger(value.station) || value.station < 1)) {
+        throw new Error("Station concurrency must be a positive integer.");
+      }
+      if (value.network !== undefined && (!Number.isInteger(value.network) || value.network < 1)) {
+        throw new Error("Network concurrency must be a positive integer.");
+      }
+      b._maxConcurrency = value.station;
+      b._networkConcurrency = value.network;
+    }
+    return b;
+  }
+
+  placement(policy: SignalPlacement): SignalBuilder<TInput, TOutput> {
+    const b = this._clone();
+    b._placement = { labels: policy.labels ? { ...policy.labels } : undefined };
     return b;
   }
 
@@ -298,6 +350,8 @@ export class SignalBuilder<TInput = unknown, TOutput = void> {
       timeout: this._timeout,
       maxAttempts: this._maxAttempts,
       maxConcurrency: this._maxConcurrency,
+      networkConcurrency: this._networkConcurrency,
+      placement: this._placement,
       recurringInput: this._recurringInput,
       requiredEnv: this._requiredEnv,
     };
@@ -320,7 +374,7 @@ export class SignalBuilder<TInput = unknown, TOutput = void> {
       this._name,
       cfg.inputSchema,
       [{ name, fn: fn as unknown as (prev: unknown) => Promise<unknown> }],
-      { interval: cfg.interval, timeout: cfg.timeout, maxAttempts: cfg.maxAttempts, maxConcurrency: cfg.maxConcurrency, recurringInput: cfg.recurringInput, requiredEnv: cfg.requiredEnv },
+      { interval: cfg.interval, timeout: cfg.timeout, maxAttempts: cfg.maxAttempts, maxConcurrency: cfg.maxConcurrency, networkConcurrency: cfg.networkConcurrency, placement: cfg.placement, recurringInput: cfg.recurringInput, requiredEnv: cfg.requiredEnv },
     );
   }
 }
