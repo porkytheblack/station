@@ -1,10 +1,10 @@
-export { signal, SignalBuilder, StepBuilder, type Signal, type BuiltSignal, type AnySignal } from "./signal.js";
+export { signal, SignalBuilder, StepBuilder, type Signal, type BuiltSignal, type AnySignal, type SignalConcurrency, type SignalPlacement } from "./signal.js";
 export { SignalRunner, type SignalRunnerOptions, type SignalScheduleReconciler, type EnvProvider } from "./signal-runner.js";
 export { configure, getAdapter, getTriggerAdapter, isConfigured, onLocalEnqueue, notifyLocalEnqueue, type ConfigureOptions } from "./config.js";
 export { parseInterval } from "./interval.js";
 
 export { DEFAULT_TIMEOUT_MS, DEFAULT_MAX_ATTEMPTS } from "./types.js";
-export type { Run, RunKind, RunStatus, RunPatch, Step, StepStatus, StepPatch, StepDefinition, ListRunsOptions, ListAllRunsOptions } from "./types.js";
+export type { Run, RunKind, RunStatus, RunPatch, RunClaim, Step, StepStatus, StepPatch, StepDefinition, ListRunsOptions, ListAllRunsOptions } from "./types.js";
 export {
   type SignalQueueAdapter,
   type SerializableAdapter,

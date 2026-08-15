@@ -77,6 +77,17 @@ function BeaconIcon() {
   );
 }
 
+function NetworkIcon() {
+  return (
+    <svg className="feature-icon" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="7" cy="16" r="3.5" stroke="currentColor" strokeWidth="1.5" />
+      <circle cx="25" cy="8" r="3.5" stroke="currentColor" strokeWidth="1.5" />
+      <circle cx="25" cy="24" r="3.5" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M10.5 16H16M16 16V8H21.5M16 16V24H21.5" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
 function GridIcon() {
   return (
     <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
@@ -100,7 +111,7 @@ const features = [
   {
     icon: CronIcon,
     name: "Scheduling & triggers",
-    desc: "Interval-based scheduling with human-readable strings — '5m', '1h', '1d'. Trigger jobs on-demand with .trigger() or let them run on a schedule automatically.",
+    desc: "Intervals plus five-field cron in an IANA timezone. Preview future occurrences, trigger on demand, and claim each fleet occurrence exactly once.",
   },
   {
     icon: HistoryIcon,
@@ -120,7 +131,7 @@ const features = [
   {
     icon: ConcurrencyIcon,
     name: "Concurrency limits",
-    desc: "Global concurrency cap via maxConcurrent. The runner limits how many signals execute in parallel and queues the overflow.",
+    desc: "Bound a signal per Station and across the whole network. Add placement labels so GPU, regional, or specialized work only reaches eligible workers.",
   },
   {
     icon: DagIcon,
@@ -131,6 +142,11 @@ const features = [
     icon: BeaconIcon,
     name: "Long-running beacons",
     desc: "Supervise long-lived processes — servers, pollers, and clients — with restart policies, exponential backoff, heartbeat stall detection, and graceful shutdown.",
+  },
+  {
+    icon: NetworkIcon,
+    name: "Station Networks",
+    desc: "Put Headquarters in front of a fleet. Route stateless work, drain workers, deduplicate schedules, supervise beacons, and inspect everything from one dashboard.",
   },
 ];
 
@@ -146,10 +162,10 @@ export default function LandingPage() {
             jobs framework.
           </h1>
           <p className="landing-hero-sub">
-            Background jobs usually mean either a Redis cluster or another cloud
-            bill. Station is an npm package. Install it, define your jobs in
-            TypeScript, run them on your existing infrastructure. Retries,
-            scheduling, and persistence included.
+            Start as one TypeScript process with SQLite. Grow into a Station
+            Network backed by PostgreSQL, MySQL, or Redis when you need more
+            capacity. Retries, cron scheduling, workflows, long-running services,
+            and a fleet dashboard are included.
           </p>
           <div className="landing-hero-cta">
             <Link href="/docs/getting-started" className="btn-primary">
@@ -217,7 +233,7 @@ export default function LandingPage() {
             <div className="letter-pillar">
               <span className="letter-pillar-num">02</span>
               <span className="letter-pillar-label">Simple deployment</span>
-              <span className="letter-pillar-desc">Runs in your process, on your servers. No Redis. No separate service.</span>
+              <span className="letter-pillar-desc">SQLite when one process is enough. Shared adapters and execution stations when it is not.</span>
             </div>
             <div className="letter-pillar">
               <span className="letter-pillar-num">03</span>
@@ -269,7 +285,8 @@ export default function LandingPage() {
               A signal is a background job definition &mdash; input schema, handler
               function, execution constraints. Define them in your codebase. The
               runner auto-discovers signal files, handles scheduling, retries,
-              timeouts, and concurrency. No config files. No separate service.
+              timeouts, and concurrency. StationKit adds configuration only when
+              you want the dashboard or a multi-process network.
             </p>
             <Link href="/docs/getting-started" className="btn-primary">
               View documentation &rarr;
@@ -311,11 +328,35 @@ export const loveLetter = signal("loveLetter")
         </div>
       </section>
 
+      <div className="field-divider" />
+
+      {/* ── Network section ── */}
+      <section className="landing-network">
+        <div className="landing-network-copy">
+          <span className="section-number">// 03</span>
+          <h2 className="section-heading">One Station when you&apos;re small.<br className="desktop-break" /> A whole network when you&apos;re not.</h2>
+          <p>
+            Headquarters gives clients one API while execution stations advertise
+            capacity, labels, and definitions. Atomic claims choose one owner for
+            every run and schedule occurrence; leases recover work when a worker
+            disappears. Drain nodes and watch the entire fleet from the dashboard.
+          </p>
+          <div className="landing-network-actions">
+            <Link href="/docs/network" className="btn-primary">Read the network guide &rarr;</Link>
+            <Link href="/docs/examples/station-network" className="btn-secondary">Run the local fleet</Link>
+          </div>
+        </div>
+        <div className="landing-network-visual">
+          <img src="/screenshots/station-network.png" alt="Station Network dashboard with Headquarters and two execution stations" />
+          <div className="landing-network-caption">LIVE FLEET INVENTORY · CAPACITY · DRAINING · HEARTBEATS</div>
+        </div>
+      </section>
+
       {/* ── Landscape / comparison section ── */}
       <section className="landing-landscape">
         <div className="section-header">
           <div>
-            <span className="section-number">// 03</span>
+            <span className="section-number">// 04</span>
             <h2 className="section-heading">
               Why another<br className="desktop-break" /> background jobs library?
             </h2>
@@ -352,10 +393,10 @@ export const loveLetter = signal("loveLetter")
             <div className="landscape-label">This library</div>
             <div className="landscape-title">Station</div>
             <ul className="landscape-items landscape-items-signal">
-              <li>npm install, done</li>
-              <li>SQLite persistence (or in-memory)</li>
-              <li>Runs in your process, on your servers</li>
-              <li>Zero external dependencies</li>
+              <li>SQLite by default; shared adapters when you scale</li>
+              <li>One process or a fleet of execution stations</li>
+              <li>Runs on your servers with no hosted control plane</li>
+              <li>One API and dashboard across the network</li>
               <li>Full TypeScript with Zod validation</li>
               <li>Same reliability: retries, timeouts, concurrency</li>
             </ul>
@@ -370,11 +411,11 @@ export const loveLetter = signal("loveLetter")
         <span className="section-number">// Get started</span>
         <h2 className="section-heading">Five minutes to your first signal.</h2>
         <p>
-          Install the package, define a signal, start the runner.
-          That&apos;s the entire setup.
+          Install the runtime and StationKit, define a signal, then start Station.
+          SQLite is enough for the first process.
         </p>
         <div className="landing-cta-install">
-          <code>pnpm add station-signal</code>
+          <code>pnpm add station-signal station-kit</code>
         </div>
         <Link href="/docs/getting-started" className="btn-primary">
           Read the guide

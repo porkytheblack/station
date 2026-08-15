@@ -280,6 +280,28 @@ importers:
         specifier: ^4.21.0
         version: 4.21.0
 
+  examples/16-station-network:
+    dependencies:
+      station-adapter-sqlite:
+        specifier: workspace:*
+        version: link:../../packages/station-adapter-sqlite
+      station-beacon:
+        specifier: workspace:*
+        version: link:../../packages/station-beacon
+      station-broadcast:
+        specifier: workspace:*
+        version: link:../../packages/station-broadcast
+      station-kit:
+        specifier: workspace:*
+        version: link:../../packages/station-kit
+      station-signal:
+        specifier: workspace:*
+        version: link:../../packages/station-signal
+    devDependencies:
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
+
   packages/station-adapter-mysql:
     dependencies:
       mysql2:
@@ -294,6 +316,9 @@ importers:
       station-env:
         specifier: workspace:*
         version: link:../station-env
+      station-network:
+        specifier: workspace:*
+        version: link:../station-network
       station-schedules:
         specifier: workspace:*
         version: link:../station-schedules
@@ -315,6 +340,9 @@ importers:
       station-env:
         specifier: workspace:*
         version: link:../station-env
+      station-network:
+        specifier: workspace:*
+        version: link:../station-network
       station-schedules:
         specifier: workspace:*
         version: link:../station-schedules
@@ -340,6 +368,9 @@ importers:
       station-env:
         specifier: workspace:*
         version: link:../station-env
+      station-network:
+        specifier: workspace:*
+        version: link:../station-network
       station-schedules:
         specifier: workspace:*
         version: link:../station-schedules
@@ -361,6 +392,9 @@ importers:
       station-env:
         specifier: workspace:*
         version: link:../station-env
+      station-network:
+        specifier: workspace:*
+        version: link:../station-network
       station-schedules:
         specifier: workspace:*
         version: link:../station-schedules
@@ -433,13 +467,13 @@ importers:
         specifier: ^4
         version: 4.12.3
       next:
-        specifier: ^15
+        specifier: 15.5.12
         version: 15.5.12(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       react:
-        specifier: ^19
+        specifier: 19.2.4
         version: 19.2.4
       react-dom:
-        specifier: ^19
+        specifier: 19.2.4
         version: 19.2.4(react@19.2.4)
       station-env:
         specifier: workspace:*
@@ -447,6 +481,9 @@ importers:
       station-expressions:
         specifier: workspace:*
         version: link:../station-expressions
+      station-network:
+        specifier: workspace:*
+        version: link:../station-network
       station-schedules:
         specifier: workspace:*
         version: link:../station-schedules
@@ -484,6 +521,15 @@ importers:
       station-signal:
         specifier: workspace:*
         version: link:../station-signal
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
+  packages/station-network:
+    devDependencies:
+      '@types/node':
+        specifier: ^25.3.0
+        version: 25.3.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3

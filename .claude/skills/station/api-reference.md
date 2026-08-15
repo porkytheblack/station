@@ -16,6 +16,25 @@ Complete reference for all Station packages. Every export, type, interface, and 
 > fields and the pluggable adapters first; most "I need custom X" cases are a
 > config field.
 
+## Contents
+
+1. [station-signal](#1-station-signal)
+2. [station-broadcast](#2-station-broadcast)
+3. [station-adapter-sqlite](#3-station-adapter-sqlite)
+4. [station-adapter-postgres](#4-station-adapter-postgres)
+5. [station-adapter-mysql](#5-station-adapter-mysql)
+6. [station-adapter-redis](#6-station-adapter-redis)
+7. [station-kit](#7-station-kit)
+8. [Station v1 API Endpoints](#8-station-v1-api-endpoints)
+9. [Dynamic Broadcasts](#9-dynamic-broadcasts)
+10. [station-schedules](#10-station-schedules)
+11. [station-expressions](#11-station-expressions)
+12. [station-tauri](#12-station-tauri)
+13. [station-beacon](#13-station-beacon)
+14. [station-env](#14-station-env)
+15. [station-network](#15-station-network)
+16. [Quick Reference: Import Patterns](#quick-reference-import-patterns)
+
 ---
 
 ## 1. station-signal
@@ -46,10 +65,10 @@ import {
   // Constants
   DEFAULT_TIMEOUT_MS, DEFAULT_MAX_ATTEMPTS,
   // Types
-  type Signal, type BuiltSignal, type AnySignal,
+  type Signal, type BuiltSignal, type AnySignal, type SignalConcurrency, type SignalPlacement,
   type SignalRunnerOptions,
   type ConfigureOptions,
-  type Run, type RunKind, type RunStatus, type RunPatch,
+  type Run, type RunKind, type RunStatus, type RunPatch, type RunClaim,
   type Step, type StepStatus, type StepPatch, type StepDefinition,
   type SignalQueueAdapter, type SerializableAdapter, type AdapterManifest,
   type SignalSubscriber, type IPCMessage,
@@ -96,8 +115,11 @@ class SignalBuilder<TInput = unknown, TOutput = void> {
   /** Set retries. maxAttempts = n + 1. Default: 0 retries (1 attempt). */
   retries(n: number): SignalBuilder<TInput, TOutput>;
 
-  /** Set max concurrent runs for this signal. */
-  concurrency(n: number): SignalBuilder<TInput, TOutput>;
+  /** Set per-station concurrency, or separate station + fleet-wide limits. */
+  concurrency(value: number | { station?: number; network?: number }): SignalBuilder<TInput, TOutput>;
+
+  /** Require exact station-label matches before a worker may claim this signal. */
+  placement(policy: { labels?: Record<string, string> }): SignalBuilder<TInput, TOutput>;
 
   /** Set default input for recurring signals. */
   withInput(input: TInput): SignalBuilder<TInput, TOutput>;
@@ -195,6 +217,8 @@ interface Signal<TInput = unknown, TOutput = void> {
   readonly timeout: number;
   readonly maxAttempts: number;
   readonly maxConcurrency?: number;
+  readonly networkConcurrency?: number;
+  readonly placement?: { labels?: Record<string, string> };
   readonly recurringInput?: TInput;
   readonly requiredEnv?: string[];        // keys declared via .env(); enforced before dispatch
 
@@ -372,7 +396,13 @@ interface SignalQueueAdapter {
   getRunsRunning(): Promise<Run[]>;
   getRun(id: string): Promise<Run | null>;
   updateRun(id: string, patch: RunPatch): Promise<void>;
-  listRuns(signalName: string): Promise<Run[]>;
+  /** Atomic ownership and fencing methods required for safe Station Networks. */
+  claimRun?(id: string, claim: RunClaim): Promise<Run | null>;
+  cancelRun?(id: string, completedAt: Date): Promise<boolean>;
+  renewRunLease?(id: string, leaseToken: string, leaseExpiresAt: Date, now?: Date): Promise<boolean>;
+  updateClaimedRun?(id: string, leaseToken: string, patch: RunPatch): Promise<boolean>;
+  requeueExpiredRuns?(now: Date): Promise<number>;
+  listRuns(signalName: string, options?: ListRunsOptions): Promise<Run[]>;
   listAllRuns(options?: ListAllRunsOptions): Promise<Run[]>;
   countRunsByStatus(options?: { signalName?: string }): Promise<Partial<Record<RunStatus, number>>>;
   hasRunWithStatus(signalName: string, statuses: RunStatus[]): Promise<boolean>;
@@ -1292,12 +1322,26 @@ interface DeployConfig {
   include?: string[];        // extra files/dirs to copy into deploy bundle
 }
 
+interface StationNetworkConfig {
+  id?: string;                       // logical fleet id; default "default"
+  stationId?: string;                // stable unique node id; defaults from STATION_ID/process
+  name?: string;                     // display name; defaults to stationId
+  adapter?: StationNetworkAdapter;   // durable shared adapter for multiple processes
+  labels?: Record<string, string>;   // exact-match placement labels
+  endpoint?: string;                 // HTTP(S) endpoint reachable by Headquarters
+  heartbeatIntervalMs?: number;      // default 5000
+  leaseDurationMs?: number;          // default 15000
+}
+
 interface StationConfig {
+  role: "standalone" | "headquarters" | "station"; // default: "standalone"
+  network: StationNetworkConfig;
   port: number;                          // default: 4400
   host: string;                          // default: "localhost"
   adapter?: SignalQueueAdapter;
   broadcastAdapter?: BroadcastQueueAdapter;
   beaconAdapter?: BeaconStateAdapter;    // durable beacon instance state + lifecycle log
+  beaconMaxInstances?: number;           // default cap per beacon definition: 100
   /**
    * Optional schedule storage. When provided, runtime-editable schedules are
    * persisted here and reconciled by both runners. (See §10.)
@@ -1329,7 +1373,7 @@ interface StationConfig {
   beaconsDir?: string;                   // auto-detects "./beacons" if exists; supervises beacons + surfaces them on the dashboard
   runner: RunnerConfig;
   broadcastRunner: BroadcastRunnerConfig;
-  runRunners: boolean;                   // default: true
+  runRunners: boolean;                   // default: true; Headquarters still never executes work
   open: boolean;                         // default: true (opens browser)
   logLevel: "debug" | "info" | "warn" | "error"; // default: "info"
   auth?: AuthConfig;
@@ -1337,9 +1381,10 @@ interface StationConfig {
   stationDir: string;                  // default: ".station"
 }
 
-type StationUserConfig = Partial<Omit<StationConfig, "runner" | "broadcastRunner">> & {
+type StationUserConfig = Partial<Omit<StationConfig, "runner" | "broadcastRunner" | "network">> & {
   runner?: Partial<RunnerConfig>;
   broadcastRunner?: Partial<BroadcastRunnerConfig>;
+  network?: StationNetworkConfig;
 };
 ```
 
@@ -1405,9 +1450,11 @@ npx station
 ```
 
 Launches:
-- Hono API server on `port` (default 4400)
-- Next.js dashboard on `port + 1` (default 4401)
-- Signal and broadcast runners (unless `runRunners: false`)
+- Hono API and dashboard on the configured public `port` (default 4400)
+- Internal Next.js process managed automatically by StationKit
+- `standalone`: control-plane reconciliation plus local execution when `runRunners` is true
+- `headquarters`: API/dashboard and control-plane reconciliation, never signal/beacon execution
+- `station`: signal/beacon execution when `runRunners` is true, never schedule/broadcast reconciliation
 
 The CLI uses a launcher pattern: re-execs with `node --import tsx` to enable TypeScript resolution for user signal/broadcast files.
 
@@ -1709,6 +1756,14 @@ Errors: `404 not_found` if no dynamic broadcast with that name is registered; `4
 ### Read (scope: `read`)
 
 ```
+GET /api/v1/stations?role=station&status=online
+GET /api/v1/stations/:id
+```
+
+Returns network membership, status, labels, capacity, advertised definitions,
+endpoint, and heartbeat/lease timestamps.
+
+```
 GET /api/v1/signals
 ```
 
@@ -1810,6 +1865,13 @@ Response: `{ "data": { "cancelled": true } }`
 Error: `{ "error": "cannot_cancel", "message": "Broadcast run cannot be cancelled." }` (400)
 
 ### API Keys (scope: `admin`)
+
+```
+PATCH /api/v1/stations/:id
+```
+
+Body: `{ "status": "draining" }` or `{ "status": "online" }`. Draining
+prevents a station from claiming new work while active work finishes.
 
 ```
 POST /api/v1/keys
@@ -2626,6 +2688,145 @@ Dashboard: the **Environment** page manages vars and flags required-but-undefine
 
 ---
 
+## 15. station-network
+
+Shared fleet membership and fenced controller leases for multi-process Station
+deployments. `station-kit` creates a memory adapter automatically, but separate
+processes must receive the same durable backend through `network.adapter`.
+
+### Exports
+
+```ts
+import {
+  StationNetworkMemoryAdapter,
+  type StationRole,
+  type StationStatus,
+  type StationCapacity,
+  type StationDefinitions,
+  type StationNode,
+  type StationHeartbeat,
+  type ControllerLease,
+  type StationListFilter,
+  type StationNetworkAdapter,
+} from "station-network";
+```
+
+```ts
+type StationRole = "headquarters" | "station" | "standalone";
+type StationStatus = "online" | "draining" | "offline";
+
+interface StationNode {
+  id: string;
+  networkId: string;
+  name: string;
+  role: StationRole;
+  status: StationStatus;
+  labels: Record<string, string>;
+  capacity: { maxConcurrent: number; activeRuns: number };
+  definitions: { signals: string[]; broadcasts: string[]; beacons: string[] };
+  version?: string;
+  endpoint?: string;
+  startedAt: Date;
+  lastHeartbeatAt: Date;
+  leaseExpiresAt: Date;
+}
+
+interface ControllerLease {
+  name: string;
+  holderId: string;
+  token: string;
+  expiresAt: Date;
+}
+```
+
+### Adapter contract
+
+```ts
+interface StationNetworkAdapter {
+  upsertStation(station: StationNode): Promise<void>;
+  getStation(id: string): Promise<StationNode | null>;
+  listStations(filter?: StationListFilter): Promise<StationNode[]>;
+  heartbeat(id: string, heartbeat: StationHeartbeat): Promise<boolean>;
+  removeStation(id: string): Promise<void>;
+  markOfflineBefore(cutoff: Date, networkId?: string): Promise<number>;
+
+  acquireControllerLease(lease: ControllerLease, now: Date): Promise<boolean>;
+  renewControllerLease(name: string, holderId: string, token: string,
+    expiresAt: Date, now?: Date): Promise<boolean>;
+  releaseControllerLease(name: string, holderId: string, token: string): Promise<boolean>;
+  getControllerLease(name: string): Promise<ControllerLease | null>;
+
+  ping(): Promise<boolean>;
+  close?(): Promise<void>;
+}
+```
+
+Controller leases guard fleet-wide signal concurrency and single-owner beacon
+instances. A lease token fences stale owners: renewal fails after expiry, and a
+previous holder cannot release or renew a replacement holder's lease.
+
+### Persistent adapters
+
+```ts
+import { StationNetworkSqliteAdapter } from "station-adapter-sqlite/network";
+import { StationNetworkPostgresAdapter } from "station-adapter-postgres/network";
+import { StationNetworkMysqlAdapter } from "station-adapter-mysql/network";
+import { StationNetworkRedisAdapter } from "station-adapter-redis/network";
+
+const sqlite = new StationNetworkSqliteAdapter({ dbPath: "./station.db" });
+const postgres = new StationNetworkPostgresAdapter({ connectionString });
+const mysql = await StationNetworkMysqlAdapter.create({ connectionString });
+const redis = new StationNetworkRedisAdapter({ url: "redis://localhost:6379" });
+```
+
+SQLite coordinates processes that share one filesystem. Use PostgreSQL,
+MySQL, or Redis across machines. Reuse existing pools/clients when appropriate.
+
+### Signal controls
+
+```ts
+export const render = signal("render")
+  .concurrency({ station: 4, network: 20 })
+  .placement({ labels: { gpu: "true", region: "ke" } })
+  .run(async () => { /* ... */ });
+```
+
+Passing a number to `.concurrency(4)` remains the per-station form. A station
+must match every requested placement label and be `online` before it can claim.
+Run ownership uses `RunClaim` fields on the shared signal queue:
+`stationId`, `leaseToken`, `leaseExpiresAt`, and `claimedAt`. Official adapters
+implement atomic claim, renewal, cancellation, recovery, and fenced updates.
+
+### Beacon controls and service proxy
+
+Beacon definitions accept `.placement({ labels })`. Each networked instance has
+one lease-owning station. `ctx.expose({ protocol: "http", port, path? })`
+publishes a service address after the handler starts. Headquarters proxies HTTP
+requests through:
+
+```text
+/api/v1/beacons/:name/instances/:id/proxy/*
+```
+
+The route requires `trigger` or `admin`, refuses stale/offline owners, and only
+uses advertised HTTP(S) station endpoints. WebSocket upgrades return 426; use
+the owning station endpoint directly for WebSockets.
+
+### Operational semantics
+
+- Give each process a stable, unique `stationId` and the same `network.id`.
+- Keep the queue and network backend shared by every node. Share beacon state
+  for beacons and schedule storage across Headquarters replicas.
+- Headquarters reconciles schedules and broadcasts but has zero signal
+  execution slots. Stations execute signals/beacons but do not reconcile them.
+- `draining` blocks new signal and beacon claims. `offline` is derived when the
+  heartbeat lease expires.
+- A scheduled timestamp is eligibility time, not a hard real-time start SLA.
+  Atomic occurrence claims prevent duplicate fires; queue and run leases
+  prevent duplicate ownership.
+
+---
+
 ## Quick Reference: Import Patterns
 
 ### Adapter subpath imports
@@ -2656,6 +2857,12 @@ import { EnvSqliteAdapter } from "station-adapter-sqlite/env";
 import { EnvPostgresAdapter } from "station-adapter-postgres/env";
 import { EnvMysqlAdapter } from "station-adapter-mysql/env";   // async: await EnvMysqlAdapter.create(...)
 import { EnvRedisAdapter } from "station-adapter-redis/env";
+
+// Station Network adapters (subpath)
+import { StationNetworkSqliteAdapter } from "station-adapter-sqlite/network";
+import { StationNetworkPostgresAdapter } from "station-adapter-postgres/network";
+import { StationNetworkMysqlAdapter } from "station-adapter-mysql/network"; // async .create(...)
+import { StationNetworkRedisAdapter } from "station-adapter-redis/network";
 
 // Tauri sidecar
 import { createTauriStation } from "station-tauri";

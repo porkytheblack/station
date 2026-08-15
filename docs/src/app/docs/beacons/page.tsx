@@ -247,6 +247,14 @@ export const webhookServer = beacon("webhook-server")
   .restart("always")
   .run(async (ctx) => { /* ... */ });`}</Code>
 
+      <h4><code>.placement({`{ labels }`})</code></h4>
+      <p>
+        In a <Link href="/docs/network">Station Network</Link>, restricts the
+        beacon to execution stations whose labels exactly match. A shared,
+        fenced instance lease ensures only one eligible station owns each
+        instance.
+      </p>
+
       <h4>
         <code>.run(handler)</code>
       </h4>
@@ -324,6 +332,11 @@ export const webhookServer = beacon("webhook-server")
             <td><code>ctx.heartbeat()</code></td>
             <td><code>() =&gt; void</code></td>
             <td>Report liveness. Required if you declared <code>.heartbeat()</code>.</td>
+          </tr>
+          <tr>
+            <td><code>ctx.expose(opts)</code></td>
+            <td><code>() =&gt; void</code></td>
+            <td>Advertise an HTTP/WebSocket protocol, port, and optional base path for Headquarters discovery and HTTP proxying.</td>
           </tr>
           <tr>
             <td><code>ctx.log(msg)</code></td>

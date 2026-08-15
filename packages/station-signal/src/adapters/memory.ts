@@ -4,6 +4,7 @@ import type {
   ListAllRunsOptions,
   ListRunsOptions,
   Run,
+  RunClaim,
   RunPatch,
   RunStatus,
   Step,
@@ -26,7 +27,10 @@ export class MemoryAdapter implements SignalQueueAdapter {
   }
 
   async addRun(run: Run): Promise<void> {
-    this.runs.set(run.id, run);
+    if (this.runs.has(run.id)) {
+      throw new Error(`Run with id "${run.id}" already exists`);
+    }
+    this.runs.set(run.id, { ...run });
     if (this.runs.size > this.maxRuns) {
       this.evictCompleted();
     }
@@ -96,6 +100,74 @@ export class MemoryAdapter implements SignalQueueAdapter {
         }
       }
     }
+  }
+
+  async claimRun(id: string, claim: RunClaim): Promise<Run | null> {
+    const run = this.runs.get(id);
+    const now = claim.claimedAt;
+    if (!run || run.status !== "pending" || (run.nextRunAt && run.nextRunAt > now)) return null;
+    Object.assign(run, claim, {
+      status: "running" as const,
+      startedAt: now,
+      lastRunAt: now,
+      attempts: run.attempts + 1,
+    });
+    return { ...run };
+  }
+
+  async cancelRun(id: string, completedAt: Date): Promise<boolean> {
+    const run = this.runs.get(id);
+    if (!run || (run.status !== "pending" && run.status !== "running")) return false;
+    Object.assign(run, {
+      status: "cancelled" as const,
+      completedAt,
+      leaseToken: undefined,
+      leaseExpiresAt: undefined,
+      claimedAt: undefined,
+    });
+    return true;
+  }
+
+  async renewRunLease(id: string, leaseToken: string, leaseExpiresAt: Date, now = new Date()): Promise<boolean> {
+    const run = this.runs.get(id);
+    if (!run || run.status !== "running" || run.leaseToken !== leaseToken
+      || !run.leaseExpiresAt || run.leaseExpiresAt <= now) return false;
+    run.leaseExpiresAt = leaseExpiresAt;
+    return true;
+  }
+
+  async updateClaimedRun(id: string, leaseToken: string, patch: RunPatch): Promise<boolean> {
+    const run = this.runs.get(id);
+    if (!run || run.status !== "running" || run.leaseToken !== leaseToken) return false;
+    await this.updateRun(id, patch);
+    return true;
+  }
+
+  async requeueExpiredRuns(now: Date): Promise<number> {
+    let recovered = 0;
+    for (const run of this.runs.values()) {
+      if (run.status !== "running" || !run.leaseExpiresAt || run.leaseExpiresAt > now) continue;
+      recovered++;
+      if (run.attempts >= run.maxAttempts) {
+        Object.assign(run, {
+          status: "failed" as const,
+          completedAt: now,
+          error: "Station lease expired and all attempts were exhausted",
+        });
+      } else {
+        Object.assign(run, {
+          status: "pending" as const,
+          startedAt: undefined,
+          lastRunAt: now,
+          error: "Station lease expired; run recovered for retry",
+        });
+      }
+      run.stationId = undefined;
+      run.leaseToken = undefined;
+      run.leaseExpiresAt = undefined;
+      run.claimedAt = undefined;
+    }
+    return recovered;
   }
 
   async listRuns(signalName: string, options?: ListRunsOptions): Promise<Run[]> {
@@ -201,8 +273,8 @@ export class MemoryAdapter implements SignalQueueAdapter {
   }
 
   async close(): Promise<void> {
-    this.runs.clear();
-    this.steps.clear();
+    // No resources to release. Preserve state when multiple in-process
+    // station clients share this adapter.
   }
 }
 

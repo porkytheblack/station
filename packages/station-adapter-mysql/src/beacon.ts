@@ -73,6 +73,8 @@ export class BeaconMysqlAdapter implements BeaconStateAdapter {
         next_restart_at    DATETIME(3),
         created_at         DATETIME(3) NOT NULL,
         updated_at         DATETIME(3) NOT NULL
+        ,station_id        VARCHAR(255)
+        ,exposure          TEXT
       )
     `);
     await pool.execute(`
@@ -88,6 +90,8 @@ export class BeaconMysqlAdapter implements BeaconStateAdapter {
       )
     `);
     await migrateToMultiInstance(pool, table, eventsTable);
+    await runIdempotentDdl((sql) => pool.execute(sql), `ALTER TABLE ${table} ADD COLUMN station_id VARCHAR(255)`);
+    await runIdempotentDdl((sql) => pool.execute(sql), `ALTER TABLE ${table} ADD COLUMN exposure TEXT`);
 
     await runIdempotentDdl(
       (sql) => pool.execute(sql),
@@ -110,8 +114,8 @@ export class BeaconMysqlAdapter implements BeaconStateAdapter {
       `INSERT INTO ${this.table}
         (id, beacon_name, label, origin, status, desired_state, incarnation, restart_count, pid, config,
          started_at, ready_at, last_heartbeat_at, last_exit_at, last_exit_reason,
-         last_error, next_restart_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         last_error, next_restart_at, created_at, updated_at, station_id, exposure)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          beacon_name = VALUES(beacon_name),
          label = VALUES(label),
@@ -130,7 +134,9 @@ export class BeaconMysqlAdapter implements BeaconStateAdapter {
          last_error = VALUES(last_error),
          next_restart_at = VALUES(next_restart_at),
          created_at = VALUES(created_at),
-         updated_at = VALUES(updated_at)`,
+         updated_at = VALUES(updated_at),
+         station_id = VALUES(station_id),
+         exposure = VALUES(exposure)`,
       [
         instance.id,
         instance.beaconName,
@@ -151,6 +157,8 @@ export class BeaconMysqlAdapter implements BeaconStateAdapter {
         dateToStr(instance.nextRestartAt),
         dateToStr(instance.createdAt),
         dateToStr(instance.updatedAt),
+        instance.stationId ?? null,
+        instance.exposure ?? null,
       ],
     );
   }
@@ -180,6 +188,8 @@ export class BeaconMysqlAdapter implements BeaconStateAdapter {
       lastError: { col: "last_error" },
       nextRestartAt: { col: "next_restart_at", date: true },
       updatedAt: { col: "updated_at", date: true },
+      stationId: { col: "station_id" },
+      exposure: { col: "exposure" },
     };
     const setClauses: string[] = [];
     const values: (string | number | null)[] = [];
@@ -354,6 +364,8 @@ function rowToInstance(row: Record<string, unknown>): BeaconInstance {
     lastExitReason: (row.last_exit_reason as BeaconInstance["lastExitReason"] | null) ?? undefined,
     lastError: (row.last_error as string | null) ?? undefined,
     nextRestartAt: toDate(row.next_restart_at),
+    stationId: (row.station_id as string | null) ?? undefined,
+    exposure: (row.exposure as string | null) ?? undefined,
     createdAt: toDate(row.created_at)!,
     updatedAt: toDate(row.updated_at)!,
   };

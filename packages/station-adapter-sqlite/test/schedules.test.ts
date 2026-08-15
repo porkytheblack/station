@@ -34,7 +34,7 @@ const fixture = (over: Partial<Schedule> = {}): Schedule => {
   };
 };
 
-test("add + get round-trips with all fields", async () => {
+test("add + get round-trips interval and cron policy fields", async () => {
   const { adapter, cleanup } = freshDb();
   try {
     await adapter.add(fixture({ input: { foo: 1 }, createdBy: "key_abc" }));
@@ -42,6 +42,17 @@ test("add + get round-trips with all fields", async () => {
     assert.equal(got?.target, "ping");
     assert.deepEqual(got?.input, { foo: 1 });
     assert.equal(got?.createdBy, "key_abc");
+    await adapter.add(fixture({
+      id: "cron", interval: undefined, cron: "0 17 * * *", timezone: "Africa/Nairobi",
+      overlapPolicy: "allow", misfirePolicy: "skip", misfireGraceMs: 5_000,
+    }));
+    const cron = await adapter.get("cron");
+    assert.equal(cron?.interval, undefined);
+    assert.equal(cron?.cron, "0 17 * * *");
+    assert.equal(cron?.timezone, "Africa/Nairobi");
+    assert.equal(cron?.overlapPolicy, "allow");
+    assert.equal(cron?.misfirePolicy, "skip");
+    assert.equal(cron?.misfireGraceMs, 5_000);
   } finally { cleanup(); }
 });
 
@@ -75,6 +86,17 @@ test("update applies a patch and bumps updated_at", async () => {
     const after = await adapter.get("s1");
     assert.equal(after?.interval, "1h");
     assert.ok(after!.updatedAt.getTime() > before.getTime());
+  } finally { cleanup(); }
+});
+
+test("update can switch an interval schedule to cron", async () => {
+  const { adapter, cleanup } = freshDb();
+  try {
+    await adapter.add(fixture());
+    await adapter.update("s1", { interval: undefined, cron: "0 17 * * *", timezone: "UTC" });
+    const after = await adapter.get("s1");
+    assert.equal(after?.interval, undefined);
+    assert.equal(after?.cron, "0 17 * * *");
   } finally { cleanup(); }
 });
 

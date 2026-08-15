@@ -32,8 +32,13 @@ interface Schedule {
   kind: ScheduleKind;
   /** signal name OR broadcast name OR dynamic broadcast name */
   target: string;
-  /** parsed by station-signal's parseInterval — "5m", "1h", "100ms", "1w", … */
-  interval: string;
+  /** Exactly one timing mode is set. */
+  interval?: string;
+  cron?: string;             // five-field cron
+  timezone?: string;         // IANA name, default UTC
+  overlapPolicy?: "skip" | "allow";
+  misfirePolicy?: "skip" | "fire-once" | "catch-up";
+  misfireGraceMs?: number;
   input?: unknown;
   enabled: boolean;
   nextRunAt: Date;
@@ -81,7 +86,9 @@ const reconciler = new ScheduleReconciler({
   adapter: scheduleAdapter,
   kinds: ["signal"], // this reconciler only handles signal schedules
   parseInterval,
-  triggerFn: (s) => signalRunner.triggerSignal(s.target, s.input ?? {}),
+  triggerFn: (s, scheduledFor) => signalRunner.triggerSignal(
+    s.target, s.input ?? {}, { id: s.id, scheduledFor },
+  ),
   hasPendingOrRunning: (s) => signalRunner.hasPendingOrRunningForSignal(s.target),
   onError: (err, schedule) => console.error("schedule error:", err, schedule?.id),
 });
@@ -95,8 +102,8 @@ await reconciler.tick();
 1. Lists schedules with `enabled = true` and `nextRunAt <= now`.
 2. For each schedule whose kind this reconciler handles:
    1. Calls `claimDue(id, currentNextRunAt, newNextRunAt)`. If another runner already claimed, bails — at-most-once.
-   2. Optionally checks `hasPendingOrRunning` to skip overlapping runs (records `lastRunStatus = "skipped:overlap"`).
-   3. Calls `triggerFn(schedule)`.
+   2. Applies the schedule's misfire and overlap policy.
+   3. Calls `triggerFn(schedule, scheduledFor)`.
    4. Records `lastRunAt`, `lastRunId`, and `lastRunStatus` (`"triggered"` or `"errored"`).
 
 If `triggerFn` throws, the schedule still has its `nextRunAt` advanced (via the claim) and records an error status — schedules can never busy-loop on a recurring failure.

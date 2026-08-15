@@ -10,6 +10,7 @@ export interface BeaconIPCMessage {
     | "beacon:started"
     | "beacon:ready"
     | "beacon:heartbeat"
+    | "beacon:exposed"
     | "beacon:log"
     | "beacon:stopping"
     | "beacon:error";

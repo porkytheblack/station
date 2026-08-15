@@ -1026,6 +1026,75 @@ pre .number { color: var(--patina-pale); }
   display: block;
 }
 
+/* ── STATION NETWORK SECTION ── */
+
+.landing-network {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 7rem 3rem;
+  display: grid;
+  grid-template-columns: minmax(0, 0.82fr) minmax(0, 1.18fr);
+  gap: 4rem;
+  align-items: center;
+}
+
+.landing-network-copy .section-heading {
+  margin-bottom: 1.5rem;
+}
+
+.landing-network-copy p {
+  max-width: 54ch;
+  margin-bottom: 2rem;
+  color: var(--wire);
+  font-family: var(--font-body);
+  line-height: 1.75;
+}
+
+.landing-network-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+}
+
+.landing-network-actions .btn-primary {
+  border-bottom: none;
+}
+
+.landing-network-visual {
+  position: relative;
+  background: var(--always-dark);
+  padding: 0.75rem 0.75rem 2.25rem;
+  box-shadow: 18px 18px 0 var(--concrete-dark);
+}
+
+.landing-network-visual::before {
+  content: "HEADQUARTERS / RELEASE FLEET";
+  display: block;
+  padding: 0 0 0.65rem;
+  color: var(--on-dark-text-hint);
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.18em;
+}
+
+.landing-network-visual img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--on-dark-border);
+}
+
+.landing-network-caption {
+  position: absolute;
+  left: 0.75rem;
+  bottom: 0.55rem;
+  color: var(--on-dark-text-faint);
+  font-family: var(--font-mono);
+  font-size: 0.52rem;
+  letter-spacing: 0.12em;
+}
+
 .code-line { display: block; }
 .code-comment { color: #5A5A5E; }
 .code-keyword { color: #C77830; }
@@ -1764,6 +1833,7 @@ pre .number { color: var(--patina-pale); }
   .letter-use { grid-template-columns: 20px 140px 1fr; }
   .landscape-cell-signal { border-left: none; border-top: 2px solid var(--rust); }
   .landing-code-inner { grid-template-columns: 1fr; gap: 3rem; }
+  .landing-network { grid-template-columns: 1fr; gap: 3rem; padding: 5rem 1.5rem; }
   .proof-grid { grid-template-columns: 1fr; }
 
   /* Section spacing — reduce for tablet */
@@ -1858,6 +1928,8 @@ pre .number { color: var(--patina-pale); }
   .landing-letter,
   .landing-landscape { padding: 3rem 1rem; }
   .landing-code-section { padding: 3rem 1rem; }
+  .landing-network { padding: 3rem 1rem; gap: 2rem; }
+  .landing-network-visual { box-shadow: 8px 8px 0 var(--concrete-dark); }
   .landing-cta { padding: 4rem 1rem; }
   .landing-hero-left { padding: 3rem 1rem 2.5rem; }
   .landing-footer { padding: 1.5rem 1rem; }

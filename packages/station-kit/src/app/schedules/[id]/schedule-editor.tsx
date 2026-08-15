@@ -33,7 +33,12 @@ export function ScheduleEditor({ id }: { id: string }) {
         setValue({
           kind: res.data.kind,
           target: res.data.target,
-          interval: res.data.interval,
+          interval: res.data.interval ?? "5m",
+          timing: res.data.cron ? "cron" : "interval",
+          cron: res.data.cron ?? "0 17 * * *",
+          timezone: res.data.timezone ?? "UTC",
+          overlapPolicy: res.data.overlapPolicy ?? "skip",
+          misfirePolicy: res.data.misfirePolicy ?? "fire-once",
           input: res.data.input !== undefined ? JSON.stringify(res.data.input, null, 2) : "{}",
           enabled: res.data.enabled,
         });
@@ -59,7 +64,11 @@ export function ScheduleEditor({ id }: { id: string }) {
     setBusy(true);
     try {
       const res = await api.updateSchedule(id, {
-        interval: value.interval,
+        interval: value.timing === "interval" ? value.interval : undefined,
+        cron: value.timing === "cron" ? value.cron : undefined,
+        timezone: value.timing === "cron" ? value.timezone : undefined,
+        overlapPolicy: value.overlapPolicy,
+        misfirePolicy: value.misfirePolicy,
         input: inputParsed,
         enabled: value.enabled,
       });

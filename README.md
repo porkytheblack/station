@@ -8,6 +8,8 @@ Type-safe background jobs, recurring tasks, and DAG workflows for TypeScript.
 - **Broadcasts** — DAG workflow orchestration with conditional branching, fan-out/fan-in, and failure policies
 - **Beacons** — Long-running, supervised processes (servers, pollers, clients) with restart policies, exponential backoff, heartbeat stall detection, and graceful shutdown
 - **Recurring jobs** — Simple interval syntax (`"every 5m"`, `"every 1h"`)
+- **Station Networks** — Scale stateless work across a fleet with atomic leases, per-station and fleet-wide concurrency, placement labels, draining, and a Headquarters control plane
+- **Calendar schedules** — Five-field cron expressions with IANA timezones, overlap policy, and explicit misfire handling
 - **Four adapter backends** — SQLite, PostgreSQL, MySQL, Redis (or bring your own)
 - **`station-kit`** — The entry point: one config file and `npx station` wire the runners, a real-time dashboard with auth and WebSocket updates, and an authenticated REST API
 - **Remote triggers** — `configure({ endpoint, apiKey })` to trigger jobs from any service over HTTP
@@ -77,6 +79,8 @@ await sendEmail.trigger({
 | [`station-broadcast`](./packages/station-broadcast) | DAG workflow orchestration for signals |
 | [`station-beacon`](./packages/station-beacon) | Long-running supervised processes — servers, pollers, clients |
 | [`station-env`](./packages/station-env) | Runtime-managed environment variables injected into signal/beacon runs |
+| [`station-schedules`](./packages/station-schedules) | Runtime interval/cron schedules with atomic occurrence claims |
+| [`station-network`](./packages/station-network) | Fleet membership, capacity reporting, draining, and distributed controller leases |
 | [`station-adapter-sqlite`](./packages/station-adapter-sqlite) | SQLite adapter (better-sqlite3) |
 | [`station-adapter-postgres`](./packages/station-adapter-postgres) | PostgreSQL adapter (pg) |
 | [`station-adapter-mysql`](./packages/station-adapter-mysql) | MySQL adapter (mysql2) |
@@ -94,6 +98,28 @@ npx skills add porkytheblack/station
 ```
 
 Teaches Claude how to build with every Station package. Covers signals, broadcasts, adapters, runners, subscribers, remote triggers, and dashboard configuration.
+
+## Releasing to npm
+
+All public packages use one version and can be validated, built, and published
+in dependency order with a single command:
+
+```bash
+pnpm release:npm
+```
+
+The command refuses a dirty worktree, verifies that every package has the same
+version and is not already on npm, runs the workspace typecheck and test suite,
+then builds and publishes each package sequentially. Preview the complete flow
+without uploading anything:
+
+```bash
+pnpm release:npm:dry-run
+```
+
+If npm fails after publishing only part of the package set, resume safely with
+`pnpm release:npm -- --resume`; exact versions already present on npm are
+skipped. Use `--tag next` to publish a prerelease dist-tag instead of `latest`.
 
 ## License
 

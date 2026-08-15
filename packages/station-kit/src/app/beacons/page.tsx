@@ -95,9 +95,9 @@ export default function BeaconsPage() {
                 )}
               </td>
               <td className="mono">{b.name}</td>
-              <td style={{ color: "var(--muted)", fontSize: "0.8125rem" }}>{b.mode}</td>
+              <td style={{ color: "var(--muted)", fontSize: "0.8125rem" }}>{b.mode ?? "—"}</td>
               <td className="mono" style={{ color: "var(--muted)", fontSize: "0.8125rem" }}>
-                {b.startMode}
+                {b.startMode ?? "—"}
               </td>
               <td className="mono" style={{ fontSize: "0.8125rem" }}>{b.instanceCount}</td>
               <td className="mono" style={{ fontSize: "0.8125rem" }}>{b.runningCount}</td>

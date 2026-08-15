@@ -7,6 +7,11 @@ export interface ScheduleFormValue {
   kind: ScheduleKind;
   target: string;
   interval: string;
+  timing: "interval" | "cron";
+  cron: string;
+  timezone: string;
+  overlapPolicy: "allow" | "skip";
+  misfirePolicy: "skip" | "fire-once" | "catch-up";
   input: string;
   enabled: boolean;
 }
@@ -79,7 +84,12 @@ export function ScheduleForm({ value, onChange, locked }: ScheduleFormProps) {
         </datalist>
       </Field>
 
-      <Field label="Interval" hint='e.g. "30s", "5m", "1h", "1d"'>
+      <Field label="Timing">
+        <select value={value.timing} onChange={(e) => onChange({...value,timing:e.target.value as "interval"|"cron"})} className="mono" style={selectStyle}>
+          <option value="interval">Interval</option><option value="cron">Cron</option>
+        </select>
+      </Field>
+      {value.timing === "interval" ? <Field label="Interval" hint='e.g. "30s", "5m", "1h", "1d"'>
         <input
           className="mono"
           value={value.interval}
@@ -87,7 +97,13 @@ export function ScheduleForm({ value, onChange, locked }: ScheduleFormProps) {
           placeholder="5m"
           style={inputStyle}
         />
-      </Field>
+      </Field> : <>
+        <Field label="Cron" hint="minute hour day month weekday"><input className="mono" value={value.cron} onChange={(e)=>onChange({...value,cron:e.target.value})} placeholder="0 17 * * *" style={inputStyle}/></Field>
+        <Field label="Time zone" hint="IANA"><input className="mono" value={value.timezone} onChange={(e)=>onChange({...value,timezone:e.target.value})} placeholder="Africa/Nairobi" style={inputStyle}/></Field>
+      </>}
+
+      <Field label="Overlap policy"><select className="mono" value={value.overlapPolicy} onChange={(e)=>onChange({...value,overlapPolicy:e.target.value as ScheduleFormValue["overlapPolicy"]})} style={selectStyle}><option value="skip">skip</option><option value="allow">allow</option></select></Field>
+      <Field label="Misfire policy"><select className="mono" value={value.misfirePolicy} onChange={(e)=>onChange({...value,misfirePolicy:e.target.value as ScheduleFormValue["misfirePolicy"]})} style={selectStyle}><option value="fire-once">fire-once</option><option value="skip">skip</option><option value="catch-up">catch-up</option></select></Field>
 
       <Field label="Input (JSON)">
         <textarea

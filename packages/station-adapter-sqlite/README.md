@@ -45,9 +45,9 @@ configure({ adapter: new SqliteAdapter() });
 
 ```ts
 interface SqliteAdapterOptions {
-  /** Path to the SQLite database file. Defaults to "station-signal.db". */
+  /** Path to the SQLite database file. Defaults to "station.db". */
   dbPath?: string;
-  /** Table name. Defaults to "entries". */
+  /** Table name. Defaults to "runs". */
   tableName?: string;
 }
 ```

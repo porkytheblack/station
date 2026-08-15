@@ -63,6 +63,8 @@ export class BeaconPostgresAdapter implements BeaconStateAdapter {
         next_restart_at    TIMESTAMPTZ,
         created_at         TIMESTAMPTZ NOT NULL,
         updated_at         TIMESTAMPTZ NOT NULL
+        ,station_id        TEXT
+        ,exposure          TEXT
       )
     `);
     await this.pool.query(`
@@ -78,6 +80,8 @@ export class BeaconPostgresAdapter implements BeaconStateAdapter {
       )
     `);
     await this.migrateToMultiInstance();
+    await this.pool.query(`ALTER TABLE ${this.table} ADD COLUMN IF NOT EXISTS station_id TEXT`);
+    await this.pool.query(`ALTER TABLE ${this.table} ADD COLUMN IF NOT EXISTS exposure TEXT`);
     await this.pool.query(`
       CREATE INDEX IF NOT EXISTS idx_${this.eventsTable}_instance
         ON ${this.eventsTable} (instance_id, seq)
@@ -140,8 +144,8 @@ export class BeaconPostgresAdapter implements BeaconStateAdapter {
       `INSERT INTO ${this.table}
         (id, beacon_name, label, origin, status, desired_state, incarnation, restart_count, pid, config,
          started_at, ready_at, last_heartbeat_at, last_exit_at, last_exit_reason,
-         last_error, next_restart_at, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+         last_error, next_restart_at, created_at, updated_at, station_id, exposure)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
        ON CONFLICT (id) DO UPDATE SET
          beacon_name = EXCLUDED.beacon_name,
          label = EXCLUDED.label,
@@ -160,7 +164,9 @@ export class BeaconPostgresAdapter implements BeaconStateAdapter {
          last_error = EXCLUDED.last_error,
          next_restart_at = EXCLUDED.next_restart_at,
          created_at = EXCLUDED.created_at,
-         updated_at = EXCLUDED.updated_at`,
+         updated_at = EXCLUDED.updated_at,
+         station_id = EXCLUDED.station_id,
+         exposure = EXCLUDED.exposure`,
       [
         instance.id,
         instance.beaconName,
@@ -181,6 +187,8 @@ export class BeaconPostgresAdapter implements BeaconStateAdapter {
         instance.nextRestartAt ?? null,
         instance.createdAt,
         instance.updatedAt,
+        instance.stationId ?? null,
+        instance.exposure ?? null,
       ],
     );
   }
@@ -209,6 +217,8 @@ export class BeaconPostgresAdapter implements BeaconStateAdapter {
       lastError: "last_error",
       nextRestartAt: "next_restart_at",
       updatedAt: "updated_at",
+      stationId: "station_id",
+      exposure: "exposure",
     };
     const setClauses: string[] = [];
     const values: unknown[] = [];
@@ -337,6 +347,8 @@ function rowToInstance(row: Record<string, unknown>): BeaconInstance {
     lastExitReason: (row.last_exit_reason as BeaconInstance["lastExitReason"] | null) ?? undefined,
     lastError: (row.last_error as string | null) ?? undefined,
     nextRestartAt: (row.next_restart_at as Date | null) ?? undefined,
+    stationId: (row.station_id as string | null) ?? undefined,
+    exposure: (row.exposure as string | null) ?? undefined,
     createdAt: row.created_at as Date,
     updatedAt: row.updated_at as Date,
   };

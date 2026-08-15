@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import mysql from "mysql2/promise";
 import type { Pool, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 export type { Pool as MysqlPool } from "mysql2/promise";
-import type { SerializableAdapter, AdapterManifest, Run, RunPatch, RunStatus, Step, StepPatch, ListRunsOptions, ListAllRunsOptions } from "station-signal";
+import type { SerializableAdapter, AdapterManifest, Run, RunClaim, RunPatch, RunStatus, Step, StepPatch, ListRunsOptions, ListAllRunsOptions } from "station-signal";
 import { registerAdapter } from "station-signal";
 
 import { validateTableName, dateToStr, createColumnMapper, rowToObject, runIdempotentDdl } from "./shared.js";
@@ -19,8 +19,22 @@ const { toColumn, toField } = createColumnMapper({
   startedAt: "started_at",
   completedAt: "completed_at",
   createdAt: "created_at",
+  stationId: "station_id",
+  leaseToken: "lease_token",
+  leaseExpiresAt: "lease_expires_at",
+  claimedAt: "claimed_at",
+  scheduleId: "schedule_id",
+  scheduledFor: "scheduled_for",
+  idempotencyKey: "idempotency_key",
 });
-const DATE_FIELDS = new Set(["nextRunAt", "lastRunAt", "startedAt", "completedAt", "createdAt"]);
+const DATE_FIELDS = new Set(["nextRunAt", "lastRunAt", "startedAt", "completedAt", "createdAt", "leaseExpiresAt", "claimedAt", "scheduledFor"]);
+
+const RUN_PATCH_KEYS = new Set([
+  "input", "output", "error", "status", "attempts", "maxAttempts",
+  "timeout", "interval", "nextRunAt", "lastRunAt", "startedAt", "completedAt",
+  "stationId", "leaseToken", "leaseExpiresAt", "claimedAt", "scheduleId",
+  "scheduledFor", "idempotencyKey",
+]);
 
 const { toColumn: toStepColumn, toField: toStepField } = createColumnMapper({
   runId: "run_id",
@@ -60,6 +74,121 @@ function buildLimitOffset(
 }
 function rowToStep(row: Record<string, unknown>): Step {
   return rowToObject<Step>(row, toStepField, STEP_DATE_FIELDS);
+}
+
+async function ensureRunLeaseColumns(pool: Pool, tableName: string): Promise<void> {
+  const columns = [
+    "station_id VARCHAR(255)",
+    "lease_token VARCHAR(64)",
+    "lease_expires_at DATETIME(3)",
+    "claimed_at DATETIME(3)",
+    "schedule_id VARCHAR(255)",
+    "scheduled_for DATETIME(3)",
+    "idempotency_key VARCHAR(255)",
+  ];
+  for (const column of columns) {
+    await runIdempotentDdl(
+      (sql) => pool.execute(sql),
+      `ALTER TABLE ${tableName} ADD COLUMN ${column}`,
+    );
+  }
+}
+
+async function claimMysqlRun(
+  pool: Pool,
+  tableName: string,
+  id: string,
+  claim: RunClaim,
+): Promise<Run | null> {
+  const claimedAt = dateToStr(claim.claimedAt);
+  const [result] = await pool.execute<ResultSetHeader>(
+    `UPDATE ${tableName}
+     SET status = 'running', station_id = ?, lease_token = ?, lease_expires_at = ?,
+         claimed_at = ?, started_at = ?, last_run_at = ?, attempts = attempts + 1
+     WHERE id = ? AND status = 'pending'
+       AND (next_run_at IS NULL OR next_run_at <= ?)`,
+    [claim.stationId, claim.leaseToken, dateToStr(claim.leaseExpiresAt), claimedAt,
+      claimedAt, claimedAt, id, claimedAt],
+  );
+  if (result.affectedRows !== 1) return null;
+  const [rows] = await pool.execute<RowDataPacket[]>(`SELECT * FROM ${tableName} WHERE id = ?`, [id]);
+  return rows.length > 0 ? rowToRun(rows[0] as Record<string, unknown>) : null;
+}
+
+async function renewMysqlRunLease(
+  pool: Pool,
+  tableName: string,
+  id: string,
+  leaseToken: string,
+  leaseExpiresAt: Date,
+  now: Date,
+): Promise<boolean> {
+  const [result] = await pool.execute<ResultSetHeader>(
+    `UPDATE ${tableName} SET lease_expires_at = ?
+     WHERE id = ? AND status = 'running' AND lease_token = ? AND lease_expires_at > ?`,
+    [dateToStr(leaseExpiresAt), id, leaseToken, dateToStr(now)],
+  );
+  return result.affectedRows === 1;
+}
+
+async function cancelMysqlRun(
+  pool: Pool,
+  tableName: string,
+  id: string,
+  completedAt: Date,
+): Promise<boolean> {
+  const [result] = await pool.execute<ResultSetHeader>(
+    `UPDATE ${tableName}
+     SET status='cancelled', completed_at=?, lease_token=NULL, lease_expires_at=NULL, claimed_at=NULL
+     WHERE id=? AND status IN ('pending','running')`,
+    [dateToStr(completedAt), id],
+  );
+  return result.affectedRows === 1;
+}
+
+async function updateClaimedMysqlRun(
+  pool: Pool,
+  tableName: string,
+  id: string,
+  leaseToken: string,
+  patch: RunPatch,
+): Promise<boolean> {
+  const setClauses: string[] = [];
+  const values: (string | number | null)[] = [];
+  for (const [key, value] of Object.entries(patch)) {
+    if (!RUN_PATCH_KEYS.has(key)) continue;
+    const col = toColumn(key);
+    setClauses.push(`${col === "interval" ? "`interval`" : col} = ?`);
+    values.push(value === undefined ? null : DATE_FIELDS.has(key) ? dateToStr(value) : value as string | number);
+  }
+  if (setClauses.length === 0) return false;
+  values.push(id, leaseToken);
+  const [result] = await pool.execute<ResultSetHeader>(
+    `UPDATE ${tableName} SET ${setClauses.join(", ")} WHERE id = ? AND status = 'running' AND lease_token = ?`,
+    values,
+  );
+  return result.affectedRows === 1;
+}
+
+async function requeueExpiredMysqlRuns(pool: Pool, tableName: string, now: Date): Promise<number> {
+  const stamp = dateToStr(now);
+  const [failed] = await pool.execute<ResultSetHeader>(
+    `UPDATE ${tableName}
+     SET status = 'failed', completed_at = ?,
+         error = 'Station lease expired and all attempts were exhausted',
+         lease_token = NULL, lease_expires_at = NULL
+     WHERE status = 'running' AND lease_expires_at <= ? AND attempts >= max_attempts`,
+    [stamp, stamp],
+  );
+  const [pending] = await pool.execute<ResultSetHeader>(
+    `UPDATE ${tableName}
+     SET status = 'pending', started_at = NULL, last_run_at = ?,
+         error = 'Station lease expired; run recovered for retry',
+         station_id = NULL, lease_token = NULL, lease_expires_at = NULL, claimed_at = NULL
+     WHERE status = 'running' AND lease_expires_at <= ? AND attempts < max_attempts`,
+    [stamp, stamp],
+  );
+  return failed.affectedRows + pending.affectedRows;
 }
 
 // ── Options ────────────────────────────────────────────────────────────
@@ -133,9 +262,17 @@ export class MysqlAdapter implements SerializableAdapter {
         completed_at    DATETIME(3),
         created_at      DATETIME(3) NOT NULL,
         output          TEXT,
-        error           TEXT
+        error           TEXT,
+        station_id      VARCHAR(255),
+        lease_token     VARCHAR(64),
+        lease_expires_at DATETIME(3),
+        claimed_at      DATETIME(3),
+        schedule_id     VARCHAR(255),
+        scheduled_for   DATETIME(3),
+        idempotency_key VARCHAR(255)
       )
     `);
+    await ensureRunLeaseColumns(pool, tableName);
 
     // Indexes for the two hot queries (getRunsDue / getRunsRunning).
     // Stock MySQL doesn't support CREATE INDEX IF NOT EXISTS; the helper
@@ -148,6 +285,10 @@ export class MysqlAdapter implements SerializableAdapter {
     await runIdempotentDdl(
       (sql) => pool.execute(sql),
       `CREATE INDEX idx_${tableName}_signal_name ON ${tableName} (signal_name)`,
+    );
+    await runIdempotentDdl(
+      (sql) => pool.execute(sql),
+      `CREATE UNIQUE INDEX idx_${tableName}_idempotency_key ON ${tableName} (idempotency_key)`,
     );
 
     // Steps table with foreign key cascade
@@ -198,8 +339,9 @@ export class MysqlAdapter implements SerializableAdapter {
       `INSERT INTO ${this.tableName}
         (id, signal_name, kind, input, status, attempts, max_attempts,
          timeout, \`interval\`, next_run_at, last_run_at, started_at,
-         completed_at, created_at, output, error)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         completed_at, created_at, output, error, station_id, lease_token,
+         lease_expires_at, claimed_at, schedule_id, scheduled_for, idempotency_key)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         run.id,
         run.signalName,
@@ -217,6 +359,13 @@ export class MysqlAdapter implements SerializableAdapter {
         dateToStr(run.createdAt),
         run.output ?? null,
         run.error ?? null,
+        run.stationId ?? null,
+        run.leaseToken ?? null,
+        dateToStr(run.leaseExpiresAt),
+        dateToStr(run.claimedAt),
+        run.scheduleId ?? null,
+        dateToStr(run.scheduledFor),
+        run.idempotencyKey ?? null,
       ],
     );
   }
@@ -260,17 +409,12 @@ export class MysqlAdapter implements SerializableAdapter {
   }
 
   /** Allowed RunPatch keys — whitelist to prevent injection via unexpected keys. */
-  private static readonly RUN_PATCH_KEYS = new Set([
-    "input", "output", "error", "status", "attempts", "maxAttempts",
-    "timeout", "interval", "nextRunAt", "lastRunAt", "startedAt", "completedAt",
-  ]);
-
   async updateRun(id: string, patch: RunPatch): Promise<void> {
     const setClauses: string[] = [];
     const values: (string | number | null)[] = [];
 
     for (const [key, value] of Object.entries(patch)) {
-      if (!MysqlAdapter.RUN_PATCH_KEYS.has(key)) continue;
+      if (!RUN_PATCH_KEYS.has(key)) continue;
       const col = toColumn(key);
       // "interval" is a MySQL reserved word, quote it
       const quotedCol = col === "interval" ? "`interval`" : col;
@@ -291,6 +435,26 @@ export class MysqlAdapter implements SerializableAdapter {
       `UPDATE ${this.tableName} SET ${setClauses.join(", ")} WHERE id = ?`,
       values,
     );
+  }
+
+  async claimRun(id: string, claim: RunClaim): Promise<Run | null> {
+    return claimMysqlRun(this.pool, this.tableName, id, claim);
+  }
+
+  async cancelRun(id: string, completedAt: Date): Promise<boolean> {
+    return cancelMysqlRun(this.pool, this.tableName, id, completedAt);
+  }
+
+  async renewRunLease(id: string, leaseToken: string, leaseExpiresAt: Date, now = new Date()): Promise<boolean> {
+    return renewMysqlRunLease(this.pool, this.tableName, id, leaseToken, leaseExpiresAt, now);
+  }
+
+  async updateClaimedRun(id: string, leaseToken: string, patch: RunPatch): Promise<boolean> {
+    return updateClaimedMysqlRun(this.pool, this.tableName, id, leaseToken, patch);
+  }
+
+  async requeueExpiredRuns(now: Date): Promise<number> {
+    return requeueExpiredMysqlRuns(this.pool, this.tableName, now);
   }
 
   async listRuns(signalName: string, options?: ListRunsOptions): Promise<Run[]> {
@@ -519,9 +683,17 @@ async function initializeTables(pool: Pool, tableName: string, stepsTable: strin
       completed_at    DATETIME(3),
       created_at      DATETIME(3) NOT NULL,
       output          TEXT,
-      error           TEXT
+      error           TEXT,
+      station_id      VARCHAR(255),
+      lease_token     VARCHAR(64),
+      lease_expires_at DATETIME(3),
+      claimed_at      DATETIME(3),
+      schedule_id     VARCHAR(255),
+      scheduled_for   DATETIME(3),
+      idempotency_key VARCHAR(255)
     )
   `);
+  await ensureRunLeaseColumns(pool, tableName);
 
   // Stock MySQL doesn't support CREATE INDEX IF NOT EXISTS; the helper
   // turns the duplicate-name error into a no-op.
@@ -533,6 +705,10 @@ async function initializeTables(pool: Pool, tableName: string, stepsTable: strin
   await runIdempotentDdl(
     (sql) => pool.execute(sql),
     `CREATE INDEX idx_${tableName}_signal_name ON ${tableName} (signal_name)`,
+  );
+  await runIdempotentDdl(
+    (sql) => pool.execute(sql),
+    `CREATE UNIQUE INDEX idx_${tableName}_idempotency_key ON ${tableName} (idempotency_key)`,
   );
 
   await pool.execute(`
@@ -601,14 +777,18 @@ class LazyMysqlAdapter implements SerializableAdapter {
       `INSERT INTO ${this.tableName}
         (id, signal_name, kind, input, status, attempts, max_attempts,
          timeout, \`interval\`, next_run_at, last_run_at, started_at,
-         completed_at, created_at, output, error)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         completed_at, created_at, output, error, station_id, lease_token,
+         lease_expires_at, claimed_at, schedule_id, scheduled_for, idempotency_key)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         run.id, run.signalName, run.kind, run.input, run.status, run.attempts,
         run.maxAttempts, run.timeout, run.interval ?? null,
         dateToStr(run.nextRunAt), dateToStr(run.lastRunAt),
         dateToStr(run.startedAt), dateToStr(run.completedAt),
         dateToStr(run.createdAt), run.output ?? null, run.error ?? null,
+        run.stationId ?? null, run.leaseToken ?? null,
+        dateToStr(run.leaseExpiresAt), dateToStr(run.claimedAt),
+        run.scheduleId ?? null, dateToStr(run.scheduledFor), run.idempotencyKey ?? null,
       ],
     );
   }
@@ -652,18 +832,13 @@ class LazyMysqlAdapter implements SerializableAdapter {
     return rowToRun(rows[0] as Record<string, unknown>);
   }
 
-  private static readonly RUN_PATCH_KEYS = new Set([
-    "input", "output", "error", "status", "attempts", "maxAttempts",
-    "timeout", "interval", "nextRunAt", "lastRunAt", "startedAt", "completedAt",
-  ]);
-
   async updateRun(id: string, patch: RunPatch): Promise<void> {
     await this.ready();
     const setClauses: string[] = [];
     const values: (string | number | null)[] = [];
 
     for (const [key, value] of Object.entries(patch)) {
-      if (!LazyMysqlAdapter.RUN_PATCH_KEYS.has(key)) continue;
+      if (!RUN_PATCH_KEYS.has(key)) continue;
       const col = toColumn(key);
       const quotedCol = col === "interval" ? "`interval`" : col;
       setClauses.push(`${quotedCol} = ?`);
@@ -682,6 +857,31 @@ class LazyMysqlAdapter implements SerializableAdapter {
       `UPDATE ${this.tableName} SET ${setClauses.join(", ")} WHERE id = ?`,
       values,
     );
+  }
+
+  async claimRun(id: string, claim: RunClaim): Promise<Run | null> {
+    await this.ready();
+    return claimMysqlRun(this.pool, this.tableName, id, claim);
+  }
+
+  async cancelRun(id: string, completedAt: Date): Promise<boolean> {
+    await this.ready();
+    return cancelMysqlRun(this.pool, this.tableName, id, completedAt);
+  }
+
+  async renewRunLease(id: string, leaseToken: string, leaseExpiresAt: Date, now = new Date()): Promise<boolean> {
+    await this.ready();
+    return renewMysqlRunLease(this.pool, this.tableName, id, leaseToken, leaseExpiresAt, now);
+  }
+
+  async updateClaimedRun(id: string, leaseToken: string, patch: RunPatch): Promise<boolean> {
+    await this.ready();
+    return updateClaimedMysqlRun(this.pool, this.tableName, id, leaseToken, patch);
+  }
+
+  async requeueExpiredRuns(now: Date): Promise<number> {
+    await this.ready();
+    return requeueExpiredMysqlRuns(this.pool, this.tableName, now);
   }
 
   async listRuns(signalName: string, options?: ListRunsOptions): Promise<Run[]> {

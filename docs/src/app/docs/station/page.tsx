@@ -33,9 +33,9 @@ export default function StationPage() {
         </li>
       </ul>
       <p>
-        The API server runs on the configured port (default 4400). The Next.js
-        frontend runs on port + 1 (default 4401). Both start automatically
-        when you launch Station.
+        The API and dashboard share the configured public Station address
+        (port 4400 by default). Station manages the internal frontend process
+        automatically when you launch it.
       </p>
 
       <hr className="divider" />
@@ -70,6 +70,12 @@ export default defineConfig({
         autocompletion. It is a pass-through function — it returns the object
         unchanged.
       </p>
+      <p>
+        The default role is <code>standalone</code>. To run a multi-machine
+        control plane, configure <code>role: &quot;headquarters&quot;</code> or
+        <code>role: &quot;station&quot;</code> plus a shared <code>network.adapter</code>.
+        See <Link href="/docs/network">Station Networks</Link>.
+      </p>
 
       <h4>Config options</h4>
       <table className="api-table">
@@ -83,12 +89,23 @@ export default defineConfig({
         </thead>
         <tbody>
           <tr>
+            <td><code>role</code></td>
+            <td><code>{`"standalone" | "headquarters" | "station"`}</code></td>
+            <td><code>{`"standalone"`}</code></td>
+            <td>Selects the combined, control-plane, or execution-plane runtime.</td>
+          </tr>
+          <tr>
+            <td><code>network</code></td>
+            <td><code>StationNetworkConfig</code></td>
+            <td><code>{`{ id: "default", ... }`}</code></td>
+            <td>Fleet id, stable station id/name, durable adapter, placement labels, public endpoint, heartbeat cadence, and lease duration.</td>
+          </tr>
+          <tr>
             <td><code>port</code></td>
             <td><code>number</code></td>
             <td><code>4400</code></td>
             <td>
-              HTTP port for the API server. The Next.js UI runs
-              on <code>port + 1</code>.
+              Public HTTP port for both the API and dashboard.
             </td>
           </tr>
           <tr>

@@ -1,0 +1,19 @@
+{
+  "name": "example-16-station-network",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "hq": "station --config station.hq.config.ts --no-open",
+    "worker": "station --config station.worker.config.ts --no-open"
+  },
+  "dependencies": {
+    "station-adapter-sqlite": "workspace:*",
+    "station-beacon": "workspace:*",
+    "station-broadcast": "workspace:*",
+    "station-kit": "workspace:*",
+    "station-signal": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0"
+  }
+}

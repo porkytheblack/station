@@ -87,7 +87,7 @@ export function dateToScore(value: Date | undefined | null): number {
 // Run serialization
 // ---------------------------------------------------------------------------
 
-const RUN_DATE_FIELDS = new Set(["nextRunAt", "lastRunAt", "startedAt", "completedAt", "createdAt"]);
+const RUN_DATE_FIELDS = new Set(["nextRunAt", "lastRunAt", "startedAt", "completedAt", "createdAt", "leaseExpiresAt", "claimedAt", "scheduledFor"]);
 const RUN_NUMBER_FIELDS = new Set(["attempts", "maxAttempts", "timeout"]);
 
 /** Convert a Run object to a flat string record for HSET. Omits undefined fields. */
@@ -259,6 +259,8 @@ export function patchToHashArgs(
 export const RUN_PATCH_KEYS = new Set([
   "input", "output", "error", "status", "attempts", "maxAttempts",
   "timeout", "interval", "nextRunAt", "lastRunAt", "startedAt", "completedAt",
+  "stationId", "leaseToken", "leaseExpiresAt", "claimedAt", "scheduleId",
+  "scheduledFor", "idempotencyKey",
 ]);
 
 /** Allowed keys for Step patches. */

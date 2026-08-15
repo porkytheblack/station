@@ -56,8 +56,16 @@ export class ScheduleMysqlAdapter implements ScheduleAdapter {
         created_at      DATETIME(3) NOT NULL,
         updated_at      DATETIME(3) NOT NULL,
         created_by      VARCHAR(255)
+        ,cron           VARCHAR(255)
+        ,timezone       VARCHAR(255)
+        ,overlap_policy VARCHAR(32)
+        ,misfire_policy VARCHAR(32)
+        ,misfire_grace_ms INT
       )
     `);
+    for (const column of ["cron VARCHAR(255)","timezone VARCHAR(255)","overlap_policy VARCHAR(32)","misfire_policy VARCHAR(32)","misfire_grace_ms INT"]) {
+      await runIdempotentDdl((sql) => pool.execute(sql), `ALTER TABLE ${table} ADD COLUMN ${column}`);
+    }
     await runIdempotentDdl(
       (sql) => pool.execute(sql),
       `CREATE INDEX idx_${table}_due ON ${table} (enabled, next_run_at)`,
@@ -71,13 +79,13 @@ export class ScheduleMysqlAdapter implements ScheduleAdapter {
       `INSERT INTO ${this.table}
         (id, kind, target, \`interval\`, input, enabled, next_run_at,
          last_run_at, last_run_status, last_run_id,
-         created_at, updated_at, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         created_at, updated_at, created_by, cron, timezone, overlap_policy, misfire_policy, misfire_grace_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         schedule.id,
         schedule.kind,
         schedule.target,
-        schedule.interval,
+        schedule.interval ?? "",
         schedule.input !== undefined ? JSON.stringify(schedule.input) : null,
         schedule.enabled ? 1 : 0,
         dateToStr(schedule.nextRunAt),
@@ -87,6 +95,11 @@ export class ScheduleMysqlAdapter implements ScheduleAdapter {
         dateToStr(schedule.createdAt),
         dateToStr(schedule.updatedAt),
         schedule.createdBy ?? null,
+        schedule.cron ?? null,
+        schedule.timezone ?? null,
+        schedule.overlapPolicy ?? null,
+        schedule.misfirePolicy ?? null,
+        schedule.misfireGraceMs ?? null,
       ],
     );
   }
@@ -136,6 +149,11 @@ export class ScheduleMysqlAdapter implements ScheduleAdapter {
       lastRunId: "last_run_id",
       updatedAt: "updated_at",
       createdBy: "created_by",
+      cron: "cron",
+      timezone: "timezone",
+      overlapPolicy: "overlap_policy",
+      misfirePolicy: "misfire_policy",
+      misfireGraceMs: "misfire_grace_ms",
     };
     let touched = false;
     for (const [key, value] of Object.entries(patch)) {
@@ -143,7 +161,7 @@ export class ScheduleMysqlAdapter implements ScheduleAdapter {
       if (!col) continue;
       touched = true;
       setClauses.push(`${col} = ?`);
-      if (value === undefined) values.push(null);
+      if (value === undefined) values.push(key === "interval" ? "" : null);
       else if (key === "input") values.push(JSON.stringify(value));
       else if (key === "enabled") values.push(value ? 1 : 0);
       else if (key === "nextRunAt" || key === "lastRunAt" || key === "updatedAt") values.push(dateToStr(value));
@@ -210,7 +228,12 @@ function rowToSchedule(row: Record<string, unknown>): Schedule {
     id: row.id as string,
     kind: row.kind as Schedule["kind"],
     target: row.target as string,
-    interval: row.interval as string,
+    interval: row.interval ? row.interval as string : undefined,
+    cron: (row.cron as string | null) ?? undefined,
+    timezone: (row.timezone as string | null) ?? undefined,
+    overlapPolicy: (row.overlap_policy as Schedule["overlapPolicy"] | null) ?? undefined,
+    misfirePolicy: (row.misfire_policy as Schedule["misfirePolicy"] | null) ?? undefined,
+    misfireGraceMs: (row.misfire_grace_ms as number | null) ?? undefined,
     input: row.input ? JSON.parse(row.input as string) : undefined,
     enabled: Boolean(row.enabled),
     nextRunAt: toDate(row.next_run_at)!,

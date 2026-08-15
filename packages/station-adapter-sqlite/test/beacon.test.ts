@@ -49,6 +49,8 @@ test("upsert + get round-trips all fields", async () => {
       readyAt: startedAt,
       lastExitReason: "failure",
       lastError: "boom",
+      stationId: "station-a",
+      exposure: JSON.stringify({ protocol: "http", port: 8080 }),
     }));
     const got = await adapter.getInstance("web");
     assert.equal(got?.status, "running");
@@ -57,6 +59,8 @@ test("upsert + get round-trips all fields", async () => {
     assert.equal(got?.startedAt?.toISOString(), startedAt.toISOString());
     assert.equal(got?.lastExitReason, "failure");
     assert.equal(got?.lastError, "boom");
+    assert.equal(got?.stationId, "station-a");
+    assert.equal(got?.exposure, JSON.stringify({ protocol: "http", port: 8080 }));
     assert.equal(await adapter.getInstance("missing"), null);
   } finally { cleanup(); }
 });

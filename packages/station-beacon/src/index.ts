@@ -13,7 +13,7 @@ export {
   type UpdateInstanceOptions,
 } from "./beacon-runner.js";
 
-export { type BeaconContext, type BeaconHandler } from "./context.js";
+export { type BeaconContext, type BeaconHandler, type BeaconExposure } from "./context.js";
 
 export {
   type RestartPolicy,

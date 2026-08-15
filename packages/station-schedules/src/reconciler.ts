@@ -1,12 +1,13 @@
 import type { ScheduleAdapter } from "./adapters/index.js";
 import type { Schedule, ScheduleKind } from "./types.js";
+import { nextScheduleOccurrence } from "./cron.js";
 
 export interface ScheduleReconcilerOptions {
   adapter: ScheduleAdapter;
   /** Which schedule kinds this reconciler is responsible for. */
   kinds: ScheduleKind[];
   /** Trigger the schedule's target with its input. Returns the run ID. */
-  triggerFn: (schedule: Schedule) => Promise<string>;
+  triggerFn: (schedule: Schedule, scheduledFor: Date) => Promise<string>;
   /** Returns true if a pending or running run already exists for this schedule's target. */
   hasPendingOrRunning?: (schedule: Schedule) => Promise<boolean>;
   /** Parse "5m" → 300_000. Both runners already have this — pass it in. */
@@ -63,7 +64,13 @@ export class ScheduleReconciler {
     // guarantees at-most-once across multiple runners. The pending/running
     // check below is an additional optimisation that runs *after* a successful
     // claim, never before it.
-    const newNext = new Date(Date.now() + this.opts.parseInterval(schedule.interval));
+    const occurrence = schedule.nextRunAt;
+    const now = new Date();
+    const misfire = schedule.misfirePolicy ?? "fire-once";
+    let newNext = nextScheduleOccurrence(schedule, occurrence, this.opts.parseInterval);
+    if (misfire !== "catch-up") {
+      while (newNext <= now) newNext = nextScheduleOccurrence(schedule, newNext, this.opts.parseInterval);
+    }
     if (this.opts.adapter.claimDue) {
       const claimed = await this.opts.adapter.claimDue(
         schedule.id,
@@ -81,7 +88,16 @@ export class ScheduleReconciler {
       await this.opts.adapter.update(schedule.id, { nextRunAt: newNext });
     }
 
-    if (this.opts.hasPendingOrRunning) {
+    const lateByMs = now.getTime() - occurrence.getTime();
+    if (misfire === "skip" && lateByMs > (schedule.misfireGraceMs ?? 60_000)) {
+      await this.opts.adapter.update(schedule.id, {
+        lastRunAt: now,
+        lastRunStatus: "skipped:misfire",
+      });
+      return;
+    }
+
+    if ((schedule.overlapPolicy ?? "skip") === "skip" && this.opts.hasPendingOrRunning) {
       try {
         const pending = await this.opts.hasPendingOrRunning(schedule);
         if (pending) {
@@ -102,7 +118,7 @@ export class ScheduleReconciler {
     let runId: string | undefined;
     let status = "triggered";
     try {
-      runId = await this.opts.triggerFn(schedule);
+      runId = await this.opts.triggerFn(schedule, occurrence);
     } catch (err) {
       status = "errored";
       this.opts.onError?.(err instanceof Error ? err : new Error(String(err)), schedule);

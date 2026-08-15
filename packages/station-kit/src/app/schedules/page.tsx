@@ -84,7 +84,7 @@ export default function SchedulesPage() {
               >
                 <td className="mono">{s.target}</td>
                 <td className="mono" style={{ fontSize: "0.75rem", color: "var(--muted)" }}>{KIND_LABEL[s.kind]}</td>
-                <td className="mono">{s.interval}</td>
+                <td className="mono">{s.interval ?? `${s.cron} (${s.timezone ?? "UTC"})`}</td>
                 <td className="mono" style={{ fontSize: "0.75rem", color: "var(--muted)" }}>
                   {new Date(s.nextRunAt).toLocaleString()}
                 </td>
