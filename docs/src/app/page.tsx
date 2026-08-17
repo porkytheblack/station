@@ -1,4 +1,5 @@
 import Link from "next/link";
+import Image from "next/image";
 import { Code } from "./components/Code";
 import { TowerIllustration } from "./components/TowerIcon";
 
@@ -425,8 +426,22 @@ export const loveLetter = signal("loveLetter")
       {/* ── Footer ── */}
       <footer className="landing-footer">
         <div className="landing-footer-logo">Station</div>
-        <div className="landing-footer-copy">
-          Open source background jobs for Node.js
+        <div className="landing-footer-meta">
+          <div className="landing-footer-copy">
+            Open source background jobs for Node.js
+          </div>
+          <div className="landing-footer-credit">
+            <span>A product by</span>
+            <Image
+              className="landing-footer-cradle-mark"
+              src="/cradle-research.svg"
+              width={28}
+              height={28}
+              alt=""
+              aria-hidden="true"
+            />
+            <span className="landing-footer-cradle-name">Cradle Research</span>
+          </div>
         </div>
       </footer>
     </main>

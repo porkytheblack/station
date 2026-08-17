@@ -1,0 +1,51 @@
+# Station
+
+> Type-safe background jobs, recurring schedules, distributed Station Networks, long-running beacons, and DAG workflows for TypeScript.
+
+Station 2.2.0 is a modular TypeScript framework. StationKit is the main entry point; signals are isolated background jobs, broadcasts are DAG workflows, beacons are supervised long-running processes, schedules provide interval and timezone-aware cron execution, and Station Networks coordinate work across a Headquarters and worker stations. Prefer the Markdown links below when supplying documentation to an agent.
+
+## Start here
+
+- [Getting started](https://station.dterminal.net/docs/getting-started.md): Install Station, define and run a signal, add persistence, and prepare a production configuration.
+- [Dashboard guide](https://station.dterminal.net/docs/dashboard.md): Operate the StationKit dashboard, inspect runs, and understand Headquarters fleet views.
+- [Station Networks](https://station.dterminal.net/docs/network.md): Scale execution across Headquarters and worker stations with placement, capacity, leases, and draining.
+- [Agent skill](https://station.dterminal.net/docs/agent-skill.md): Install and use the Station coding-agent skill and its bundled API references.
+
+## Guides and operations
+
+- [Remote triggers](https://station.dterminal.net/docs/remote-triggers.md): Trigger Station signals from another service through the authenticated HTTP API.
+- [Dynamic broadcasts](https://station.dterminal.net/docs/dynamic-broadcasts.md): Create runtime-defined DAG workflows with expressions, validation, and versioned definitions.
+- [Schedules](https://station.dterminal.net/docs/schedules.md): Configure interval and cron schedules with timezones, overlap policy, and misfire handling.
+- [Environment variables](https://station.dterminal.net/docs/environment.md): Manage global and target-scoped runtime variables without exposing secret values.
+- [Tauri desktop](https://station.dterminal.net/docs/tauri-desktop.md): Bundle Station as a local Tauri sidecar with provisioned authentication.
+
+## API reference
+
+- [Signals](https://station.dterminal.net/docs/signals.md): Signal builder, runner, queue adapter, lifecycle, concurrency, placement, and trigger APIs.
+- [Broadcasts](https://station.dterminal.net/docs/broadcasts.md): Static and dynamic DAG workflows, execution policies, adapters, and subscribers.
+- [Beacons](https://station.dterminal.net/docs/beacons.md): Supervised long-running processes, instances, restart policies, health, and service proxying.
+- [Expressions](https://station.dterminal.net/docs/expressions.md): Deterministic expression AST, parser, evaluator, validation, and workflow references.
+- [Adapters](https://station.dterminal.net/docs/adapters.md): Memory, SQLite, PostgreSQL, MySQL, and Redis persistence and coordination adapters.
+- [StationKit](https://station.dterminal.net/docs/station.md): Configuration, CLI, dashboard, authentication, REST API, runners, and deployment.
+
+## Examples
+
+- [Examples overview](https://station.dterminal.net/docs/examples.md): Index of complete examples arranged from first signal to distributed fleets.
+- [Basic signal](https://station.dterminal.net/docs/examples/basic.md): Minimal signal definition and trigger.
+- [Typed output](https://station.dterminal.net/docs/examples/with-output.md): Declare and consume validated signal output.
+- [Signal steps](https://station.dterminal.net/docs/examples/with-steps.md): Checkpoint multi-step work and inspect step progress.
+- [Recurring signal](https://station.dterminal.net/docs/examples/recurring.md): Run a signal on a simple recurring interval.
+- [Retries](https://station.dterminal.net/docs/examples/with-retries.md): Retry failed work with bounded attempts and backoff.
+- [SQLite persistence](https://station.dterminal.net/docs/examples/with-sqlite.md): Persist signal state locally with the SQLite adapter.
+- [Broadcast workflow](https://station.dterminal.net/docs/examples/broadcast.md): Compose signals into a typed DAG workflow.
+- [ETL pipeline](https://station.dterminal.net/docs/examples/etl-pipeline.md): Extract, transform, and load data as a multi-stage broadcast.
+- [CI pipeline](https://station.dterminal.net/docs/examples/ci-pipeline.md): Model build, test, and deployment stages with workflow dependencies.
+- [Fleet monitor](https://station.dterminal.net/docs/examples/fleet-monitor.md): Supervise a long-running process with beacon health and restart behavior.
+- [Beacon service](https://station.dterminal.net/docs/examples/beacon.md): Define, configure, start, and stop a supervised beacon instance.
+- [Station Network](https://station.dterminal.net/docs/examples/station-network.md): Run a Headquarters and two workers against shared SQLite coordination.
+
+## Optional
+
+- [Complete documentation](https://station.dterminal.net/llms-full.txt): All documentation pages combined into one Markdown document for larger context windows.
+- [Human documentation](https://station.dterminal.net/docs/getting-started): Rendered documentation site.
+- [GitHub repository](https://github.com/porkytheblack/station): Source, package implementations, and runnable examples.
