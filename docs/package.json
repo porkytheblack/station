@@ -5,7 +5,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev --port 3030",
-    "build": "next build",
+    "prebuild": "node scripts/generate-llms.mjs --index-only",
+    "build": "next build && node scripts/generate-llms.mjs",
     "start": "next start"
   },
   "dependencies": {
@@ -17,6 +18,8 @@
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "turndown": "7.2.4",
+    "turndown-plugin-gfm": "1.0.2",
     "typescript": "^5.7.0"
   }
 }

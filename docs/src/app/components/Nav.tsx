@@ -10,6 +10,7 @@ const navLinks = [
   { href: "/docs/getting-started", label: "Docs" },
   { href: "/docs/signals", label: "API" },
   { href: "/docs/examples", label: "Examples" },
+  { href: "/llms.txt", label: "Agents" },
 ];
 
 export function Nav() {
@@ -47,6 +48,16 @@ export function Nav() {
                 : link.label === "Examples"
                   ? pathname.startsWith("/docs/examples")
                   : pathname === link.href;
+
+            if (link.href.endsWith(".txt")) {
+              return (
+                <li key={link.href}>
+                  <a href={link.href} className={isActive ? "active" : ""}>
+                    {link.label}
+                  </a>
+                </li>
+              );
+            }
 
             return (
               <li key={link.href}>
@@ -95,16 +106,27 @@ export function Nav() {
         aria-hidden={!mobileMenuOpen}
       >
         <div className="mobile-drawer-links">
-          {navLinks.map((link) => (
-            <Link
-              key={link.href}
-              href={link.href}
-              className="mobile-drawer-nav-link"
-              onClick={() => setMobileMenuOpen(false)}
-            >
-              {link.label}
-            </Link>
-          ))}
+          {navLinks.map((link) =>
+            link.href.endsWith(".txt") ? (
+              <a
+                key={link.href}
+                href={link.href}
+                className="mobile-drawer-nav-link"
+                onClick={() => setMobileMenuOpen(false)}
+              >
+                {link.label}
+              </a>
+            ) : (
+              <Link
+                key={link.href}
+                href={link.href}
+                className="mobile-drawer-nav-link"
+                onClick={() => setMobileMenuOpen(false)}
+              >
+                {link.label}
+              </Link>
+            ),
+          )}
           <a
             href="https://github.com/porkytheblack/station"
             target="_blank"
