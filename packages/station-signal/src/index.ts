@@ -7,6 +7,8 @@ export { DEFAULT_TIMEOUT_MS, DEFAULT_MAX_ATTEMPTS } from "./types.js";
 export type { Run, RunKind, RunStatus, RunPatch, RunClaim, Step, StepStatus, StepPatch, StepDefinition, ListRunsOptions, ListAllRunsOptions } from "./types.js";
 export {
   type SignalQueueAdapter,
+  type RunDueFilter,
+  type RunRunningFilter,
   type SerializableAdapter,
   type AdapterManifest,
   isSerializableAdapter,
