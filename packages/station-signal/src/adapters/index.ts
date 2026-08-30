@@ -107,3 +107,13 @@ export function isSerializableAdapter(
 
 export { MemoryAdapter } from "./memory.js";
 export { registerAdapter, createAdapter, hasAdapter } from "./registry.js";
+
+export {
+  adapterConformanceCases,
+  describeAdapterSafety,
+  inspectAdapter,
+  multiStationRisks,
+  type AdapterCapabilities,
+  type ConformanceCase,
+  type ConformanceOptions,
+} from "./conformance.js";

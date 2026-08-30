@@ -17,6 +17,16 @@ export {
 } from "./adapters/index.js";
 
 export {
+  adapterConformanceCases,
+  describeAdapterSafety,
+  inspectAdapter,
+  multiStationRisks,
+  type AdapterCapabilities,
+  type ConformanceCase,
+  type ConformanceOptions,
+} from "./adapters/conformance.js";
+
+export {
   type SignalSubscriber,
   type IPCMessage,
   type JobInitMessage,

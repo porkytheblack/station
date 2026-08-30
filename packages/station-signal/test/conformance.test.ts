@@ -1,0 +1,62 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import {
+  MemoryAdapter,
+  adapterConformanceCases,
+  describeAdapterSafety,
+  inspectAdapter,
+  multiStationRisks,
+  type SignalQueueAdapter,
+} from "../src/index.js";
+
+// The shipped in-process adapter is the reference: it must pass every case,
+// including the distributed ones, or the suite is describing nothing.
+for (const conformanceCase of adapterConformanceCases({
+  createAdapter: () => new MemoryAdapter(),
+  name: "MemoryAdapter",
+})) {
+  test(conformanceCase.name, conformanceCase.run);
+}
+
+/** A plausible hand-written adapter: the required methods, none of the optional ones. */
+function minimalAdapter(): SignalQueueAdapter {
+  const base = new MemoryAdapter();
+  const stripped = Object.create(base) as Record<string, unknown>;
+  for (const method of ["claimRun", "renewRunLease", "updateClaimedRun", "requeueExpiredRuns", "cancelRun"]) {
+    stripped[method] = undefined;
+  }
+  return stripped as unknown as SignalQueueAdapter;
+}
+
+test("an adapter missing the optional half is reported, not silently accepted", () => {
+  const capabilities = inspectAdapter(minimalAdapter());
+  assert.deepEqual(capabilities, {
+    atomicClaim: false,
+    leaseRenewal: false,
+    fencedWrites: false,
+    crashRecovery: false,
+    atomicCancel: false,
+  });
+
+  const risks = multiStationRisks(capabilities);
+  assert.equal(risks.length, 4);
+  // Duplicate execution is the one that costs money, so it leads.
+  assert.match(risks[0] ?? "", /claimRun is missing/);
+  assert.match(risks[0] ?? "", /both dispatch it/);
+  assert.equal(describeAdapterSafety(minimalAdapter()), "single-runner only (4 unmet requirements)");
+});
+
+test("a complete adapter reports no multi-station risk", () => {
+  assert.deepEqual(multiStationRisks(inspectAdapter(new MemoryAdapter())), []);
+  assert.equal(describeAdapterSafety(new MemoryAdapter()), "safe for multi-station execution");
+});
+
+test("the distributed cases are skippable for a deliberately single-runner adapter", () => {
+  const all = adapterConformanceCases({ createAdapter: () => new MemoryAdapter() });
+  const single = adapterConformanceCases({
+    createAdapter: () => new MemoryAdapter(),
+    singleRunnerOnly: true,
+  });
+  assert.ok(single.length < all.length);
+  assert.ok(single.every((item) => !item.distributed));
+});

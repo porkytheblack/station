@@ -4,6 +4,7 @@ import { readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isSerializableAdapter, type SignalQueueAdapter } from "./adapters/index.js";
+import { inspectAdapter, multiStationRisks } from "./adapters/conformance.js";
 import { MemoryAdapter } from "./adapters/memory.js";
 import { configure, onLocalEnqueue } from "./config.js";
 import { parseInterval } from "./interval.js";
@@ -443,7 +444,33 @@ export class SignalRunner {
   async initialize(): Promise<void> {
     if (this.initialized) return;
     if (this.signalsDir) await this.discover(resolve(this.signalsDir));
+    this.warnIfAdapterCannotShare();
     this.initialized = true;
+  }
+
+  /**
+   * Say something when this runner is wired for a fleet but its adapter cannot
+   * safely be in one.
+   *
+   * The optional half of `SignalQueueAdapter` is what makes multi-station
+   * execution correct, and omitting it is otherwise silent — the adapter
+   * typechecks, a single runner behaves, and duplicates only appear once a
+   * second runner shares the queue. Gated on `networkCoordinator` because that
+   * is unambiguous evidence of intent: a deliberately single-runner deployment
+   * never sets one and never sees this.
+   *
+   * A warning, never a throw. Whether to run distributed is the caller's call.
+   */
+  private warnIfAdapterCannotShare(): void {
+    if (!this.networkCoordinator) return;
+    const risks = multiStationRisks(inspectAdapter(this.adapter));
+    if (risks.length === 0) return;
+    console.warn(
+      `[station-signal] Station "${this.stationId}" joined network ` +
+        `"${this.networkId}" with an adapter that is not safe to share:\n` +
+        risks.map((risk) => `  - ${risk}`).join("\n") +
+        "\n  Run adapterConformanceCases() against this adapter to see what is missing.",
+    );
   }
 
   /**
