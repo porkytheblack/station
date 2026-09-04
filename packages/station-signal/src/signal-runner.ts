@@ -24,6 +24,11 @@ import { isSignal } from "./util.js";
 
 const BOOTSTRAP = fileURLToPath(new URL("./bootstrap.js", import.meta.url));
 
+/** A child is gone once Node has reaped it and recorded an exit or signal code. */
+function hasExited(child: ChildProcess): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
 let _tsxImport: string | undefined;
 function getTsxImport(): string | undefined {
   if (_tsxImport !== undefined) return _tsxImport || undefined;
@@ -142,6 +147,17 @@ export interface SignalRunnerOptions {
   stationLabels?: Record<string, string>;
   /** Dynamic admission gate used for station draining. */
   canClaim?: () => Promise<boolean>;
+  /**
+   * Grace given to a child that has already reported its result before the
+   * runner starts reaping it. A well-behaved signal exits on its own once its
+   * event loop drains; one that leaked a handle never will, so the runner
+   * escalates rather than leaving an unreferenced process resident forever.
+   * Should exceed the child's own drain grace so its diagnostic wins the race.
+   * @default 10000
+   */
+  reapGraceMs?: number;
+  /** Time a child gets to honour SIGTERM before SIGKILL. @default 5000 */
+  killGraceMs?: number;
 }
 
 export class SignalRunner {
@@ -171,6 +187,16 @@ export class SignalRunner {
   private activePerSignal = new Map<string, number>();
   /** Map runId → child process for cancel/timeout kill. */
   private childByRunId = new Map<string, ChildProcess>();
+  /**
+   * Escalation timers for children the runner is trying to get rid of, keyed
+   * by child. A resolved child leaves `childByRunId` immediately so it stops
+   * counting against concurrency, so this is the only remaining reference to
+   * it — without it a child that never exits would be unreachable and
+   * unkillable, and the container would run out of PIDs.
+   */
+  private reapTimers = new Map<ChildProcess, ReturnType<typeof setTimeout>>();
+  private reapGraceMs: number;
+  private killGraceMs: number;
   private running = false;
   private stopping = false;
   private ticking = false;
@@ -215,6 +241,69 @@ export class SignalRunner {
     this.networkId = options.networkId ?? "default";
     this.stationLabels = { ...(options.stationLabels ?? {}) };
     this.canClaim = options.canClaim;
+    this.reapGraceMs = options.reapGraceMs ?? 10_000;
+    this.killGraceMs = options.killGraceMs ?? 5_000;
+  }
+
+  /**
+   * Guarantee `child` actually dies.
+   *
+   * `graceMs` is how long it may take to exit on its own before SIGTERM; after
+   * SIGTERM it gets `killGraceMs` before SIGKILL. SIGTERM alone is not enough:
+   * a handler that installs its own SIGTERM listener, or a child blocked in
+   * native code, ignores it and survives as a zero-CPU process holding a PID.
+   *
+   * Idempotent per child; the child's `exit` handler clears the timers.
+   */
+  private ensureExit(child: ChildProcess, label: string, graceMs: number): void {
+    if (hasExited(child) || this.reapTimers.has(child)) return;
+
+    const term = () => {
+      if (hasExited(child)) return;
+      child.kill("SIGTERM");
+      const kill = setTimeout(() => {
+        if (hasExited(child)) return;
+        console.error(
+          `[station-signal] Child for "${label}" ignored SIGTERM after ${this.killGraceMs}ms — sending SIGKILL`,
+        );
+        child.kill("SIGKILL");
+        this.reapTimers.delete(child);
+      }, this.killGraceMs);
+      kill.unref?.();
+      this.reapTimers.set(child, kill);
+    };
+
+    if (graceMs <= 0) {
+      term();
+      return;
+    }
+
+    const wait = setTimeout(() => {
+      if (hasExited(child)) return;
+      console.warn(
+        `[station-signal] Child for "${label}" reported its result but was still alive ${graceMs}ms later — reaping. ` +
+        "The handler left a handle open (unreleased DB client, keep-alive socket, pending request, or timer).",
+      );
+      term();
+    }, graceMs);
+    wait.unref?.();
+    this.reapTimers.set(child, wait);
+  }
+
+  /**
+   * Stop tracking `child` for `runId` — but only if it is still the tracked
+   * one. A retry reuses the run id, so a late event from a previous attempt
+   * must not evict its successor.
+   */
+  private untrack(runId: string, child: ChildProcess): void {
+    if (this.childByRunId.get(runId) === child) this.childByRunId.delete(runId);
+  }
+
+  /** Drop escalation timers for a child that has exited. */
+  private clearReap(child: ChildProcess): void {
+    const timer = this.reapTimers.get(child);
+    if (timer) clearTimeout(timer);
+    this.reapTimers.delete(child);
   }
 
   /**
@@ -487,8 +576,8 @@ export class SignalRunner {
       clearTimeout(timer);
 
       // Kill any remaining children after timeout
-      for (const child of this.childByRunId.values()) {
-        child.kill("SIGTERM");
+      for (const [runId, child] of this.childByRunId) {
+        this.ensureExit(child, runId, 0);
       }
     }
 
@@ -521,7 +610,7 @@ export class SignalRunner {
     // Kill the child process if running
     const child = this.childByRunId.get(runId);
     if (child) {
-      child.kill("SIGTERM");
+      this.ensureExit(child, runId, 0);
     }
 
     this.emit("onRunCancelled", { run });
@@ -803,21 +892,26 @@ export class SignalRunner {
     for (const runId of this.childByRunId.keys()) {
       const run = await this.adapter.getRun(runId);
       if (!run || run.status !== "running" || !run.leaseToken || run.stationId !== this.stationId) {
-        this.childByRunId.get(runId)?.kill("SIGTERM");
+        const orphan = this.childByRunId.get(runId);
+        if (orphan) this.ensureExit(orphan, runId, 0);
         continue;
       }
       const renewed = await this.adapter.renewRunLease(runId, run.leaseToken, leaseExpiresAt, now);
       if (!renewed) {
         // Ownership moved after a partition or expiry. Fence this process from
         // producing more side effects as quickly as the host allows.
-        this.childByRunId.get(runId)?.kill("SIGTERM");
+        const fenced = this.childByRunId.get(runId);
+        if (fenced) this.ensureExit(fenced, runId, 0);
       }
       const slot = this.networkSlotByRunId.get(runId);
       if (slot && this.networkCoordinator) {
         const slotRenewed = await this.networkCoordinator.renewControllerLease(
           slot.name, this.stationId, slot.token, leaseExpiresAt, now,
         );
-        if (!slotRenewed) this.childByRunId.get(runId)?.kill("SIGTERM");
+        if (!slotRenewed) {
+          const evicted = this.childByRunId.get(runId);
+          if (evicted) this.ensureExit(evicted, runId, 0);
+        }
       }
     }
   }
@@ -921,7 +1015,7 @@ export class SignalRunner {
       // Kill the child process
       const child = this.childByRunId.get(run.id);
       if (child) {
-        child.kill("SIGTERM");
+        this.ensureExit(child, run.signalName, 0);
       }
 
       // Re-read run status after kill — IPC may have already resolved it (H1)
@@ -1010,11 +1104,22 @@ export class SignalRunner {
       console.error(`[station-signal] Failed to send job to child for "${sig.name}":`, err);
     }
 
+    // A retry reuses the same run id. If a previous attempt's child is somehow
+    // still tracked, reap it rather than letting this `set` drop the reference.
+    const previous = this.childByRunId.get(run.id);
+    if (previous && previous !== child) this.ensureExit(previous, run.signalName, 0);
     this.childByRunId.set(run.id, child);
     let resolved = false;
 
     const cleanup = () => {
-      this.childByRunId.delete(run.id);
+      this.untrack(run.id, child);
+      // The run is resolved, but the OS process may not be. Once it leaves
+      // `childByRunId` nothing else tracks it, so hand it to the reaper: it
+      // exits on its own if its event loop drains, and is killed if it does
+      // not. Without this a handler that leaks a handle leaves a permanent
+      // zero-CPU process behind, and the container eventually cannot fork
+      // (`spawn node EAGAIN`).
+      this.ensureExit(child, run.signalName, this.reapGraceMs);
       void this.releaseNetworkSlot(run.id).catch((err) => {
         console.error(`[station-signal] Failed to release network slot for "${run.signalName}":`, err);
       });
@@ -1130,12 +1235,20 @@ export class SignalRunner {
       resolved = true;
       this.activeCount = Math.max(0, this.activeCount - 1);
       this.decrementPerSignal(run.signalName);
-      cleanup();
+      this.untrack(run.id, child);
+      this.clearReap(child);
+      void this.releaseNetworkSlot(run.id).catch((slotErr) => {
+        console.error(`[station-signal] Failed to release network slot for "${run.signalName}":`, slotErr);
+      });
       console.error(`[station-signal] Failed to spawn process for "${sig.name}":`, err);
     });
 
     child.on("exit", async () => {
-      cleanup();
+      this.clearReap(child);
+      this.untrack(run.id, child);
+      void this.releaseNetworkSlot(run.id).catch((err) => {
+        console.error(`[station-signal] Failed to release network slot for "${run.signalName}":`, err);
+      });
 
       // H2: Grace period — let pending IPC message handlers resolve before we act.
       // Node can fire exit synchronously after the last IPC message, before the

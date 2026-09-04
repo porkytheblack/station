@@ -96,6 +96,36 @@ function sendIPC(
 }
 
 /**
+ * Arm a bounded drain.
+ *
+ * The run's result is already flushed to the parent, so the only thing left is
+ * for this process to go away. A well-behaved signal does that on its own once
+ * the event loop empties, which lets buffered stdout and user cleanup finish —
+ * so the timer is `unref`'d and costs nothing in the normal case.
+ *
+ * But a handler that leaves a handle open — a pool client acquired and never
+ * released, a keep-alive socket, a `fetch` with no `AbortSignal`, a live timer
+ * — never drains, and this process would sit resident at zero CPU forever. A
+ * few of those per hour is enough to exhaust the container's PID limit, at
+ * which point *every* signal fails to spawn. Bound it, and say which signal
+ * did it so the offending handler is findable.
+ */
+function exitWhenDrained(code: number): void {
+  const graceMs = Number(process.env.STATION_SIGNAL_DRAIN_MS ?? 5_000);
+  if (!Number.isFinite(graceMs) || graceMs <= 0) return;
+  const timer = setTimeout(() => {
+    console.error(
+      `[station-signal] Signal "${signalName}" finished but its event loop did not drain after ${graceMs}ms — ` +
+      "forcing exit. A handle is still open: an unreleased DB client, a keep-alive socket, " +
+      "a request without a timeout, or a pending timer.",
+    );
+    process.exit(code);
+  }, graceMs);
+  // Never hold the process open ourselves — if everything else drains, so do we.
+  timer.unref();
+}
+
+/**
  * Execute a step-based signal with Step records.
  * Resumes from the last completed step on retry/crash.
  */
@@ -264,8 +294,10 @@ try {
     process.exit(1);
   }
 
-  // H4: Let the event loop drain naturally instead of process.exit(0)
-  // so IPC messages are fully flushed before the process ends.
+  // H4: Let the event loop drain naturally instead of process.exit(0) so IPC
+  // messages and buffered stdout are fully flushed before the process ends —
+  // but not indefinitely, or a leaked handle strands this process for good.
+  exitWhenDrained(0);
 } catch (err) {
   const errorMsg = err instanceof Error ? err.message : String(err);
   console.error(`[station-signal] Signal "${signalName}" failed:`, err);
