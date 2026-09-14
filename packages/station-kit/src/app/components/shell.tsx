@@ -106,6 +106,13 @@ function IconStations() {
   </svg>;
 }
 
+function IconSandbox() {
+  return <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="1" y="2" width="12" height="10" rx="1"/><path d="m3 5 2 2-2 2M7 9h3"/></svg>;
+}
+function IconBrowserUse() {
+  return <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2" aria-hidden="true"><rect x="1" y="1.5" width="12" height="11" rx="1"/><path d="M1 4.5h12M3 3h.5M5 3h.5"/></svg>;
+}
+
 function IconEnvironment() {
   /* Key — environment variables / secrets */
   return (
@@ -187,6 +194,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
           <NavLink href="/beacons" label="Beacons" section="beacons" icon={<IconBeacon />} />
           <NavLink href="/schedules" label="Schedules" section="schedules" icon={<IconSchedules />} />
           <NavLink href="/stations" label="Stations" section="stations" icon={<IconStations />} />
+          <NavLink href="/sandboxes" label="Sandboxes" section="sandboxes" icon={<IconSandbox />} />
+          <NavLink href="/browser-use" label="Browser Use" section="browser-use" icon={<IconBrowserUse />} />
           <NavLink href="/environment" label="Environment" section="environment" icon={<IconEnvironment />} />
           <div className="station-sidebar-nav-label" style={{ marginTop: "1rem" }}>Tools</div>
           <NavLink href="/playground/expression" label="Expressions" section="playground" icon={<IconPlayground />} />

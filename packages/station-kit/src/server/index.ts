@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { internalExecutionRoutes, publicExecutionRoutes } from "./routes/execution.js";
+import { executionCatalogRoutes, internalExecutionRoutes, publicExecutionRoutes } from "./routes/execution.js";
 import { createMiddleware } from "hono/factory";
 import { bodyLimit } from "hono/body-limit";
 import { serve } from "@hono/node-server";
@@ -479,6 +479,10 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
   adminRoutes.route("/", v1BeaconAdminRoutes(beaconDeps));
   v1.route("/", guarded("admin", adminRoutes));
 
+  v1.route("/", executionCatalogRoutes({
+    adapter: networkAdapter, networkId: config.network.id, stationId: config.network.stationId,
+    role: config.role, enabled: Boolean(config.execution),
+  }));
   if (config.execution) {
     const executionDeps = {
       execution: config.execution, adapter: networkAdapter,
@@ -562,6 +566,10 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
         broadcasts: broadcastRunner?.listRegistered().map((item) => item.name).sort() ?? [],
         beacons: registeredBeacons.map((item) => item.name).sort(),
         beaconMetadata: registeredBeacons,
+        execution: config.execution ? {
+          sandbox: config.execution.sandbox ? { backend: config.execution.sandbox.name } : undefined,
+          browser: config.execution.browser ? { backend: config.execution.browser.adapter.name } : undefined,
+        } : undefined,
       },
       endpoint: config.network.endpoint,
       version: process.env.npm_package_version,

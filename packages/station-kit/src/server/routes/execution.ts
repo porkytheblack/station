@@ -15,6 +15,35 @@ export interface ExecutionDeps {
   stationId: string;
   role: StationRole;
 }
+
+/** Dashboard discovery uses advertised capabilities, never guesses from labels. */
+export function executionCatalogRoutes(deps: Omit<ExecutionDeps, "execution"> & { enabled: boolean }): Hono {
+  const app = new Hono();
+  app.get("/execution", requireScope("admin"), async (c) => {
+    if (!deps.enabled) return c.json({ data: [] });
+    const stations = await deps.adapter.listStations({ networkId: deps.networkId });
+    const now = Date.now();
+    return c.json({ data: stations
+      .filter((node) => (deps.role === "headquarters" ? node.role === "station" || node.id === deps.stationId : node.id === deps.stationId))
+      .filter((node) => node.definitions.execution?.sandbox || node.definitions.execution?.browser)
+      .map((node) => {
+        let reachable = node.id === deps.stationId;
+        if (!reachable && node.endpoint) {
+          try {
+            const url = new URL(node.endpoint);
+            reachable = ["http:", "https:"].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash;
+          } catch { /* An invalid registered endpoint is unavailable. */ }
+        }
+        return {
+          stationId: node.id, name: node.name, role: node.role, status: node.status,
+          capabilities: { sandbox: Boolean(node.definitions.execution?.sandbox), browser: Boolean(node.definitions.execution?.browser) },
+          backends: { sandbox: node.definitions.execution?.sandbox?.backend, browser: node.definitions.execution?.browser?.backend },
+          available: reachable && node.status !== "offline" && node.leaseExpiresAt.getTime() > now,
+        };
+      }) });
+  });
+  return app;
+}
 type RequestBody = Record<string, unknown> & { method: string };
 const actions = new Set(["navigate", "evaluate", "click", "type", "press", "screenshot"]);
 const messages = {

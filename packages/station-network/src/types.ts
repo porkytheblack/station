@@ -10,6 +10,11 @@ export interface StationDefinitions {
   signals: string[];
   broadcasts: string[];
   beacons: string[];
+  /** Optional execution capabilities advertised by newer workers. */
+  execution?: {
+    sandbox?: { backend: string };
+    browser?: { backend: string };
+  };
   /** Rich beacon catalog used by Headquarters without importing worker code. */
   beaconMetadata?: Array<{
     name: string;

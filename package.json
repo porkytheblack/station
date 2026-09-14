@@ -14,7 +14,8 @@
     "release:npm": "node scripts/release-npm.mjs",
     "release:npm:dry-run": "node scripts/release-npm.mjs --dry-run",
     "benchmark:runtimes": "pnpm --filter station-signal build && node scripts/benchmark-runtimes.mjs",
-    "test:browser-use": "pnpm --filter station-browser-use test:browsers"
+    "test:browser-use": "pnpm --filter station-browser-use test:browsers",
+    "test:execution:dashboard": "pnpm --filter station-kit... build && node --test packages/station-kit/test/e2e/dashboard.mjs"
   },
   "devDependencies": {
     "@types/node": "^25.3.0",

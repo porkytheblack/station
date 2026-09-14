@@ -65,3 +65,18 @@ test("controller leases are exclusive, renewable, fenced, and recover after expi
   assert.equal(await adapter.releaseControllerLease("beacon:x", "a", "ta"), false);
   assert.equal((await adapter.getControllerLease("beacon:x"))?.holderId, "b");
 });
+
+test("execution capabilities survive heartbeats without sharing mutable state", async () => {
+  const adapter = new StationNetworkMemoryAdapter();
+  const member = station("execution");
+  member.definitions.execution = { sandbox: { backend: "host-process" } };
+  await adapter.upsertStation(member);
+  member.definitions.execution.sandbox!.backend = "mutated";
+  const first = await adapter.getStation(member.id);
+  assert.equal(first?.definitions.execution?.sandbox?.backend, "host-process");
+  first!.definitions.execution!.sandbox!.backend = "changed read";
+  const heartbeat = { ...member, definitions: { ...member.definitions, execution: { browser: { backend: "playwright" } } } };
+  await adapter.heartbeat(member.id, heartbeat);
+  heartbeat.definitions.execution.browser.backend = "changed write";
+  assert.deepEqual((await adapter.getStation(member.id))?.definitions.execution, { sandbox: undefined, browser: { backend: "playwright" } });
+});

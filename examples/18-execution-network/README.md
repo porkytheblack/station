@@ -36,6 +36,24 @@ pnpm --filter example-18-execution-network browser
 
 Headquarters listens on port 5700, Sandbox on 5701, and Browser Use on 5702. Open Headquarters, log in, and create an API key with the `admin` scope. Only that public key belongs in clients. The execution token is a separate secret shared exclusively by Headquarters and private workers.
 
+## Dashboard
+
+After signing in to Headquarters with the administrator account, open `/sandboxes` to select a Sandbox worker, create a workspace, run commands, inspect output, cancel work or remove the workspace. Open `/browser-use` for the independent browser session controls, navigation, interaction and screenshots.
+
+The dashboard discovers advertised workers through admin-only `GET /api/v1/execution`. The catalog includes station identity, status, capabilities, backend names and availability; capabilities are not inferred from labels. Selecting a worker binds subsequent actions to that owner. Headquarters remains the browser's public interaction point, while workers and the execution token stay private.
+
+## Install a custom workspace tool
+
+From a selected workspace, install a local dependency-free CLI tarball with:
+
+```sh
+npm install --global --ignore-scripts --no-audit --no-fund /data/custom-tool.tgz
+```
+
+After the install command completes successfully, invoke its binary by name in a new command. The adapter defaults npm's global prefix to `HOME/.local`, and prepends `workspace/node_modules/.bin` followed by `HOME/.local/bin` to PATH. Project-local npm installs also expose their binaries by name and take precedence over global workspace tools.
+
+Installed tools survive fresh shells and worker restarts when the Sandbox volume survives. Another workspace does not acquire them through its PATH, but this is not filesystem confinement: trusted code still has the worker OS user's file access. npm and any required native tools must already be present on the worker. A dependency-free tarball can be installed with `--offline`; registry dependencies need network access. An operator's explicit `NPM_CONFIG_PREFIX` override changes where npm installs; a custom prefix's bin directory must be added to configured PATH when needed.
+
 ## Owner-routed execution
 
 Every operation is a JSON POST to Headquarters. Keep the owner station ID together with each returned workspace or browser session ID. Do not replay a failed creation or other mutation automatically: a transport failure may happen after the worker completed it.
@@ -90,3 +108,11 @@ Draining owners reject new work (`create`, `exec`, `open`, and browser actions),
 The gateway rejects offline, expired-lease and wrong-network owners, follows no redirects, and never forwards the public API key to a worker. Requests are bounded to 128 KiB and proxied successful responses to 33 MiB (allowing the browser adapter’s 32 MiB JSON output plus its response envelope). A request timeout can leave an operation's outcome unknown; inspect the owner before deciding whether to repeat it.
 
 Deferred: automatic capacity-based environment placement, distributed session ownership/leases, idle eviction, streaming PTYs, stronger per-workspace isolation, migration, billing, and high availability. This slice is for trusted operator-controlled workloads.
+
+## Dashboard integration harness
+
+```sh
+pnpm test:execution:dashboard
+```
+
+This repository harness targets the built Headquarters dashboard and real private Sandbox and Browser Use workers. It includes installing a custom CLI from a local offline package, running it by name later and checking persistence, alongside browser interaction/screenshots. Prepare the built packages and browser dependencies first. The local end-to-end run passed with separate Headquarters and worker processes, including worker restart, installed-tool persistence, command failures/cancellation/timeouts, both browser backends and screenshot downloads. This does not establish cloud deployment readiness.

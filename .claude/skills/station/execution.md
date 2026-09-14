@@ -36,6 +36,16 @@ await sandboxes.close();
 
 The worker must provide Bash and native tools. Commands start fresh noninteractive shells; files persist, shell variables do not. `cwd` is an existing relative directory within the workspace. File operations currently use commands. `cancel` waits for process cleanup; `destroy` refuses while commands are active and deletes workspace files after cleanup.
 
+### Install a custom CLI once, then use its name
+
+Every command prepends `workspace/node_modules/.bin` and `HOME/.local/bin` to the configured or host PATH. `NPM_CONFIG_PREFIX` defaults to `HOME/.local`, so npm global installs stay with the workspace home:
+
+```sh
+npm install --global --ignore-scripts --no-audit --no-fund /data/custom-tool.tgz
+```
+
+Wait for installation to finish successfully, then run the installed binary by name in a fresh command. Local `npm install` also makes project binaries available by name; project binaries take precedence over home-global and shared host tools. Installations survive new shells and worker restarts when the workspace volume survives. Other workspaces do not acquire these binaries through their PATH. This is not filesystem isolation: commands can still access files permitted to the worker's OS user. An explicit `env.NPM_CONFIG_PREFIX` override changes the install location; add its bin directory to `env.PATH` if needed.
+
 Defaults: 20 workspaces, four running commands, 256 KiB combined captured output, 30 seconds per command with a configurable five-minute maximum, and 100 retained completed command records per workspace. Capture is byte-bounded and UTF-8 aware. Old completed command IDs expire when history is pruned. These are application bounds, not OS CPU/memory/disk or child-process quotas.
 
 Capabilities are `filesystem: true`, `commands: true`, `isolated: false`, `pty: false`. Separate folders and HOME directories do not isolate commands from the host or other workspaces. Only explicitly configured child environment variables plus PATH, locale, HOME and a temporary directory are supplied; the host environment is not inherited wholesale. Commands may still read anything allowed to the worker's OS user.
@@ -71,13 +81,19 @@ try {
 
 Actions: `navigate`, `evaluate`, `click`, `type`, `press`, `screenshot`. Use CSS selectors for portable clicks. `type` inserts into the focused element, so click first. Evaluate JSON-compatible expressions; wrap multiple statements in an IIFE for Bun. Screenshots are viewport PNGs. The manager exposes open, list, perform, closeSession and close; concurrent actions on the same handle fail with `busy`.
 
-Profiles and sessions are ephemeral. Closing or restarting loses tabs, cookies and browser memory. Persist application progress externally, then create a new session explicitly. There are no persistent profiles, browser attachment, upload/download helpers, multi-page API, proxy settings or idle eviction yet. Browser sessions are not tenant isolation boundaries and have the worker's network reachability. Bun's API is experimental; local macOS tests do not establish headless Linux or Railway support. No throughput advantage has been established.
+Profiles and sessions are ephemeral. Closing or restarting loses tabs, cookies and browser memory. Persist application progress externally, then create a new session explicitly. There are no persistent profiles, browser attachment, upload/download helpers, multi-page API, proxy settings or idle eviction yet. Browser sessions are not tenant isolation boundaries and have the worker's network reachability. Bun's API is experimental. Bun WebView and Playwright passed real Chromium checks on macOS and in a Debian ARM64 container; the Linux fixture harness disables Chromium's own sandbox. Railway deployment and production isolation remain unvalidated. No throughput advantage has been established.
 
 ## Headquarters is the public gateway
 
 Start from [example 18](../../../examples/18-execution-network/README.md) in the repository. It supplies three configurations: Headquarters, Sandbox worker and Browser Use worker, using shared Postgres for Station coordination. The two execution primitives have separate ownership and capacity. They do not implicitly allocate one another.
 
 Workers opt in through `defineConfig({ execution: { token, sandbox } })` or `defineConfig({ execution: { token, browser } })`. Headquarters uses `execution: { token }`. The token must contain at least 32 characters and is shared only by the trusted services. Configure normal Headquarters login credentials and create an admin API key for external clients.
+
+### Dashboard and worker discovery
+
+Log in to Headquarters with the configured administrator account. `/sandboxes` provides owner selection, workspace creation, command execution/output, cancellation and deletion. `/browser-use` provides a separate browser-owner selector, session lifecycle, navigation, interaction and screenshots. The browser page is not the browser-local `station-browser` runtime.
+
+The admin-only `GET /api/v1/execution` endpoint returns advertised execution workers with station IDs, names, statuses, capabilities, backend names and an availability flag. Discover workers from this endpoint rather than guessing their capabilities from labels or IDs. Selection remains explicit owner routing; discovery does not schedule or migrate sessions. Keep private worker endpoints and the internal execution token out of public clients.
 
 Public operations use JSON POST requests with an admin API key/session:
 
@@ -117,7 +133,7 @@ A timeout can leave an operation's outcome unknown. Do not automatically replay 
 
 Use one process/replica per stable worker ID. Advertise reachable private HTTP endpoints for workers; expose Headquarters publicly. Keep the same network ID, Postgres connection and execution token across the services. Provision tools and browser libraries in each worker image, allow required outbound requests, and disable sleeping when retaining live sessions.
 
-Persist Sandbox's workspace root and Station data directory; persist Headquarters' data directory for API keys/session secrets. Postgres stores membership and Station jobs/schedules, not browser memory or Sandbox files. An ordinary service volume is not a shared multi-worker filesystem. Redeployment interrupts commands and browsers; saved workspace files only survive when the volume does. Real headless Linux/Railway deployment of this execution topology is not yet validated.
+Persist Sandbox's workspace root and Station data directory; persist Headquarters' data directory for API keys/session secrets. Postgres stores membership and Station jobs/schedules, not browser memory or Sandbox files. An ordinary service volume is not a shared multi-worker filesystem. Redeployment interrupts commands and browsers; saved workspace files only survive when the volume does. The complete dashboard topology passed locally with SQLite and PostgreSQL. Linux primitive checks passed separately; the complete topology has not been deployed to Railway.
 
 Deferred: automatic environment placement, distributed ownership/leases, migration, idle eviction, streaming terminals, tenant authorization, stronger isolation, high availability and billing. Do not present this slice as a production multi-tenant execution platform.
 
@@ -137,3 +153,7 @@ export default defineConfig({
 Node remains the default. The same `processRuntime` option is available on `SignalRunner` and `BeaconRunner`; it selects bootstrap children and preserves Station's JSON IPC contract. Bun loads TypeScript without Node's tsx hook. This does not switch the controller, browser adapter or Sandbox shell and does not provide isolation. Validate native dependencies, signal/beacon behavior and the target OS before rollout. Compare representative Station workloads before claiming faster throughput or lower memory.
 
 Package READMEs define exact options and limits: `packages/station-sandbox/README.md`, `packages/station-browser-use/README.md`. Verify package builds/tests, the real-browser integration test and owner-routing tests; provision the three-service example separately before treating a deployment as verified.
+
+## Full dashboard integration check
+
+The repository's `pnpm test:execution:dashboard` harness exercises the built Headquarters dashboard with real private execution workers, browser control and a dependency-free local npm package installed offline. Its custom-tool path covers install, later plain-name execution and workspace persistence. The command builds the dashboard and requires Bun, Playwright/Chromium and native SQLite support. It also verifies failure output, cancellation, timeouts, workspace deletion, screenshot downloads and closing browsers during pending actions. A passing local run does not establish cloud deployment readiness.

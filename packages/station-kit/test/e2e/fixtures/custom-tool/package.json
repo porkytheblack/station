@@ -1,0 +1,7 @@
+{
+  "name": "station-dashboard-e2e-tool",
+  "version": "1.0.0",
+  "private": true,
+  "bin": { "station-e2e-tool": "cli.cjs" },
+  "files": ["cli.cjs"]
+}

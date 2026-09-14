@@ -39,6 +39,25 @@ await sandboxes.close();
 
 The public adapter contract provides create, list, get, destroy, exec, command, cancel and close. File operations currently use shell commands; there is no separate file-transfer API. `cwd` accepts existing relative directories within the workspace; absolute paths and symlink escapes are rejected for this starting directory. This check does not restrict what the command itself can open or change.
 
+## Install workspace tools
+
+The adapter prepends the workspace's `node_modules/.bin` and `HOME/.local/bin` to the explicitly configured `env.PATH` (or the host PATH when none is configured). Project-installed tools take precedence over workspace global tools, which take precedence over shared host tools. Paths containing spaces are supported; quote file paths in shell command text as usual.
+
+By default, `NPM_CONFIG_PREFIX` points to `HOME/.local`, so this installs an npm CLI for this workspace without writing to the host's global tool directory:
+
+```ts
+const install = await sandboxes.exec(workspace.id, {
+  command: "npm install --global --ignore-scripts --no-audit --no-fund /data/custom-tool.tgz",
+  timeoutMs: 120_000,
+});
+// Wait for install.finishedAt through command(), then start a fresh command:
+const use = await sandboxes.exec(workspace.id, { command: "custom-tool --version" });
+```
+
+An ordinary local `npm install` also exposes project binaries by plain command name. Installations persist across commands and manager restarts when the workspace volume survives. Other workspaces do not gain these commands through their PATH. This is tool organization, not isolation: trusted commands can still access other directories allowed to the same OS user.
+
+Operators may explicitly override `env.NPM_CONFIG_PREFIX`; that can place installations outside the workspace and changes the persistence/sharing behavior. An overridden prefix's `bin` directory is not added automatically—include it in `env.PATH` when needed. Install scripts are arbitrary code; the example disables them. Package installation from registries requires outbound network access, whereas a dependency-free local tarball can be installed offline. npm itself must already be available on the worker.
+
 ## Commands and limits
 
 Each command starts a fresh Bash process with profiles disabled. Shell variables, changed directories and shell bindings do not carry into the next command. Files do. Input is noninteractive; stdin and PTYs are not supported in this adapter.
@@ -51,7 +70,7 @@ These limits bound admission, captured output and retained command history. They
 
 Commands are bounded jobs: ordinary descendants in the command's process group are terminated when the shell exits, is cancelled, times out, or the adapter closes. Termination escalates to SIGKILL if necessary. Processes that deliberately escape the group are outside this backend's supervision guarantees. Persistent daemons and reconnectable terminals require a different lifecycle implementation.
 
-Host environment variables are not inherited wholesale. Children receive `PATH`, a locale, explicitly supplied `env` values, and the workspace's assigned `HOME` and temporary directory. Do not put secrets in a shared environment unless all workspaces using this adapter may access them.
+Host environment variables are not inherited wholesale. Children receive the composed `PATH`, a locale, the workspace-local npm prefix default, explicitly supplied `env` values, and the workspace's assigned `HOME` and temporary directory. Do not put secrets in a shared environment unless all workspaces using this adapter may access them.
 
 ## Persistence and recovery
 

@@ -2,6 +2,8 @@
 
 Prepared September 14, 2026. Release version: **2.4.0**.
 
+Follow-up: [Dashboard and end-to-end validation](./station-dashboard-validation.md) records the added Sandbox/Browser Use dashboard pages, persistent custom tool installation, and newer verification results. The counts below describe the original implementation checkpoint.
+
 The first execution release is implemented: **Station Sandbox**, **Station Browser Use**, authenticated Headquarters routing, and optional Bun execution for signals and beacons. The complete release dry run passed for all sixteen packages. No npm packages were uploaded and no cloud resources were provisioned.
 
 This is a working foundation for trusted agent workloads. The larger Foundry deployment platform still needs automatic placement, durable workflow/session coordination, stronger tenant isolation and deployment automation.
@@ -100,7 +102,7 @@ Version 2.3.0 was already published, so all public packages were advanced togeth
 
 ## Deployment boundaries and next work
 
-The new primitives declare Node 20 or newer; validation used Node 22. Bun and a Chromium installation are additionally required when selecting Bun browser sessions. Bun WebView is experimental. Linux/Railway, native WebKit, Windows and production fleet performance have not been validated in this change.
+The new primitives declare Node 20 or newer; validation used Node 22. Bun and a Chromium installation are additionally required when selecting Bun browser sessions. Bun WebView is experimental. At this initial checkpoint, Linux/Railway, native WebKit, Windows and production fleet performance had not been validated. The follow-up report above records subsequent Linux primitive and PostgreSQL dashboard verification; Railway remains unvalidated.
 
 The example provides configurations and deployment instructions for ordinary services. Its Postgres deployment has not been provisioned or exercised against a live cloud database here. Headquarters should be the only public service; specialized workers need private endpoints and their own tooling. Persist workspace files and Station data on volumes, and disable sleeping when live sessions must remain available.
 

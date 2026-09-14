@@ -10,6 +10,10 @@ function cloneStation(station: StationNode): StationNode {
       signals: [...station.definitions.signals],
       broadcasts: [...station.definitions.broadcasts],
       beacons: [...station.definitions.beacons],
+      execution: station.definitions.execution ? {
+        sandbox: station.definitions.execution.sandbox ? { ...station.definitions.execution.sandbox } : undefined,
+        browser: station.definitions.execution.browser ? { ...station.definitions.execution.browser } : undefined,
+      } : undefined,
       beaconMetadata: station.definitions.beaconMetadata?.map((item) => ({
         ...item,
         requiredEnv: item.requiredEnv ? [...item.requiredEnv] : undefined,
@@ -50,6 +54,10 @@ export class StationNetworkMemoryAdapter implements StationNetworkAdapter {
         signals: [...heartbeat.definitions.signals],
         broadcasts: [...heartbeat.definitions.broadcasts],
         beacons: [...heartbeat.definitions.beacons],
+        execution: heartbeat.definitions.execution ? {
+          sandbox: heartbeat.definitions.execution.sandbox ? { ...heartbeat.definitions.execution.sandbox } : undefined,
+          browser: heartbeat.definitions.execution.browser ? { ...heartbeat.definitions.execution.browser } : undefined,
+        } : undefined,
         beaconMetadata: heartbeat.definitions.beaconMetadata?.map((item) => ({
           ...item,
           requiredEnv: item.requiredEnv ? [...item.requiredEnv] : undefined,

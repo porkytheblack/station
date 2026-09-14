@@ -180,9 +180,13 @@ export class HostSandboxAdapter implements SandboxAdapter {
     if (delta === ".." || delta.startsWith("../") || isAbsolute(delta)) fail("invalid_input", "Working directory must be inside the workspace.");
     const run: CommandRun = { id: randomUUID(), sandboxId: id, status: "running", stdout: "", stderr: "", truncated: false, exitCode: null, startedAt: new Date().toISOString() };
     this.write(this.runPath(id, run.id), run);
+    const home = join(this.root, id, "home");
+    const toolPrefix = join(home, ".local");
+    const path = [join(workspace, "node_modules", ".bin"), join(toolPrefix, "bin"),
+      this.options.env?.PATH ?? process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin"].join(":");
     const child = spawn(this.options.shell ?? "/bin/bash", ["--noprofile", "--norc", "-c", input.command], {
       cwd, detached: true, stdio: ["ignore", "pipe", "pipe"],
-      env: { PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin", LANG: "C.UTF-8", ...this.options.env, HOME: join(this.root, id, "home"), TMPDIR: workspace },
+      env: { LANG: "C.UTF-8", NPM_CONFIG_PREFIX: toolPrefix, ...this.options.env, PATH: path, HOME: home, TMPDIR: workspace },
     });
     let bytes = 0;
     const captured = { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };

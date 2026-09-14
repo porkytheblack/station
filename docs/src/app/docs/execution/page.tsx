@@ -82,6 +82,27 @@ await sandboxes.close();`}</Code>
         escaped process groups are outside this backend&apos;s guarantees.
       </p>
 
+      <h3>Install tools into a workspace</h3>
+      <Code>{`npm install --global --ignore-scripts --no-audit --no-fund /data/custom-tool.tgz
+# After installation succeeds, run its binary by name in a new command:
+custom-tool --version`}</Code>
+      <p>
+        Commands prepend <code>workspace/node_modules/.bin</code> and
+        <code> HOME/.local/bin</code> to the configured or host PATH. npm&apos;s global
+        prefix defaults to <code>HOME/.local</code>, so custom tools stay in the
+        workspace home. Project-local npm binaries take precedence over workspace
+        global tools. npm and required native dependencies must already be installed
+        on the worker; a dependency-free local tarball can be installed offline.
+      </p>
+      <p>
+        Tools survive fresh shells and worker restarts when the workspace volume
+        survives. Other workspaces do not gain them through PATH. This does not
+        restrict filesystem access: trusted commands retain the OS user&apos;s
+        permissions. An explicit <code>env.NPM_CONFIG_PREFIX</code> override changes
+        installation location; include its bin directory in <code>env.PATH</code>
+        when required.
+      </p>
+
       <h3>Independent browser sessions</h3>
       <Code>{`import { BrowserSessionManager } from "station-browser-use";
 import { BunBrowserAdapter } from "station-browser-use/bun";
@@ -124,8 +145,26 @@ const browsers = new BrowserSessionManager(
         boundaries. Profiles are ephemeral: closing or restarting loses cookies,
         tabs and browser memory. Persistent profiles, uploads/downloads, multi-page
         APIs, proxy settings and idle eviction are deferred. Bun WebView is
-        experimental; local macOS verification does not establish headless Linux
-        or Railway deployment support, or a throughput/memory advantage.
+        experimental. Both adapters passed real Chromium checks on macOS and in
+        a Debian ARM64 container. Linux fixture tests disable Chromium&apos;s own
+        sandbox; they do not establish production isolation, Railway deployment
+        support, or a throughput/memory advantage.
+      </p>
+
+      <h3>Use the Headquarters dashboard</h3>
+      <p>
+        Sign in to Headquarters with its configured administrator account.
+        <code> /sandboxes</code> provides worker selection, workspace creation,
+        commands/output, cancellation and deletion. <code>/browser-use</code>
+        provides separate browser session controls, navigation, interaction and
+        screenshots. Both use Headquarters as their public entry point.
+      </p>
+      <p>
+        The admin-only <code>GET /api/v1/execution</code> endpoint discovers
+        advertised workers and returns their identities, statuses, capabilities,
+        backend names and availability. Capabilities are not guessed from labels.
+        Discovery still requires selecting the exact owner; it does not schedule
+        or migrate resources. The internal worker token stays between services.
       </p>
 
       <h3>Route through the exact owner</h3>
@@ -193,10 +232,23 @@ execution: { token: process.env.STATION_EXECUTION_TOKEN!, sandbox: sandboxes }
         access. Disable sleeping when retaining live sessions.
       </p>
       <p>
-        The example describes an ordinary service deployment contract. Real Linux
-        and Railway deployment is not yet validated. Automatic placement,
+        The example describes an ordinary service deployment contract. Linux primitive
+        checks passed separately from the local SQLite/PostgreSQL dashboard tests;
+        a Railway deployment remains unvalidated. Automatic placement,
         distributed ownership, migration, streaming PTYs, tenant authorization,
         stronger isolation, high availability and billing remain future work.
+      </p>
+
+      <h3>Exercise the full dashboard topology</h3>
+      <Code>{`pnpm test:execution:dashboard`}</Code>
+      <p>
+        The integration harness targets the built Headquarters dashboard, real
+        private execution workers, browser interaction/screenshots and a custom
+        CLI installed from a dependency-free local package offline. Prepare the
+        browser dependencies first; the command builds the dashboard. It covers
+        worker restart and installed-tool persistence, command failures, cancellation,
+        timeouts, workspace deletion, and closing browsers during pending actions.
+        Passing this local test does not establish cloud deployment readiness.
       </p>
 
       <h3>Opt in to Bun signal and beacon children</h3>

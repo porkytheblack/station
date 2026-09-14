@@ -1,12 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, symlinkSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, symlinkSync, mkdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HostSandboxAdapter } from "../src/index.js";
 
 async function fixture(t: Parameters<Parameters<typeof test>[1]>[0], options = {}) {
-  const rootDir = mkdtempSync(join(tmpdir(), "station-sandbox-"));
+  const rootDir = mkdtempSync(join(tmpdir(), "station sandbox-"));
   const host = new HostSandboxAdapter({ rootDir, ...options });
   t.after(async () => { await host.close(); rmSync(rootDir, { recursive: true, force: true }); });
   return { host, rootDir };
@@ -167,4 +167,59 @@ test("persistence failures surface to callers instead of stale running results",
   await assert.rejects(host.command(sandbox.id, run.id), /Failed to persist/);
   await assert.rejects(host.exec(sandbox.id, { command: "true" }), /storage is unavailable/);
   await assert.rejects(host.create(), /storage is unavailable/);
+});
+
+test("offline npm-installed tools survive new commands and restart, without leaking through another workspace PATH", async (t) => {
+  const configuredPath = process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin";
+  const { host, rootDir } = await fixture(t, { env: { PATH: configuredPath } });
+  const workspace = await host.create();
+  const other = await host.create();
+  const workingDir = join(rootDir, workspace.id, "workspace");
+  const packageDir = join(workingDir, "tool fixture");
+  mkdirSync(packageDir);
+  writeFileSync(join(packageDir, "package.json"), JSON.stringify({
+    name: "station-sandbox-offline-fixture", version: "1.0.0",
+    bin: { "station-sandbox-fixture-tool": "cli.cjs" },
+  }));
+  writeFileSync(join(packageDir, "cli.cjs"), '#!/usr/bin/env node\nconsole.log("custom-tool-global");\n', { mode: 0o755 });
+  const execute = async (adapter: HostSandboxAdapter, id: string, command: string) => {
+    const started = await adapter.exec(id, { command, timeoutMs: 30_000 });
+    return finished(adapter, id, started.id);
+  };
+  const packed = await execute(host, workspace.id, "npm pack './tool fixture' --ignore-scripts --offline --json");
+  assert.equal(packed.status, "completed", packed.stderr);
+  const [archive] = JSON.parse(packed.stdout) as { filename: string }[];
+  assert.match(archive!.filename, /^station-sandbox-offline-fixture-1\.0\.0\.tgz$/);
+  const installed = await execute(host, workspace.id,
+    `npm install --global --ignore-scripts --no-audit --no-fund --offline './${archive!.filename}'`);
+  assert.equal(installed.status, "completed", installed.stderr);
+  const globalTool = await execute(host, workspace.id, "station-sandbox-fixture-tool");
+  assert.equal(globalTool.status, "completed", globalTool.stderr);
+  assert.equal(globalTool.stdout.trim(), "custom-tool-global");
+  assert.equal((await execute(host, other.id, "station-sandbox-fixture-tool")).exitCode, 127);
+  assert.ok(readFileSync(join(rootDir, workspace.id, "home/.local/lib/node_modules/station-sandbox-offline-fixture/cli.cjs"), "utf8").includes("custom-tool-global"));
+  const path = await execute(host, workspace.id, 'printf "%s" "$PATH"');
+  assert.equal(path.stdout, [join(realpathSync(workingDir), "node_modules/.bin"), join(rootDir, workspace.id, "home/.local/bin"), configuredPath].join(":"));
+  await host.close();
+  const recovered = new HostSandboxAdapter({ rootDir, env: { PATH: configuredPath } });
+  t.after(() => recovered.close());
+  const retained = await execute(recovered, workspace.id, "station-sandbox-fixture-tool");
+  assert.equal(retained.status, "completed", retained.stderr);
+  assert.equal(retained.stdout.trim(), "custom-tool-global");
+  assert.equal((await execute(recovered, other.id, "station-sandbox-fixture-tool")).exitCode, 127);
+
+  // A workspace-local dependency wins over a tool with the same global command name.
+  writeFileSync(join(workingDir, "package.json"), JSON.stringify({ name: "workspace-fixture", version: "1.0.0", private: true }));
+  const localInstall = await execute(recovered, workspace.id,
+    `npm install --ignore-scripts --no-audit --no-fund --offline './${archive!.filename}'`);
+  assert.equal(localInstall.status, "completed", localInstall.stderr);
+  writeFileSync(join(workingDir, "node_modules/station-sandbox-offline-fixture/cli.cjs"), '#!/usr/bin/env node\nconsole.log("custom-tool-local");\n');
+  assert.equal((await execute(recovered, workspace.id, "station-sandbox-fixture-tool")).stdout.trim(), "custom-tool-local");
+});
+
+test("operators can override npm prefix while workspace tool paths stay first", async (t) => {
+  const { host } = await fixture(t, { env: { NPM_CONFIG_PREFIX: "/operator/configured-prefix" } });
+  const workspace = await host.create();
+  const run = await host.exec(workspace.id, { command: 'printf "%s" "$NPM_CONFIG_PREFIX"' });
+  assert.equal((await finished(host, workspace.id, run.id)).stdout, "/operator/configured-prefix");
 });

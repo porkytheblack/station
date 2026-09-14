@@ -8,13 +8,40 @@ import { serve } from "@hono/node-server";
 import { StationNetworkMemoryAdapter, type StationNode } from "station-network";
 import { HostSandboxAdapter } from "station-sandbox";
 import { BrowserSessionManager } from "station-browser-use";
-import { internalExecutionRoutes, publicExecutionRoutes, type ExecutionDeps } from "../../../src/server/routes/execution.js";
+import { executionCatalogRoutes, internalExecutionRoutes, publicExecutionRoutes, type ExecutionDeps } from "../../../src/server/routes/execution.js";
 import { authResolver } from "../../../src/server/middleware/auth.js";
 import { KeyStore, MemoryKeyStorage } from "../../../src/server/auth/keys.js";
 import { resolveConfig } from "../../../src/config/schema.js";
 
 const token = "worker-secret-".repeat(4);
 const request = (body: unknown, auth?: string) => ({ method: "POST", headers: { "content-type": "application/json", ...(auth ? { authorization: `Bearer ${auth}` } : {}) }, body: JSON.stringify(body) });
+
+test("dashboard discovers advertised capabilities with owner availability and admin authentication", async () => {
+  const adapter = new StationNetworkMemoryAdapter();
+  const keys = new KeyStore(new MemoryKeyStorage());
+  const admin = (await keys.create("operator", ["admin"])).key;
+  const read = (await keys.create("observer", ["read"])).key;
+  const worker = node("coding", "http://private-worker:5700");
+  worker.definitions.execution = { sandbox: { backend: "host-process" } };
+  await adapter.upsertStation(worker);
+  await adapter.upsertStation({ ...worker, id: "browser", status: "draining", definitions: { ...worker.definitions, execution: { browser: { backend: "bun" } } } });
+  await adapter.upsertStation({ ...worker, id: "offline", leaseExpiresAt: new Date(0) });
+  await adapter.upsertStation({ ...worker, id: "elsewhere", networkId: "other" });
+  await adapter.upsertStation(node("legacy", "http://private-worker:5701"));
+  const app = new Hono();
+  app.use("/*", authResolver({ keyStore: keys }));
+  app.route("/", executionCatalogRoutes({ adapter, networkId: "test", stationId: "hq", role: "headquarters", enabled: true }));
+  assert.equal((await app.request("/execution")).status, 401);
+  assert.equal((await app.request("/execution", { headers: { authorization: `Bearer ${read}` } })).status, 403);
+  const response = await app.request("/execution", { headers: { authorization: `Bearer ${admin}` } });
+  assert.equal(response.status, 200);
+  const { data } = await response.json();
+  assert.deepEqual(data.map((row: { stationId: string }) => row.stationId).sort(), ["browser", "coding", "offline"]);
+  assert.deepEqual(data.find((row: { stationId: string }) => row.stationId === "coding").capabilities, { sandbox: true, browser: false });
+  assert.equal(data.find((row: { stationId: string }) => row.stationId === "browser").available, true);
+  assert.equal(data.find((row: { stationId: string }) => row.stationId === "offline").available, false);
+  assert.ok(data.every((row: object) => !Object.hasOwn(row, "endpoint")));
+});
 function node(id: string, endpoint: string, patch: Partial<StationNode> = {}): StationNode {
   return { id, name: id, networkId: "test", role: "station", status: "online", labels: {}, capacity: { maxConcurrent: 2, activeRuns: 0 }, definitions: { signals: [], broadcasts: [], beacons: [] }, endpoint, startedAt: new Date(), lastHeartbeatAt: new Date(), leaseExpiresAt: new Date(Date.now() + 60_000), ...patch };
 }

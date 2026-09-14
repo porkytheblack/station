@@ -115,9 +115,19 @@ route admin requests to their exact private worker. See the
 [three-service example](./examples/18-execution-network) and
 [agent reference](.claude/skills/station/execution.md). These are initial primitives:
 no automatic environment placement, tenant isolation or restoration of live
-processes/browser sessions. Linux/Railway deployment validation remains outstanding.
+processes/browser sessions. Both primitives pass Linux container checks; a Railway
+deployment remains unvalidated.
 Node stays the default signal/beacon runtime; `BunProcessRuntime` is an opt-in
 child-runtime adapter, independent of browser control.
+
+The administrator dashboard provides `/sandboxes` and `/browser-use`, discovering
+advertised workers through `GET /api/v1/execution`. Workspace-local and home-global
+npm tools are available by command name and persist with the worker's workspace
+volume across new shells/restarts; this does not provide filesystem isolation.
+The `pnpm test:execution:dashboard` harness exercises the built
+Headquarters/private-worker topology, browser control and a custom offline CLI
+installation. See the [validation report](./plans/station-dashboard-validation.md)
+for passing SQLite/PostgreSQL dashboard runs and Linux primitive checks.
 
 [station-docs](https://github.com/porkytheblack/station) — Getting started, API reference, examples.
 

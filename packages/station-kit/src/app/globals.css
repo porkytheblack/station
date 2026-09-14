@@ -1652,3 +1652,28 @@ a:hover {
   color: var(--rust);
   background: var(--concrete-dark);
 }
+
+/* ─── Execution workspaces ───────────────────────────────── */
+.execution-intro { color: var(--muted); margin-bottom: 1.25rem; }
+.execution-owner, .execution-toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: .75rem; margin: 1rem 0; }
+.execution-owner .execution-field { flex: 1; min-width: 220px; max-width: 480px; }
+.execution-field { display: flex; flex-direction: column; gap: .4rem; margin: .8rem 0; min-width: 0; }
+.execution-field > span { font-family: var(--font-mono); font-size: .75rem; color: var(--muted); }
+.execution-field select { min-height: 36px; }
+.execution-field .input-textarea { margin-top: 0; }
+.execution-toolbar .execution-field { margin: 0; }
+.execution-toolbar h2, .execution-result h2 { font-size: .875rem; font-weight: 500; margin: 0; }
+.execution-grow { flex: 1; min-width: 180px; }
+.execution-note { color: var(--muted); font-size: .8125rem; line-height: 1.6; }
+.execution-card { margin-top: 1.25rem; padding: 1.25rem; }
+.execution-card > .execution-toolbar:first-child { margin-top: 0; }
+.execution-error { margin: 1rem 0; padding: .85rem 1rem; border: 1px solid var(--rust); border-radius: 4px; font-size: .875rem; line-height: 1.5; overflow-wrap: anywhere; }
+.execution-result { margin-top: 1.5rem; }
+.execution-output { margin: .75rem 0; padding: 1rem; background: var(--code-bg); color: var(--code-text); border: 1px solid var(--wire); border-radius: 4px; font: .8125rem/1.6 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 480px; overflow: auto; }
+.execution-screenshot { margin: 1.5rem 0 0; }
+.execution-screenshot img { display: block; width: 100%; height: auto; border: 1px solid var(--wire); border-radius: 4px; }
+.execution-screenshot figcaption { margin: .65rem 0; }
+@media (max-width: 640px) {
+  .execution-card { padding: .85rem; }
+  .execution-owner .execution-field, .execution-grow { flex-basis: 100%; max-width: none; }
+}
