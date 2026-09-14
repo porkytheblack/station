@@ -1655,8 +1655,12 @@ a:hover {
 
 /* ─── Execution workspaces ───────────────────────────────── */
 .execution-intro { color: var(--muted); margin-bottom: 1.25rem; }
-.execution-owner, .execution-toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: .75rem; margin: 1rem 0; }
-.execution-owner .execution-field { flex: 1; min-width: 220px; max-width: 480px; }
+.execution-owner { margin: 1rem 0; }
+.execution-owner-label { display: block; margin-bottom: .4rem; font-family: var(--font-mono); font-size: .75rem; color: var(--muted); }
+.execution-owner-controls { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; }
+.execution-owner-controls > select { flex: 1; min-width: min(220px, 100%); max-width: 480px; min-height: 36px; }
+.execution-owner-status { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; }
+.execution-toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: .75rem; margin: 1rem 0; }
 .execution-field { display: flex; flex-direction: column; gap: .4rem; margin: .8rem 0; min-width: 0; }
 .execution-field > span { font-family: var(--font-mono); font-size: .75rem; color: var(--muted); }
 .execution-field select { min-height: 36px; }
@@ -1675,5 +1679,5 @@ a:hover {
 .execution-screenshot figcaption { margin: .65rem 0; }
 @media (max-width: 640px) {
   .execution-card { padding: .85rem; }
-  .execution-owner .execution-field, .execution-grow { flex-basis: 100%; max-width: none; }
+  .execution-owner-controls > select, .execution-grow { flex-basis: 100%; max-width: none; }
 }

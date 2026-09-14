@@ -1,22 +1,27 @@
 "use client";
 
+import { useId } from "react";
 import type { ExecutionStation } from "../hooks/use-execution";
 
 export function ExecutionOwner({ label, stations, owner, onChange, busy, refresh }: {
   label: string; stations: ExecutionStation[]; owner: string; onChange: (id: string) => void; busy: boolean; refresh: () => Promise<void>;
 }) {
   const station = stations.find((node) => node.stationId === owner);
+  const selectorId = useId();
   return <div className="execution-owner">
-    <label className="execution-field"><span>{label}</span>
-      <select className="input-text" aria-label={label} value={owner} disabled={busy} onChange={(event) => onChange(event.target.value)}>
+    <label className="execution-owner-label" htmlFor={selectorId}>{label}</label>
+    <div className="execution-owner-controls">
+      <select id={selectorId} className="input-text" aria-label={label} value={owner} disabled={busy} onChange={(event) => onChange(event.target.value)}>
         {!owner && <option value="">Select a station</option>}
         {owner && !station && <option value={owner}>{owner} · unavailable</option>}
         {stations.map((node) => <option key={node.stationId} value={node.stationId}>{node.name} · {node.status}{!node.available ? " · unavailable" : ""}</option>)}
       </select>
-    </label>
     <button type="button" className="btn" disabled={busy} onClick={() => void refresh()}>Refresh stations</button>
+    <div className="execution-owner-status">
     {station?.backends && <span className="execution-note">{Object.values(station.backends).filter(Boolean).join(" · ")}</span>}
     {station && <span className={`status-badge status-${station.available ? station.status === "draining" ? "pending" : "completed" : "failed"}`}>{station.available ? station.status : "unavailable"}</span>}
+    </div>
+    </div>
   </div>;
 }
 export function ExecutionAlert({ error }: { error: string }) {
