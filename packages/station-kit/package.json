@@ -43,19 +43,21 @@
   },
   "dependencies": {
     "@hono/node-server": "^1",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "esbuild": "^0.25.12",
     "hono": "^4",
     "next": "15.5.12",
     "react": "19.2.4",
     "react-dom": "19.2.4",
+    "station-browser-use": "workspace:*",
     "station-env": "workspace:*",
     "station-expressions": "workspace:*",
     "station-network": "workspace:*",
+    "station-sandbox": "workspace:*",
     "station-schedules": "workspace:*",
     "tsx": "^4.21.0",
-    "ws": "^8",
-    "station-sandbox": "workspace:*",
-    "station-browser-use": "workspace:*"
+    "ws": "^8"
   },
   "devDependencies": {
     "@types/node": "^25.3.0",

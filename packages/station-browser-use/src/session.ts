@@ -51,6 +51,7 @@ export function managedSession(browser: BrowserSession, timeoutMs: number): Brow
   };
   const text = (value: string, operation: () => Promise<void>) => run(async () => { validateInput(value); await operation(); });
   return {
+    ...(browser.execute ? { execute: (command: import("./commands.js").BrowserCommand) => run(() => browser.execute!(command)) } : {}),
     navigate: (value) => text(value, () => browser.navigate(value)),
     click: (value) => text(value, () => browser.click(value)),
     type: (value) => text(value, () => browser.type(value)),

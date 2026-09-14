@@ -8,6 +8,7 @@ export interface ExecutionStation {
   status: "online" | "draining" | "offline";
   role: string;
   capabilities: { sandbox: boolean; browser: boolean };
+  features?: { sandbox?: Record<string, boolean>; browser?: Record<string, boolean> };
   available: boolean;
   backends?: { sandbox?: string; browser?: string };
 }

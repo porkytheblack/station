@@ -12,8 +12,10 @@ export interface StationDefinitions {
   beacons: string[];
   /** Optional execution capabilities advertised by newer workers. */
   execution?: {
-    sandbox?: { backend: string };
-    browser?: { backend: string };
+    /** Internal dedicated-worker ownership; never derive from customer request headers. */
+    tenantId?: string;
+    sandbox?: { backend: string; capabilities?: Record<string, boolean> };
+    browser?: { backend: string; capabilities?: Record<string, boolean> };
   };
   /** Rich beacon catalog used by Headquarters without importing worker code. */
   beaconMetadata?: Array<{

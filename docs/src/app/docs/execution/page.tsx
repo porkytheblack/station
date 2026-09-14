@@ -10,14 +10,14 @@ export const metadata: Metadata = {
 export default function ExecutionPage() {
   return (
     <>
-      <div className="eyebrow">Experimental guide</div>
+      <div className="eyebrow">Execution environments</div>
       <h2 style={{ marginTop: 0 }}>Sandbox and Browser Use</h2>
       <p>
         Station supplies two separate server execution primitives: native shell
         workspaces and live browser sessions. A Headquarters service can expose
         their authenticated API while private, specialized workers own the resources.
-        This first implementation targets trusted operator-controlled workloads;
-        it is not a production multi-tenant execution platform.
+        Use the host backend for trusted work. Customer execution requires tenant-scoped
+        authorization and isolated, network-restricted container backends.
       </p>
       <table className="api-table">
         <thead><tr><th>Primitive</th><th>Runs where</th><th>Purpose</th></tr></thead>
@@ -63,12 +63,12 @@ await sandboxes.close();`}</Code>
         Install Bash, Node, Git and other native tools in the worker image or host.
         Commands use those real programs; Unix is not emulated. Each command starts
         a fresh noninteractive shell with a separate workspace home. Files persist;
-        shell bindings do not. File operations currently use commands. An optional
+        shell bindings do not. The file API supports bounded reads, writes, uploads and directory listings. An optional
         relative <code>cwd</code> must resolve inside the workspace.
       </p>
       <p>
         The host-process adapter advertises <code>isolated: false</code> and
-        <code> pty: false</code>. Commands can access everything permitted to the
+        <code> pty: true</code> when explicitly enabled on a Node controller. Commands can access everything permitted to the
         worker&apos;s OS user, including other workspaces. Directory validation and
         explicit environment variables organize trusted work; they are not a security
         boundary. Provision OS/container CPU, memory, disk and process limits separately.
@@ -103,6 +103,47 @@ custom-tool --version`}</Code>
         when required.
       </p>
 
+      <h3>Terminals, services and files</h3>
+      <Code>{`const sandbox = new HostSandboxAdapter({
+  rootDir: "/data/workspaces", enablePty: true,
+}); // Install optional node-pty; controller must run Node.
+const ws = await sandbox.create();
+await sandbox.writeFile(ws.id, "hello.txt", {
+  base64: Buffer.from("hello").toString("base64"),
+});
+const terminal = await sandbox.openTerminal(ws.id, { cols: 100, rows: 24 });
+await sandbox.terminalInput(ws.id, terminal.id, "node --version\r");
+const output = await sandbox.terminal(ws.id, terminal.id, 0);
+await sandbox.resizeTerminal(ws.id, terminal.id, 120, 30);
+const service = await sandbox.startService(ws.id, {
+  name: "app", command: "node server.js",
+  restart: { policy: "on-failure", maxRestarts: 5, delayMs: 1000 },
+});
+await sandbox.stopService(ws.id, service.id);`}</Code>
+      <p>Terminal output uses byte offsets and a bounded retained buffer. Reconnect while
+        the worker lives; restart interrupts the shell. Service restart policy is explicit,
+        bounded and stored with service intent. File APIs reject traversal and symlinks;
+        the trusted host backend still cannot confine commands to those paths.</p>
+      <h3>Isolated container workspaces</h3>
+      <Code>{`import { ContainerSandboxAdapter } from "station-sandbox/container";
+const sandbox = new ContainerSandboxAdapter({
+  rootDir: "/data/container-state",
+  image: "your-registry/station-tools@sha256:YOUR_VERIFIED_DIGEST",
+  engine: "docker", // Podman is also supported.
+  network: "none", memoryMb: 512, cpus: 1, pidsLimit: 128,
+  enablePty: true,
+});
+await sandbox.ready();`}</Code>
+      <p>Provision a Linux engine and pre-pull an operator-controlled image containing
+        Node, Bash and setsid. Each workspace has a nonroot container and persistent named
+        volume. The adapter drops capabilities, uses a read-only root, bounds CPU/memory/PIDs
+        and exposes no engine socket or arbitrary host mounts to workload code. Engine
+        access belongs exclusively to the controller. It never falls back to host execution.</p>
+      <p>Network access defaults to none. Public customers must not receive unrestricted
+        bridge networking: protect cloud metadata, private networks and other tenants with
+        an operator-enforced egress policy. Named volumes need storage-level disk quotas;
+        command output limits do not limit what a program can write to disk. Root ownership
+        locks are local, not distributed fencing.</p>
       <h3>Independent browser sessions</h3>
       <Code>{`import { BrowserSessionManager } from "station-browser-use";
 import { BunBrowserAdapter } from "station-browser-use/bun";
@@ -142,22 +183,39 @@ const browsers = new BrowserSessionManager(
       </p>
       <p>
         Browser sessions have independent lifecycles and are not tenant isolation
-        boundaries. Profiles are ephemeral: closing or restarting loses cookies,
-        tabs and browser memory. Persistent profiles, uploads/downloads, multi-page
-        APIs, proxy settings and idle eviction are deferred. Bun WebView is
+        boundaries. Playwright supports persistent profiles, multiple pages, structured form actions,
+        uploads/downloads and operator-configured proxy settings. Configure profileRootDir
+        to retain cookies across sessions. Live tabs and process memory are still lost
+        on restart. The manager expires idle sessions and retains bounded audit metadata. Bun WebView is
         experimental. Both adapters passed real Chromium checks on macOS and in
         a Debian ARM64 container. Linux fixture tests disable Chromium&apos;s own
         sandbox; they do not establish production isolation, Railway deployment
         support, or a throughput/memory advantage.
       </p>
 
+      <h3>Profiles, page tools and durable recordings</h3>
+      <Code>{`const browsers = new BrowserSessionManager(
+  new PlaywrightBrowserAdapter({ profileRootDir: "/data/profiles" }),
+  3, { recordingRootDir: "/data/recordings", idleTimeoutMs: 900_000 },
+);
+const session = await browsers.open({ profileId: "research" });
+await browsers.execute(session.id, { op: "newPage", url: "https://example.com" });
+await browsers.execute(session.id, { op: "fill", selector: "#query", value: "Station" });
+const pages = await browsers.execute(session.id, { op: "pages" });
+const recording = browsers.startRecording(session.id);`}</Code>
+      <p>Structured operations include fill, select, check, hover, scroll, waitFor, content,
+        history navigation, page management and bounded upload/download artifacts.
+        Bun advertises only its supported basic capabilities; the dashboard hides unsupported
+        tools. A profile can be open only once per owning manager, and storage roots must
+        have exactly one live owner. Browser artifacts and audit entries are bounded but
+        ephemeral; disk-backed recordings and saved profiles have separate persistence.</p>
       <h3>Use the Headquarters dashboard</h3>
       <p>
         Sign in to Headquarters with its configured administrator account.
         <code> /sandboxes</code> provides worker selection, workspace creation,
-        commands/output, cancellation and deletion. <code>/browser-use</code>
+        commands/output, cancellation, interactive terminals, supervised services, files and deletion. <code>/browser-use</code>
         provides separate browser session controls, navigation, interaction and
-        screenshots. Both use Headquarters as their public entry point.
+        screenshots, profiles, pages, upload/download tools and recording playback. Both use Headquarters as their public entry point.
       </p>
       <p>
         The admin-only <code>GET /api/v1/execution</code> endpoint discovers
@@ -181,7 +239,9 @@ const browsers = new BrowserSessionManager(
         Defaults are 120 frames per recording, 16 retained recordings, and 64 MiB
         of PNG data across the worker manager. Reaching a limit stops capture and
         preserves existing frames. Delete recordings to release space. Recordings
-        live in worker memory and are lost when it restarts.
+        use memory by default. Configure recordingRootDir on persistent storage to survive
+        worker replacement; recordingTtlMs defaults to seven days. A recovered recording
+        is stopped: the platform does not reconstruct the old browser.
       </p>
       <Code>{`const recording = browsers.startRecording(session.id);
 // Later, stop capture without closing the browser:
@@ -239,10 +299,36 @@ execution: { token: process.env.STATION_EXECUTION_TOKEN!, sandbox: sandboxes }
         follows no redirects and never forwards the public API key to a worker.
         Draining blocks new work and browser actions while preserving Sandbox
         inspection/cancellation/deletion and browser list/close operations. It does not reroute a live resource to another station. Requests are
-        capped at 128 KiB and successful proxied responses at 33 MiB including JSON/base64 overhead. A timeout can
+        capped at 128 KiB for ordinary operations; file uploads allow an 8 MiB JSON envelope
+        with at most 4 MiB decoded content. Successful proxied responses are capped at 33 MiB including JSON/base64 overhead. A timeout can
         leave the operation&apos;s outcome unknown: inspect the owner before repeating
         create, open, exec or any other mutation.
       </p>
+
+      <h3>Public tenant execution</h3>
+      <p>Keep the dashboard and operator API restricted to your staff. Customer keys must
+        have only the execution scope; Headquarters maps their verified key record IDs to
+        tenant IDs. Each private worker is dedicated to one tenant. Both Headquarters and
+        the worker check ownership, and tenant mode refuses host or unrestricted-network
+        backends. Persisted owner bindings prevent reusing a data root for a different tenant.</p>
+      <Code>{`// Headquarters: operator-owned configuration
+execution: { token: serviceSecret, tenants: {
+  apiKeyTenants: { "VERIFIED_KEY_RECORD_ID": "customer-a" },
+} }
+// Dedicated private worker, with an isolated/restricted adapter:
+execution: { token: serviceSecret, tenantId: "customer-a", sandbox }
+// Customer endpoints:
+// GET /api/v1/tenant/execution
+// POST /api/v1/tenant/stations/:stationId/execution/:primitive`}</Code>
+      <p>ContainerBrowserAdapter from station-browser-use/container runs each Playwright
+        session inside a separately constrained Linux container with an immutable image worker.
+        Profile volumes and recordings retain their tenant ownership. Default networking is
+        disabled. An operator-enforced named egress network is required for permitted internet
+        browsing; a configuration flag alone does not install that policy.</p>
+      <p>Read the <a href="https://github.com/porkytheblack/station/tree/main/scripts/execution-container">tenant deployment contract</a>
+        for image builds, key provisioning, storage quotas, egress controls and rollout checks.
+        These APIs supply execution boundaries; customer onboarding, billing, automatic
+        provisioning and distributed failover remain responsibilities of the surrounding platform.</p>
 
       <h3>Persistence and service deployment</h3>
       <p>
@@ -255,7 +341,7 @@ execution: { token: process.env.STATION_EXECUTION_TOKEN!, sandbox: sandboxes }
       </p>
       <p>
         On restart, leftover running command records become interrupted and are
-        never automatically replayed. Saved files can survive; processes, shells
+        never automatically replayed. Saved files and configured profiles/recordings can survive; processes, shells
         and browser sessions do not. Supervisors must reap the old process tree
         before a replacement takes ownership. Workers need private reachable HTTP
         endpoints, packaged tools and browser libraries, and required outbound
@@ -265,8 +351,8 @@ execution: { token: process.env.STATION_EXECUTION_TOKEN!, sandbox: sandboxes }
         The example describes an ordinary service deployment contract. Linux primitive
         checks passed separately from the local SQLite/PostgreSQL dashboard tests;
         a Railway deployment remains unvalidated. Automatic placement,
-        distributed ownership, migration, streaming PTYs, tenant authorization,
-        stronger isolation, high availability and billing remain future work.
+        distributed ownership, migration, high availability, customer onboarding and
+        billing require a platform layer beyond these execution primitives.
       </p>
 
       <h3>Exercise the full dashboard topology</h3>

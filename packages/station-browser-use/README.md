@@ -1,139 +1,204 @@
 # station-browser-use
 
-A browser-control primitive for Station workers. It owns live browser sessions through interchangeable Bun WebView and Playwright adapters. It is separate from `station-sandbox` (OS commands and workspaces) and `station-browser` (running Station inside a browser/service worker).
+Browser sessions, structured browser commands, file artifacts and bounded screenshot recordings for Station workers. This primitive is separate from `station-sandbox` (OS workspaces and commands) and `station-browser` (Station running inside a browser/service worker).
 
-This is an initial implementation, not a production multi-tenant browser service. The package supplies local session lifecycle and operations; deployment, authentication, tenant authorization, durable session ownership and Headquarters routing belong to the application/control plane.
+A manager owns live sessions on one worker. Applications provide authentication, authorization, routing to that owner, worker supervision and deployment isolation. This package does not make a browser process a tenant security boundary.
 
-## Bun WebView
-
-A Node-based Station worker can control Bun's built-in browser API through a dedicated Bun subprocess for each session. Station itself does not need to migrate to Bun.
+## Configure a worker
 
 ```ts
 import { BrowserSessionManager } from "station-browser-use";
-import { BunBrowserAdapter } from "station-browser-use/bun";
+import { PlaywrightBrowserAdapter } from "station-browser-use/playwright";
 
-const browsers = new BrowserSessionManager(new BunBrowserAdapter({
-  bunPath: "bun",
-  backend: "chrome",
-  operationTimeoutMs: 30_000,
-}), 4);
+const browsers = new BrowserSessionManager(new PlaywrightBrowserAdapter({
+  profileRootDir: "/data/browser-profiles",
+  timeoutMs: 30_000,
+  viewport: { width: 1280, height: 720 },
+  maxPages: 8,
+  maxArtifacts: 16,
+  maxArtifactBytes: 4 * 1024 * 1024,
+}), 4, {
+  recordingRootDir: "/data/browser-recordings",
+  recordingTtlMs: 7 * 24 * 60 * 60 * 1000,
+  idleTimeoutMs: 15 * 60 * 1000,
+  intervalMs: 5_000,
+  maxFrames: 120,
+  maxRecordings: 16,
+  maxTotalBytes: 64 * 1024 * 1024,
+  auditLimit: 1000,
+});
 
+const session = await browsers.open({ profileId: "research" });
 try {
-  const session = await browsers.open();
   await browsers.perform(session.id, "navigate", "https://example.com");
   const title = await browsers.perform(session.id, "evaluate", "document.title");
-  const image = await browsers.perform(session.id, "screenshot");
-  // image: { mimeType: "image/png", base64: string }
+  const png = await browsers.perform(session.id, "screenshot");
+  // png: { mimeType: "image/png", base64: string }
   console.log(title);
-  await browsers.closeSession(session.id);
 } finally {
-  await browsers.close();
+  await browsers.closeSession(session.id);
 }
+// Call during graceful worker shutdown, after stopping admission to your API:
+await browsers.close();
 ```
 
-Install a Bun version that provides `Bun.WebView` and a compatible Chromium-family browser on the worker. The adapter defaults to Chrome on every platform and explicitly disables attaching to an existing personal browser. `chromePath` selects an executable; Bun can otherwise discover installed browsers or Playwright's cache. `backend: "webkit"` is an explicit macOS-only alternative, not a Linux fallback. Viewport dimensions default to 1280 × 720 and accept 1–4096 pixels per dimension.
-
-Bun's Chrome backend shares a browser/profile across views in a Bun process. This adapter therefore uses one Bun process per session, with an ephemeral browser profile. Its child environment contains only PATH, HOME and TMPDIR, not the worker's other environment variables. This is credential hygiene, not filesystem or network isolation.
-
-The [Bun WebView API](https://bun.com/docs/runtime/webview) is experimental. Both browser adapters have passed real Chromium checks on macOS and in a Debian ARM64 container. The Linux fixture harness disables Chromium's own sandbox; Railway, Windows and WebKit deployment validation remain outstanding. No Bun throughput or memory advantage is claimed by these tests.
-
-## Playwright
-
-Install the optional `playwright` peer dependency and its Chromium browser on the worker:
+Install the optional `playwright` dependency and Chromium in the worker image:
 
 ```sh
 pnpm add station-browser-use playwright
 pnpm exec playwright install chromium
 ```
 
-```ts
-import { PlaywrightBrowserAdapter } from "station-browser-use/playwright";
+Provision [Linux browser dependencies](https://playwright.dev/docs/browsers#install-system-dependencies) as appropriate. `executablePath` selects an installed Chromium binary. An operator can configure `proxy: { server, bypass?, username?, password? }` on the adapter; proxy credentials are not exposed in session or audit metadata and cannot be changed through remote `open` options.
 
-const adapter = new PlaywrightBrowserAdapter({ timeoutMs: 30_000 });
-const session = await adapter.open();
-try {
-  await session.navigate("https://example.com");
-  const png = await session.screenshot(); // Uint8Array
-} finally {
-  await session.close();
-}
+`open()` accepts `profileId`, `viewport` and `idleTimeoutMs`. Viewport dimensions accept 1–4096 pixels. Session handles include creation/activity timestamps and the configured inactivity timeout. Opening and closing sessions count toward the manager's session limit (default four).
+
+## Playwright profiles and pages
+
+Without `profileId`, Playwright launches an ephemeral browser context in a separate Chromium process. With a profile ID, it launches a persistent context in the configured profile root. Persistent cookies and browser storage can survive closing and reopening that profile, including after replacing the adapter/worker. Session cookies follow Chromium's own restart behavior; persistence does not restore live JavaScript stacks or guarantee restoration of open tabs.
+
+Profile IDs are simple opaque identifiers, never filesystem paths. Profiles are unavailable unless `profileRootDir` is configured, and the advertised `profiles` capability reflects that. `listProfiles()` returns IDs and conservative ownership-lock status; `deleteProfile(id)` refuses a profile with a live owner. Only one session/process can own a profile at a time. A dead local process's ownership lock can be recovered on the next open. Treat a browser profile as sensitive authentication material.
+
+A session supports multiple pages sharing its context/profile. Commands act on the selected page. Use `pages`, `newPage`, `selectPage` and `closePage` to manage that selection. The default page limit is eight, configurable from 1–64. Popups count toward the same limit; excess popups are closed. Close the session to close its last page.
+
+## Structured commands
+
+`execute(sessionId, command)` accepts the exported `BrowserCommand` union. `validateBrowserCommand` and `validateBrowserOpenOptions` are exported for transports and reject unknown fields, invalid identifiers and malformed data.
+
+```ts
+await browsers.execute(session.id, { op: "fill", selector: "#query", value: "Station" });
+await browsers.execute(session.id, { op: "select", selector: "#category", values: ["research"] });
+await browsers.execute(session.id, { op: "check", selector: "#enabled", checked: true });
+await browsers.execute(session.id, { op: "hover", selector: "#menu" });
+await browsers.execute(session.id, { op: "scroll", x: 0, y: 500 });
+await browsers.execute(session.id, { op: "waitFor", selector: "#result", state: "visible" });
+const html = await browsers.execute(session.id, { op: "content" });
+const page = await browsers.execute(session.id, { op: "newPage", url: "https://example.com" });
 ```
 
-Playwright launches a separate headless Chromium process and ephemeral context for each session. An optional `executablePath` selects the Chromium binary. Provision its [Linux system dependencies](https://playwright.dev/docs/browsers#install-system-dependencies) in the deployment image as appropriate.
-
-## Operations and lifecycle
-
-Both adapters implement `open()` and return a session with:
-
-| Operation | Behavior |
+| Command | Additional fields |
 | --- | --- |
-| `navigate(url)` | Navigate the session's page. |
-| `evaluate(expression)` | Evaluate a JavaScript expression and await its result. Use JSON-compatible values; undefined becomes null. Wrap multiple statements in an IIFE for Bun compatibility. |
-| `click(selector)` | Click an actionable element. Use CSS selectors for portability. |
-| `type(text)` | Insert text into the focused element; focus with `click` first. |
-| `press(key)` | Press a key, such as Enter, Tab or Backspace. Backend-specific chord syntax is not portable. |
-| `screenshot()` | Capture the current viewport as PNG bytes. |
-| `close()` | Idempotently close the session, interrupting pending work. |
+| `fill` | `selector`, `value` |
+| `select` | `selector`, `values: string[]` |
+| `check` | `selector`, `checked: boolean` |
+| `hover` | `selector` |
+| `scroll` | finite `x`, `y` pixel deltas |
+| `waitFor` | `selector`, optional `state`: attached/detached/visible/hidden |
+| `content`, `back`, `forward`, `reload`, `pages` | None |
+| `newPage` | Optional `url` |
+| `selectPage`, `closePage` | `pageId` |
+| `upload` | `selector`, `files: { name, mimeType, base64 }[]` |
+| `download` | `selector` of the element that starts a download |
+| `downloadRead`, `downloadDelete` | `artifactId` |
 
-The manager returns opaque handles and base64 PNG results suitable for a transport. It rejects concurrent actions on one handle with `busy`; callers can retry after the current action. Different sessions can operate concurrently. Direct adapter sessions serialize operations and allow up to 64 active/queued calls. Timeouts apply when an operation starts, not to time spent queued.
+HTML content is capped at 4 MiB. Uploads contain bytes, not paths: at most 16 files and 4 MiB decoded data total. File names cannot contain path separators. A download click returns `{ id, name, mimeType, bytes, createdAt }`; `downloadRead` adds its base64 data. Artifact names are display metadata and are never used as output paths. MIME type is conservatively `application/octet-stream`.
 
-The manager defaults to four sessions. Opening and closing resources continue to count against capacity. Shutdown stops admission, waits for outstanding opens, closes late arrivals, and attempts every session close even if one fails. Applications must call `close()` during graceful worker shutdown.
+Downloads have a default aggregate retained-data budget of 4 MiB and 16 artifacts per session; configurable maxima are 16 MiB and 128 artifacts. Delete artifacts to reclaim capacity. Unexpected downloads are cancelled. An active download's temporary files are monitored and oversized downloads cancelled; retained output is checked again before storage. Browser disk writes can overshoot between checks, so use an OS/container storage quota for a hard disk bound. Download temporary files are cleaned after the operation or browser shutdown. Download artifacts are held in session memory and are lost when the session closes.
 
-Operations default to a 30-second timeout (configurable from 1 to 120,000 milliseconds). A timed-out session is retired rather than left with unresolved browser work; close its manager handle to release capacity. Inputs are limited to 64 KiB of UTF-8; JSON evaluation results to 32 MiB; PNG output to 24 MiB. These are response limits, not hard memory or CPU quotas on the browser. Bun additionally bounds its subprocess response stream.
+## Existing basic operations and Bun
 
-Bun shutdown terminates its owned POSIX process group, escalates to forced termination after a grace period, and waits for subprocess streams to close. Windows process-tree cleanup is not validated. Forced termination of the entire Station host cannot run application cleanup; a service supervisor/container must own and reap remaining processes.
-
-## Worker-side screenshot recordings
-
-`BrowserSessionManager` can retain a bounded sequence of PNG screenshots independently of an open dashboard. This is a screenshot recording, not an encoded video or a trace of every browser event.
+The existing `perform(id, action, value?)` interface remains available for `navigate`, `evaluate`, `click`, `type`, `press` and `screenshot`. `type` inserts text into the focused element; focus it first. Use CSS selectors and simple keys such as Enter or Backspace for portability. Evaluate JSON-compatible expressions; undefined becomes null. Wrap multiple statements in an IIFE for Bun compatibility.
 
 ```ts
-const browsers = new BrowserSessionManager(new BunBrowserAdapter(), 4, {
-  intervalMs: 5_000,
-  maxFrames: 120,
-  maxRecordings: 16,
-  maxTotalBytes: 64 * 1024 * 1024,
-});
-const session = await browsers.open();
-await browsers.perform(session.id, "navigate", "https://example.com");
+import { BunBrowserAdapter } from "station-browser-use/bun";
+const browsers = new BrowserSessionManager(new BunBrowserAdapter({
+  bunPath: "bun",
+  backend: "chrome",
+  chromePath: "/usr/bin/chromium",
+  operationTimeoutMs: 30_000,
+}));
+```
+
+Bun's built-in [WebView API](https://bun.com/docs/runtime/webview) remains experimental. The adapter forces a fresh browser and uses one Bun subprocess per session to avoid sharing Chrome profile state between unrelated sessions. A Node Station controller can use this adapter without migrating itself to Bun. Chrome is the default on all platforms; WebKit is an explicit macOS-only option.
+
+The Bun adapter supports the basic operations, ephemeral independent sessions, per-open viewport and screenshot recording. It explicitly advertises **no profiles, multiple-page commands, uploads or downloads**. Unsupported profile opens or structured commands fail; they do not fall back silently to another backend. Linux requires a compatible installed Chromium-family browser. The adapter strips worker environment variables except PATH, HOME and TMPDIR, which is credential hygiene rather than filesystem isolation.
+
+## Screenshot recordings and durability
+
+```ts
 const recording = browsers.startRecording(session.id);
-// Worker timers capture without the caller polling or keeping a page open.
-// For this demo, allow two later capture ticks before stopping.
-await new Promise((resolve) => setTimeout(resolve, 10_500));
-const metadata = browsers.getRecording(recording.id);
+const current = browsers.getRecording(recording.id);
+const all = browsers.listRecordings();
 const stopped = await browsers.stopRecording(recording.id);
 for (const frame of stopped.frames) {
   const png = browsers.recordingFrame(recording.id, frame.id);
-  // png: { mimeType: "image/png", base64: string }
 }
 await browsers.deleteRecording(recording.id);
-await browsers.close();
 ```
 
-The default cadence is one attempt immediately, then every five seconds on the worker. The first returned metadata may contain no frames while the first capture is pending. Busy sessions skip ticks and increment `skipped`; captures never overlap an action or create a backlog. Thus this is a best-effort cadence, not a guarantee of one frame every five seconds. Starting an already-active recording for the same session returns that recording.
+Recording is a sequence of PNG screenshots, not an encoded video or event trace. Capture starts immediately, then runs every five seconds on the worker independently of the dashboard. Busy ticks are skipped and counted rather than queued. The initial result may have no frames until its first capture completes. Starting an already-active recording for a session returns that recording.
 
-Metadata includes `id`, `sessionId`, `backend`, `startedAt`, optional `stoppedAt`, `status`, `intervalMs`, `frames`, retained PNG `bytes`, `skipped`, and an optional sanitized `error`. Each frame has an opaque `id`, `capturedAt` timestamp and PNG byte count. `listRecordings()` and `getRecording()` return defensive copies; PNG data is fetched separately with `recordingFrame()`.
+Metadata includes recording/session/backend IDs, timestamps, status (`recording`, `stopped`, `limit`, `error`), interval, frame metadata, byte count, skipped ticks and an optional sanitized error. Frame metadata contains its ID, capture timestamp and PNG byte count. Metadata reads return defensive copies; frame bytes are retrieved separately.
 
-The default limits are 120 frames per recording, 16 retained recordings and 64 MiB of PNG data across the manager. Frame or byte limits stop capture with status `limit` and preserve existing frames; nothing is silently evicted. A new recording beyond the recording-count limit fails with `capacity`. Deleting recordings releases the retained-byte budget. Configurable ranges are 100–3,600,000 milliseconds per tick, 1–10,000 frames, 1–1,024 recordings and 1 byte–1 GiB total PNG data. Individual frames are also capped at 24 MiB. These limits cover retained PNG bytes, not all browser or metadata memory.
+Without `recordingRootDir`, recordings use memory. With a dedicated root, frames and metadata are written atomically with file/directory synchronization. Frames commit before metadata references them. Only one manager can own a recording root. Recovery checks metadata and frame sizes, marks interrupted active recordings stopped with `recovered: true`, and cleans uncommitted frame files. Corrupt or linked frame files fail recovery rather than being followed. `recordingPersistence` reports `memory` or `disk` for discovery/UI.
 
-`stopRecording()` clears the timer and waits for an in-flight capture; an unfinished frame is discarded on stop. `deleteRecording()` stops capture before removing its retained frames. Closing a session or shutting down the manager stops its recordings and interrupts in-flight screenshots through the browser adapter. A capture failure stops recording with status `error`; existing frames remain available.
+Defaults: 120 frames per recording, 16 retained recordings, 64 MiB retained PNG data and seven days of stopped-record retention. A capture limit stops recording and keeps existing frames. Expired stopped recordings are deleted; recovery also removes the oldest stopped recordings if reduced configured byte/count limits require it. No live recording is silently evicted to admit another. PNG data is on disk when configured; memory holds metadata and the current capture rather than every retained frame.
 
-Recordings survive closing their live browser session **in the same manager**, and remain readable until explicitly deleted or the worker process restarts. They are held in bounded worker memory, not written to durable storage. A restart loses frames and metadata; an idle worker must remain running for timers to execute. Route recording reads and controls to the worker that owns them.
+Configurable ranges: interval 100 ms–1 hour; frames 1–10,000; recordings 1–1,024; total PNG data 1 byte–1 GiB; stopped retention 100 ms–365 days. Individual frames are capped at 24 MiB. These limits cover retained artifacts, not browser/profile caches, metadata memory or all temporary disk writes.
 
-## Deployment boundaries
+Stopping clears the timer and waits for an in-flight screenshot; an unfinished frame is discarded. Session close stops its recordings and interrupts screenshots before waiting. Recordings remain available after that live session closes. Memory recordings disappear on worker restart; disk recordings recover on a new manager pointing at the same volume. Neither mode resumes a browser session automatically.
 
-Each session belongs to the worker that opened it. A Headquarters service can route subsequent commands to that owner, while different private workers advertise Bun or Playwright capabilities. This package alone does not persist ownership or recover browser memory after a restart.
+Profile and recording roots must be distinct dedicated directories. Namespace markers prevent mixing their resource types. Locks are for a single host or mounted volume with reliable exclusive-create semantics, not a distributed fencing protocol. Remote-host or unverifiable owners fail closed. If a process dies during lock recovery itself, the recovery guard may require operator inspection. Storage quotas, backups and a supervisor remain deployment responsibilities.
 
-Profiles are ephemeral: closing, restarting or redeploying loses cookies, open pages and in-memory state. Durable agents can save their own progress externally and create a fresh browser later. Persistent profiles, downloads/uploads, proxy configuration, multi-page workflows, idle eviction and remote browser attachment are not included yet.
+## Lifecycle and operational limits
 
-A browser session does not constitute a tenant security boundary. It can navigate to addresses and execute page scripts available to its worker. Apply authentication, authorization, network policy and appropriate host/container isolation before exposing browser control to untrusted callers. Do not mount credentials or grant browser workers control of the host container runtime.
+Sessions expire after 15 minutes of inactivity by default; per-manager/per-open timeouts accept 100 ms–24 hours. Commands renew activity, while recording ticks and dashboard metadata polling do not. Thus unattended recording ends when its session expires. A bounded `audit()` history (default 1,000 events) reports opens, closes, idle expiry and action outcomes without URLs, command values, file contents or proxy credentials. Audit history is in memory and is not a compliance log.
+
+Manager operations reject overlapping work on a session with `busy`. Direct adapter sessions serialize operations with a maximum queue of 64. Operation timeouts default to 30 seconds (1–120,000 ms); they start when execution begins. Timed-out sessions close. Close their manager handles to release capacity. Basic action input is capped at 64 KiB, evaluation JSON at 32 MiB and PNG output at 24 MiB.
+
+Shutdown stops admission, closes late opens, interrupts browsers and releases recording/profile ownership after cleanup. Bun uses an owned POSIX process group and forced termination fallback. Windows process-tree behavior is not validated. Killing the controller abruptly cannot run its JavaScript cleanup; its supervisor must reap remaining processes.
+
+Browser processes can reach the worker's network and filesystem permissions. Apply tenant authorization and network policy before exposing control to callers. Persistent profiles contain credentials. This package does not certify untrusted multi-tenant isolation, crash-consistent network filesystems, unrestricted deployment platforms or a Bun speed advantage.
 
 ## Verification
 
 ```sh
 pnpm --filter station-browser-use build
+pnpm --filter station-browser-use typecheck
 pnpm --filter station-browser-use test
 pnpm --filter station-browser-use test:browsers
 ```
 
-Unit tests cover capacity during open/close, shutdown races and failures, serialization, cancellation, timeouts, input bounds, queue bounds and missing executables. Recording tests cover worker ticks, busy skips, frame/global-byte/count limits, defensive copies, errors, deletion and close/shutdown races. The explicit browser test builds the published JavaScript and exercises both real adapters against a local HTTP fixture: navigation, click/type/key input, evaluation, PNG bytes, independent cookies, pending-operation cancellation and closing one session without disrupting another. It requires Bun, Chromium/Playwright and permission to listen on loopback and launch browser processes. Browser tests are separate from the ordinary unit suite.
+Unit tests cover lifecycle races, capacity, serialization, timeouts, response bounds, recording persistence/recovery/retention, root locking, path safety, validation and audit redaction. Explicit real-browser tests use built JavaScript and local HTTP fixtures: both Bun and Playwright basic operations, independent cookies and cancellation; Playwright profile reuse after adapter replacement, profile locks, pages, richer actions, uploads/downloads and durable PNG recording recovery. Browser tests require loopback and browser-launch permission and installed runtimes. Target deployment/OS testing remains necessary in addition to local tests.
+
+## Container Playwright backend
+
+`station-browser-use/container` exports `ContainerBrowserAdapter`. It starts one Linux container for each browser session using an operator-managed Docker or Podman engine. It never falls back to a host browser. The controller requires access to that engine; workload containers never receive its socket or credentials.
+
+```ts
+import { ContainerBrowserAdapter } from "station-browser-use/container";
+import { BrowserSessionManager } from "station-browser-use";
+
+const browsers = new BrowserSessionManager(new ContainerBrowserAdapter({
+  engine: "podman",
+  rootDir: "/var/lib/station/browser-controller",
+  tenantId: "tenant-a",
+  image: "registry.example/station-browser@sha256:...",
+  network: "none",
+}), 4, { recordingRootDir: "/var/lib/station/browser-recordings", tenantId: "tenant-a" });
+await browsers.adapter.ready?.();
+await browsers.bindTenant("tenant-a");
+const session = await browsers.open({ profileId: "agent-browser" });
+```
+
+The image must contain Node, Playwright 1.63-compatible Chromium, and this package's compiled `container-worker.js` at `/opt/station/packages/station-browser-use/dist/container-worker.js`. `workerPath` can override that operator-controlled image path. The adapter resolves the configured local image to its immutable image ID before creating containers; it does not pull images. `/home/node` must be owned by UID/GID 1000 in the image so new named profile volumes inherit writable ownership. No host directory is mounted into a session.
+
+Container defaults are nonroot UID/GID `1000:1000`, all Linux capabilities dropped, `no-new-privileges`, a read-only root filesystem, an init process, 1 CPU, 1 GiB RAM, 256 PIDs, 256 MiB `/tmp`, 128 MiB shared memory, and no external network. A nonpersistent home uses bounded tmpfs. Persistent homes use labeled named volumes, with at most 64 profiles by default (`maxProfiles`, maximum 1024); `deleteProfile` removes the corresponding volume after verifying ownership. Persistent volume disk usage requires an engine/filesystem quota outside this package. Image files are immutable but `/tmp`, `/dev/shm`, and home/profile storage remain writable as configured.
+
+`isolated: true` describes the Linux container boundary, not a separate kernel or a proof of resistance to kernel/browser exploits. `networkRestricted: true` is automatic for `network: "none"`. `bridge` permits external networking and advertises false. A named network can advertise true only with the explicit operator assertion `networkRestricted: true`; the operator must actually enforce its egress policy. Built-in `bridge`, `default`, and `podman` networks cannot use that assertion. Host networking and container-network sharing are rejected. No client API can select a network, image, mount or privilege setting.
+
+`ready()` verifies the Linux engine, resource-controller support, immutable image, and previously journaled containers. Container names and profile volumes carry controller ownership labels. Restart reconciles old session containers before allowing profiles to be reused. A live controller root has an exclusive ownership lock. `bindTenant(id)` permanently binds controller storage and recording storage to one tenant; a later different or omitted identity is rejected. Pass the same `tenantId` in both the container adapter options and the manager recording options when reopening a bound recording root, so ownership is checked before recovery or retention cleanup. Existing unbound profiles/recordings cannot be adopted by a tenant. These locks are single-host controls, not distributed leases. Station must still authenticate callers and route each tenant only to its assigned worker.
+
+Engine logging is disabled for these containers so screenshot/RPC payloads do not accumulate in daemon log files. Browser commands use bounded JSONL over the attached container's standard streams, with 8 MiB requests and 34 MiB responses. Commands and screenshots retain the same manager/adapter limits. Close interrupts active work, closes Chromium for profile flushing, removes the owned session container, and keeps its profile volume until explicit deletion. If cleanup fails, the adapter fails closed and retains its journal for recovery. `BrowserSessionManager.close()` also closes adapters that implement their optional lifecycle method.
+
+Host Playwright and Bun adapters advertise `isolated: false` and `networkRestricted: false`. They are for trusted worker workloads; the public tenant gateway must enforce an isolated backend and an appropriate network policy. Container tests exercise actual runtime flags and functional separation, but do not establish a complete public multi-tenant security review.
+
+Run the real container integration after building the repository's test image target:
+
+```sh
+STATION_CONTAINER_ENGINE=podman \
+STATION_BROWSER_CONTAINER_IMAGE=localhost/station-browser-integration:test \
+pnpm --filter station-browser-use test:containers
+```
+
+The local Podman Linux integration verifies zero effective Linux capabilities, configured CPU/memory/PID limits, nonroot/read-only/no-network containers, no host bind mounts, separate cookies, profile exclusivity and quota, profile reuse after controller replacement, page controls, uploads/downloads, PNG capture, pending-action cancellation and durable recording recovery. It uses a test-only HTTP fixture inside each network-disabled container. It does not validate an external egress-policy deployment or a hostile-tenant penetration test.

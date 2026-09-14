@@ -2,11 +2,12 @@ import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { bodyLimit } from "hono/body-limit";
 import { createHash, timingSafeEqual } from "node:crypto";
-import { SandboxError } from "station-sandbox";
-import { BrowserUseError, type BrowserAction } from "station-browser-use";
+import { SandboxError, type FileWrite, type ServiceInput, type TerminalInput } from "station-sandbox";
+import { BrowserUseError, type BrowserAction, type BrowserCommand, type BrowserOpenOptions } from "station-browser-use";
 import type { StationNetworkAdapter, StationRole, StationNode } from "station-network";
 import type { ExecutionConfig } from "../../config/schema.js";
 import { requireScope } from "../middleware/scope-guard.js";
+import { validateExecutionRequest, isFileTransfer, type RequestBody } from "./execution-input.js";
 
 export interface ExecutionDeps {
   execution: ExecutionConfig;
@@ -38,14 +39,13 @@ export function executionCatalogRoutes(deps: Omit<ExecutionDeps, "execution"> & 
           stationId: node.id, name: node.name, role: node.role, status: node.status,
           capabilities: { sandbox: Boolean(node.definitions.execution?.sandbox), browser: Boolean(node.definitions.execution?.browser) },
           backends: { sandbox: node.definitions.execution?.sandbox?.backend, browser: node.definitions.execution?.browser?.backend },
+          features: { sandbox: node.definitions.execution?.sandbox?.capabilities, browser: node.definitions.execution?.browser?.capabilities },
           available: reachable && node.status !== "offline" && node.leaseExpiresAt.getTime() > now,
         };
       }) });
   });
   return app;
 }
-type RequestBody = Record<string, unknown> & { method: string };
-const actions = new Set(["navigate", "evaluate", "click", "type", "press", "screenshot"]);
 const messages = {
   invalid_input: "Invalid execution request.", not_found: "Execution resource not found.",
   busy: "Execution resource is busy.", capacity: "Execution capacity reached.",
@@ -54,39 +54,15 @@ const messages = {
 } as const;
 const statuses = { invalid_input: 400, not_found: 404, busy: 409, capacity: 429, unavailable: 503, unsupported: 503, invalid_state: 503 } as const;
 const invalid = (): never => { throw new SandboxError("invalid_input", messages.invalid_input); };
-function validate(primitive: string, input: unknown): RequestBody {
-  if (!input || typeof input !== "object" || Array.isArray(input)) return invalid();
-  const b = input as RequestBody;
-  const layouts: Record<string, string[]> = primitive === "sandbox"
-    ? { create: [], list: [], get: ["id"], destroy: ["id"], exec: ["id", "command", "cwd", "timeoutMs"], command: ["id", "runId"], cancel: ["id", "runId"] }
-    : primitive === "browser" ? { open: [], list: [], action: ["id", "action", "value"], close: ["id"], recordingStart: ["id"], recordingStop: ["id"], recordings: [], recording: ["id"], recordingFrame: ["id", "frameId"], recordingDelete: ["id"] } : {};
-  if (typeof b.method !== "string" || !Object.hasOwn(layouts, b.method)) return invalid();
-  const keys = layouts[b.method];
-  if (Object.keys(b).some((key) => key !== "method" && !keys.includes(key))) return invalid();
-  for (const key of ["id", "runId", "frameId"]) {
-    if (keys.includes(key) && (typeof b[key] !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(b[key] as string))) return invalid();
-  }
-  if (b.method === "exec") {
-    if (typeof b.command !== "string" || !b.command.trim() || b.command.length > 65_536) return invalid();
-    if (b.cwd !== undefined && (typeof b.cwd !== "string" || b.cwd.length > 4096)) return invalid();
-    if (b.timeoutMs !== undefined && (!Number.isSafeInteger(b.timeoutMs) || (b.timeoutMs as number) < 1 || (b.timeoutMs as number) > 2_147_483_647)) return invalid();
-  }
-  if (b.method === "action") {
-    if (typeof b.action !== "string" || !actions.has(b.action)) return invalid();
-    if (b.action !== "screenshot" && (typeof b.value !== "string" || b.value.length > 65_536)) return invalid();
-    if (b.action === "screenshot" && b.value !== undefined) return invalid();
-  }
-  return b;
-}
-function assertAvailable(node: StationNode | null, networkId: string, primitive: string, body: RequestBody) {
+export function assertAvailable(node: StationNode | null, networkId: string, primitive: string, body: RequestBody) {
   if (!node || node.networkId !== networkId) throw new SandboxError("unavailable", messages.unavailable);
   if (node.status === "offline" || node.leaseExpiresAt.getTime() <= Date.now()) throw new SandboxError("unavailable", messages.unavailable);
   const cleanup = primitive === "sandbox"
-    ? ["list", "get", "command", "cancel", "destroy"].includes(body.method)
-    : ["list", "close", "recordings", "recording", "recordingFrame", "recordingStop", "recordingDelete"].includes(body.method);
+    ? ["list", "get", "command", "cancel", "destroy", "listFiles", "readFile", "services", "service", "stopService", "removeService", "terminals", "terminal", "closeTerminal"].includes(body.method)
+    : ["list", "close", "recordings", "recording", "recordingFrame", "recordingStop", "recordingDelete", "profiles", "profileDelete", "audit"].includes(body.method) || (body.method === "execute" && ["pages", "downloadRead", "downloadDelete", "closePage"].includes((body.command as BrowserCommand).op));
   if (node.status !== "online" && !(node.status === "draining" && cleanup)) throw new SandboxError("unavailable", messages.unavailable);
 }
-async function dispatch(config: ExecutionConfig, primitive: string, b: RequestBody): Promise<unknown> {
+export async function dispatch(config: ExecutionConfig, primitive: string, b: RequestBody): Promise<unknown> {
   if (primitive === "sandbox" && config.sandbox) {
     const a = config.sandbox;
     switch (b.method) {
@@ -97,13 +73,33 @@ async function dispatch(config: ExecutionConfig, primitive: string, b: RequestBo
       case "exec": return a.exec(b.id as string, { command: b.command as string, cwd: b.cwd as string | undefined, timeoutMs: b.timeoutMs as number | undefined });
       case "command": return a.command(b.id as string, b.runId as string);
       case "cancel": return a.cancel(b.id as string, b.runId as string);
+      case "listFiles": if (a.listFiles) return a.listFiles(b.id as string, b.path as string | undefined, b.options as { offset?: number; limit?: number } | undefined); break;
+      case "readFile": if (a.readFile) return a.readFile(b.id as string, b.path as string, b.options as { offset?: number; length?: number } | undefined); break;
+      case "writeFile": if (a.writeFile) return a.writeFile(b.id as string, b.path as string, b.options as FileWrite); break;
+      case "removeFile": if (a.removeFile) { await a.removeFile(b.id as string, b.path as string, b.options as { recursive?: boolean } | undefined); return null; } break;
+      case "startService": if (a.startService) return a.startService(b.id as string, b.options as ServiceInput); break;
+      case "services": if (a.services) return a.services(b.id as string); break;
+      case "service": if (a.service) return a.service(b.id as string, b.serviceId as string); break;
+      case "stopService": if (a.stopService) return a.stopService(b.id as string, b.serviceId as string); break;
+      case "restartService": if (a.restartService) return a.restartService(b.id as string, b.serviceId as string); break;
+      case "removeService": if (a.removeService) { await a.removeService(b.id as string, b.serviceId as string); return null; } break;
+      case "openTerminal": if (a.openTerminal) return a.openTerminal(b.id as string, b.options as TerminalInput | undefined); break;
+      case "terminals": if (a.terminals) return a.terminals(b.id as string); break;
+      case "terminal": if (a.terminal) return a.terminal(b.id as string, b.terminalId as string, b.offset as number | undefined); break;
+      case "terminalInput": if (a.terminalInput) { await a.terminalInput(b.id as string, b.terminalId as string, b.data as string); return null; } break;
+      case "resizeTerminal": if (a.resizeTerminal) { await a.resizeTerminal(b.id as string, b.terminalId as string, b.cols as number, b.rows as number); return null; } break;
+      case "closeTerminal": if (a.closeTerminal) { await a.closeTerminal(b.id as string, b.terminalId as string); return null; } break;
     }
   }
   if (primitive === "browser" && config.browser) {
     const a = config.browser;
     switch (b.method) {
-      case "open": return a.open();
+      case "open": return a.open(b.options as BrowserOpenOptions | undefined);
       case "list": return a.list();
+      case "execute": return a.execute(b.id as string, b.command as BrowserCommand);
+      case "profiles": return a.listProfiles();
+      case "profileDelete": await a.deleteProfile(b.id as string); return null;
+      case "audit": return a.audit();
       case "action": return a.perform(b.id as string, b.action as BrowserAction, b.value as string | undefined);
       case "close": await a.closeSession(b.id as string); return null;
       case "recordingStart": return a.startRecording(b.id as string);
@@ -116,7 +112,7 @@ async function dispatch(config: ExecutionConfig, primitive: string, b: RequestBo
   }
   throw new SandboxError("unsupported", messages.unsupported);
 }
-function failure(c: Context, error: unknown) {
+export function failure(c: Context, error: unknown) {
   if (error instanceof HTTPException && error.status === 413) return c.json({ error: "payload_too_large" }, 413);
   if ((error instanceof SandboxError || error instanceof BrowserUseError) && Object.hasOwn(statuses, error.code)) {
     const code = error.code as keyof typeof statuses;
@@ -125,16 +121,22 @@ function failure(c: Context, error: unknown) {
   // Adapter/transport exceptions may contain filesystem paths, URLs or credentials.
   return c.json({ error: "unavailable", message: messages.unavailable }, 503);
 }
-async function readBody(c: Context) {
+export async function readBody(c: Context) {
   if (c.req.header("content-type")?.split(";")[0].trim().toLowerCase() !== "application/json") return invalid();
-  try { return validate(c.req.param("primitive") ?? "", await c.req.json()); }
+  try {
+    const raw = await c.req.text();
+    const input = JSON.parse(raw);
+    const transfer = input && typeof input === "object" && isFileTransfer(input);
+    if (!transfer && Buffer.byteLength(raw) > 128 * 1024) throw new HTTPException(413);
+    return validateExecutionRequest(c.req.param("primitive") ?? "", input);
+  }
   catch (e) {
     if (e instanceof Error && e.name === "BodyLimitError") throw new HTTPException(413);
     if (e instanceof SandboxError || e instanceof HTTPException) throw e;
     return invalid();
   }
 }
-const limit = () => bodyLimit({ maxSize: 128 * 1024, onError: (c) => c.json({ error: "payload_too_large" }, 413) });
+export const limit = () => bodyLimit({ maxSize: 8 * 1024 * 1024, onError: (c) => c.json({ error: "payload_too_large" }, 413) });
 
 /** Mounted outside browser/session authentication; only the worker secret is accepted. */
 export function internalExecutionRoutes(deps: ExecutionDeps): Hono {
@@ -147,6 +149,8 @@ export function internalExecutionRoutes(deps: ExecutionDeps): Hono {
     return next();
   }, limit(), async (c) => {
     try {
+      const tenantId = c.req.header("x-station-execution-tenant");
+      if (tenantId !== undefined && (!deps.execution.tenantId || tenantId !== deps.execution.tenantId)) return c.json({ error: "not_found" }, 404);
       const body = await readBody(c);
       assertAvailable(await deps.adapter.getStation(deps.stationId), deps.networkId, c.req.param("primitive"), body);
       return c.json({ data: await dispatch(deps.execution, c.req.param("primitive"), body) });
@@ -171,13 +175,21 @@ export function publicExecutionRoutes(deps: ExecutionDeps): Hono {
       const node = await deps.adapter.getStation(owner);
       if (!node || node.networkId !== deps.networkId || node.role !== "station") return c.json({ error: "not_found" }, 404);
       assertAvailable(node, deps.networkId, c.req.param("primitive"), body);
+      return await forwardExecution(c, deps, node, body);
+    } catch (error) { return failure(c, error); }
+  });
+  return app;
+}
+
+/** Shared bounded transport; tenant identity is supplied only by authenticated Headquarters routing. */
+export async function forwardExecution(c: Context, deps: ExecutionDeps, node: StationNode, body: RequestBody, tenantId?: string) {
       if (!node.endpoint) return c.json({ error: "unavailable" }, 503);
       const endpoint = new URL(node.endpoint);
       if (!["http:", "https:"].includes(endpoint.protocol) || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) return c.json({ error: "unavailable" }, 503);
       endpoint.pathname = `/internal/execution/${c.req.param("primitive")}`;
       const response = await fetch(endpoint, {
         method: "POST", redirect: "error", signal: AbortSignal.timeout(120_000),
-        headers: { "content-type": "application/json", authorization: `Bearer ${deps.execution.token}` },
+        headers: { "content-type": "application/json", authorization: `Bearer ${deps.execution.token}`, ...(tenantId ? { "x-station-execution-tenant": tenantId } : {}) },
         body: JSON.stringify(body),
       });
       if (!response.ok) {
@@ -202,7 +214,4 @@ export function publicExecutionRoutes(deps: ExecutionDeps): Hono {
       const result = JSON.parse(Buffer.concat(chunks).toString("utf8"));
       if (!result || !Object.hasOwn(result, "data")) throw new Error("Invalid response");
       return c.json({ data: result.data });
-    } catch (error) { return failure(c, error); }
-  });
-  return app;
 }

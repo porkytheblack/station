@@ -1,0 +1,21 @@
+{
+  "passed": true,
+  "database": "postgres",
+  "checks": [
+    "UI login, workspace creation, offline npm install and fresh-command CLI invocation passed",
+    "Custom install stayed out of a second workspace and survived owner process restart",
+    "Failed command exposes stderr/exit code; cancellation and configured timeout settle running commands",
+    "Real xterm input, installed CLI, reconnect to same terminal, responsive resize and close passed",
+    "Workspace file save, read, upload and download preserve bytes through Headquarters",
+    "Supervised service invokes installed tool, serves HTTP, stops, restarts, recovers explicitly after worker restart and removes through UI",
+    "Deleting the original workspace removes its installed tool and workspace files",
+    "bun-worker durable recording bytes and dashboard playback survive worker process restart",
+    "bun-worker UI actions, screenshots, five-second recording away from dashboard, playback after close and trace deletion passed",
+    "Playwright profile, form fill/select/check, file upload/download, page creation/selection/close passed",
+    "Playwright localStorage profile survives browser close and worker restart, then deletes through UI",
+    "playwright-worker durable recording bytes and dashboard playback survive worker process restart",
+    "playwright-worker UI actions, screenshots, five-second recording away from dashboard, playback after close and trace deletion passed",
+    "Settings creates execution-only key, displays mapping ID, denies operator access and revokes key"
+  ],
+  "dashboardErrors": []
+}

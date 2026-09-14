@@ -1,6 +1,6 @@
 # Linux execution primitive validation
 
-This harness builds and runs fresh Linux versions of `station-sandbox` and `station-browser-use`. It uses Node 22 on Debian Bookworm, Bun 1.3.14, distro Chromium, Bash and Git. npm installs the repository's current exact tsx, TypeScript, Node types and Playwright versions into a new Linux dependency directory. It never copies macOS `node_modules`, native binaries or prebuilt package output.
+This harness builds and runs fresh Linux versions of `station-sandbox` and `station-browser-use`. It uses Node 22 on Debian Bookworm, Bun 1.3.14, distro Chromium, Bash and Git. npm installs the repository's current exact tsx, TypeScript, Node types, node-pty and Playwright versions into a new Linux dependency directory. It never copies macOS `node_modules`, native binaries or prebuilt package output.
 
 Run from a checkout with a ready Linux Podman/Docker engine:
 
@@ -19,10 +19,12 @@ The harness runs:
 2. The same unit suites with Bun's Node compatibility layer.
 3. A Linux-only smoke suite against the newly compiled JavaScript exports: both Bun WebView and Playwright navigate a loopback page, type/click/press keys, evaluate, capture PNG bytes, keep cookies separate, cancel pending evaluation and close sessions independently.
 
+4. The advanced Playwright integration covers exclusive persistent profiles and cookie reuse after adapter replacement, multiple pages, structured controls, bounded uploads/downloads, recording persistence, deletion and byte limits.
+
 The smoke suite mirrors the existing browser integration scenarios while supplying the distro Chromium executable explicitly. It avoids downloading a second Playwright-managed browser. Version lines and TAP output identify the tested runtime/browser versions. Any failed test exits nonzero; there is no skip for unavailable Bun WebView.
 
 `chromium-test.sh` disables Chromium's own browser sandbox for these trusted local fixture tests, because unprivileged test containers may lack the required user namespaces. This is a harness configuration, not a production browser-isolation recommendation. The test must not be presented as proof of tenant isolation, production hardening, Railway deployment or the complete Headquarters dashboard topology. That topology has its own dashboard integration harness.
 
 The container and test workspaces are removed on exit; the built image remains in the local engine cache. To remove it afterward, run `podman image rm station-execution-linux:local` (or the Docker equivalent).
 
-Validated September 14, 2026 on Debian ARM64: Node 22.23.2, Bun 1.3.14 and Chromium 152.0.7977.82. At that checkpoint all 23 Node tests, 23 Bun tests and both real browser smoke tests passed without skips. The subsequent recording suite is included for future Linux runs; its first validation was on macOS Node and Bun.
+Validated September 14, 2026 on Debian ARM64: Node 22.23.2, Bun 1.3.14 and Chromium 152.0.7977.82. The production browser/sandbox checkpoint passed 49 Node unit tests, 49 Bun unit tests, both basic real-browser smoke tests, and the advanced Playwright integration. Bun explicitly skips its unsupported native PTY test. This snapshot includes the host service cleanup fix for the macOS shell-exit race and the final browser adapter capability/constructor validation. The later container file error mapping is covered by the separate real Podman integration, rather than this host-adapter harness. Container-browser isolation has a separate image/integration harness; this run does not cover that backend.

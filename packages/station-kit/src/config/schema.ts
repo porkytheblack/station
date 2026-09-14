@@ -7,10 +7,17 @@ import type { ApiKeyStorageAdapter } from "../server/auth/keys.js";
 import type { LogStorageAdapter } from "../server/log-store.js";
 import type { StationNetworkAdapter, StationRole } from "station-network";
 
-/** Trusted operator execution. Public RPC always requires an admin API key/session. */
+/** Execution backends with separate operator and optional dedicated-tenant gateways. */
 export interface ExecutionConfig {
   /** Separate shared worker secret, at least 32 characters. Never expose to workload processes. */
   token: string;
+  /** Dedicated private worker tenant. Immutable for the lifetime of its persistent adapter data. */
+  tenantId?: string;
+  /** Headquarters-only: verified execution-only API key IDs mapped to tenant IDs. */
+  tenants?: {
+    apiKeyTenants: Record<string, string>;
+    limits?: { requestsPerSecond?: number; burst?: number; maxInFlightPerTenant?: number; maxInFlight?: number };
+  };
   sandbox?: import("station-sandbox").SandboxAdapter;
   browser?: import("station-browser-use").BrowserSessionManager;
 }

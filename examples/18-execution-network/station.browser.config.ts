@@ -6,9 +6,9 @@ import { shared, required } from "./shared.js";
 
 const adapter = process.env.BROWSER_BACKEND === "bun"
   ? new BunBrowserAdapter({ bunPath: process.env.BUN_PATH, chromePath: process.env.CHROME_PATH, backend: "chrome" })
-  : new PlaywrightBrowserAdapter({ executablePath: process.env.CHROME_PATH });
+  : new PlaywrightBrowserAdapter({ executablePath: process.env.CHROME_PATH, profileRootDir: process.env.BROWSER_PROFILE_ROOT ?? ".station/browser/profiles" });
 
 export default defineConfig({
   ...shared("browser", 5702), role: "station",
-  execution: { token: required("STATION_EXECUTION_TOKEN"), browser: new BrowserSessionManager(adapter, 3) },
+  execution: { token: required("STATION_EXECUTION_TOKEN"), browser: new BrowserSessionManager(adapter, 3, { recordingRootDir: process.env.BROWSER_RECORDING_ROOT ?? ".station/browser/recordings" }) },
 });

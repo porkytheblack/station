@@ -4,6 +4,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useBreadcrumb } from "../hooks/use-breadcrumb";
 import { executionError, executionRequest, useExecutionStations, type ExecutionStation } from "../hooks/use-execution";
 import { ExecutionAlert, ExecutionOwner, OwnerNotice } from "../components/execution-common";
+import { SandboxTerminal } from "../components/sandbox-terminal";
+import { SandboxServices } from "../components/sandbox-services";
+import { SandboxFiles } from "../components/sandbox-files";
 import type { Sandbox, CommandRun } from "station-sandbox";
 
 export default function SandboxesPage() {
@@ -23,6 +26,7 @@ function SandboxWorkspace({ owner, station, onBusy }: { owner: string; station?:
   const [loading, setLoading] = useState(true);
   const listRevision = useRef(0);
   const [selected, setSelected] = useState("");
+  const [tool, setTool] = useState("commands");
   const [command, setCommand] = useState("");
   const [cwd, setCwd] = useState("");
   const [timeoutSeconds, setTimeoutSeconds] = useState(30);
@@ -90,7 +94,7 @@ function SandboxWorkspace({ owner, station, onBusy }: { owner: string; station?:
   const current = workspaces.find((item) => item.id === selected);
   return <section className="execution-workbench" aria-label="Sandbox workspace manager">
     <OwnerNotice station={station} />
-    <p className="execution-note">Host-process workspaces run trusted code with the worker’s permissions. Files persist with the worker’s storage; commands are bounded jobs. Install a workspace tool with npm install --global &lt;package&gt;, then run it by name.</p>
+    <p className="execution-note">{station?.features?.sandbox?.isolated ? "Container workspaces use the worker’s configured isolation and resource limits." : "Host-process workspaces run trusted code with the worker’s permissions."} Files persist with the worker’s storage; commands are bounded jobs. Install a workspace tool with npm install --global &lt;package&gt;, then run it by name.</p>
     <ExecutionAlert error={error} />
     {notice && <p role="status" className="execution-note">{notice}</p>}
     <div className="execution-toolbar">
@@ -102,6 +106,9 @@ function SandboxWorkspace({ owner, station, onBusy }: { owner: string; station?:
       <button className="btn" disabled={!reachable || busy} onClick={() => void act(refresh)}>Refresh workspaces</button>
       <span className="execution-note">{workspaces.length} workspace{workspaces.length === 1 ? "" : "s"}</span>
     </div>
+    {current && <div className="execution-toolbar" aria-label="Workspace tools">
+      {["commands", ...(station?.features?.sandbox?.pty ? ["terminal"] : []), ...(station?.features?.sandbox?.services ? ["services"] : []), ...(station?.features?.sandbox?.files ? ["files"] : [])].map(name => <button key={name} className={`btn ${tool === name ? "btn--primary" : ""}`} aria-pressed={tool === name} onClick={() => setTool(name)}>{name === "commands" ? "Commands" : name === "terminal" ? "Terminal" : name === "services" ? "Services" : "Files"}</button>)}
+    </div>}
     {workspaces.length > 0 ? <div className="station-card execution-card">
       <div className="execution-toolbar">
         <label className="execution-field execution-grow"><span>Workspace</span>
@@ -115,6 +122,7 @@ function SandboxWorkspace({ owner, station, onBusy }: { owner: string; station?:
         }}>Delete workspace</button>
       </div>
       {current && <p className="execution-note">Backend: <span className="mono">{current.backend}</span> · Created {new Date(current.createdAt).toLocaleString()}</p>}
+      {tool === "commands" && <>
       <form onSubmit={(event) => { event.preventDefault(); if (!admit || busy || !selected || !command.trim() || run?.status === "running") return; void act(async () => {
         const value = await rpc<CommandRun>({ method: "exec", id: selected, command, timeoutMs: timeoutSeconds * 1000, ...(cwd.trim() ? { cwd: cwd.trim() } : {}) }); remember(value);
       }); }}>
@@ -135,6 +143,10 @@ function SandboxWorkspace({ owner, station, onBusy }: { owner: string; station?:
         <pre className="execution-output" aria-label="Command output">{run.stdout || (!run.stderr ? "No output yet." : "")}{run.stderr ? `${run.stdout ? "\n" : ""}[stderr]\n${run.stderr}` : ""}</pre>
         {run.truncated && <p className="execution-note">Output reached the worker’s configured limit and was truncated.</p>}
       </div>}
+      </>}
     </div> : <div className="empty-state"><p className="empty-state-text">{loading && reachable ? "Loading workspaces…" : "No workspaces on this station. Create one to run a command."}</p></div>}
+    {current && tool === "terminal" && <SandboxTerminal key={selected} owner={owner} workspace={selected} admit={admit} reachable={reachable} />}
+    {current && tool === "services" && <SandboxServices key={selected} owner={owner} workspace={selected} admit={admit} reachable={reachable} />}
+    {current && tool === "files" && <SandboxFiles key={selected} owner={owner} workspace={selected} admit={admit} reachable={reachable} />}
   </section>;
 }

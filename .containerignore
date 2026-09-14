@@ -1,0 +1,7 @@
+.git
+**/node_modules
+**/.next
+**/.station
+**/.env
+**/.env.*
+plans/artifacts

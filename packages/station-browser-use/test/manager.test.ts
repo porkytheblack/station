@@ -97,7 +97,7 @@ test("managed sessions limit queued operations and normalize JSON results", asyn
 test("invalid configuration and missing Bun fail without hanging", async () => {
   assert.throws(() => new BrowserSessionManager(adapter(async () => fixture()), 0), { code: "invalid_input" });
   await assert.rejects(new BunBrowserAdapter({ width: 0 }).open(), { code: "invalid_input" });
-  await assert.rejects(new PlaywrightBrowserAdapter({ timeoutMs: 0 }).open(), { code: "invalid_input" });
+  assert.throws(() => new PlaywrightBrowserAdapter({ timeoutMs: 0 }), { code: "invalid_input" });
   await assert.rejects(new BunBrowserAdapter({ bunPath: "/nonexistent/station-test-bun" }).open(), { code: "ENOENT" });
 });
 

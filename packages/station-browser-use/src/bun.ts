@@ -1,3 +1,4 @@
+import { validateBrowserOpenOptions, type BrowserOpenOptions } from "./commands.js";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { managedSession, validateTimeout } from "./session.js";
@@ -15,10 +16,12 @@ export interface BunBrowserOptions {
 
 export class BunBrowserAdapter implements BrowserAdapter {
   readonly name = "bun-webview";
-  readonly capabilities = { screenshots: true, independentSessions: true } as const;
+  readonly capabilities = { screenshots: true, independentSessions: true, isolated: false, networkRestricted: false, profiles: false, pages: false, commands: false, uploads: false, downloads: false } as const;
   constructor(private readonly options: BunBrowserOptions = {}) {}
 
-  async open(): Promise<BrowserSession> {
+  async open(input: BrowserOpenOptions = {}): Promise<BrowserSession> {
+    const options = validateBrowserOpenOptions(input);
+    if (options.profileId) throw new BrowserUseError("unsupported", "Bun persistent profiles are not implemented by this adapter.");
     const timeoutMs = validateTimeout(this.options.operationTimeoutMs ?? 30_000);
     for (const dimension of [this.options.width ?? 1280, this.options.height ?? 720]) {
       if (!Number.isInteger(dimension) || dimension < 1 || dimension > 4096) throw new BrowserUseError("invalid_input", "Viewport dimensions must be between 1 and 4096.");
@@ -108,8 +111,8 @@ export class BunBrowserAdapter implements BrowserAdapter {
     try {
       await request("open", {
         backend: this.options.backend === "webkit" ? "webkit" : { type: "chrome", url: false, ...(this.options.chromePath ? { path: this.options.chromePath } : {}) },
-        width: this.options.width ?? 1280,
-        height: this.options.height ?? 720,
+        width: options.viewport?.width ?? this.options.width ?? 1280,
+        height: options.viewport?.height ?? this.options.height ?? 720,
       });
     } catch (error) { fail(error as Error); await terminate(); throw error; }
     return managedSession({

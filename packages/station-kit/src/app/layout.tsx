@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import "@xterm/xterm/css/xterm.css";
 import "./globals.css";
 import { Shell } from "./components/shell";
 import { ThemeProvider } from "./components/theme-provider";

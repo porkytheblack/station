@@ -11,8 +11,9 @@ function cloneStation(station: StationNode): StationNode {
       broadcasts: [...station.definitions.broadcasts],
       beacons: [...station.definitions.beacons],
       execution: station.definitions.execution ? {
-        sandbox: station.definitions.execution.sandbox ? { ...station.definitions.execution.sandbox } : undefined,
-        browser: station.definitions.execution.browser ? { ...station.definitions.execution.browser } : undefined,
+        ...(station.definitions.execution.tenantId === undefined ? {} : { tenantId: station.definitions.execution.tenantId }),
+        sandbox: station.definitions.execution.sandbox ? { ...station.definitions.execution.sandbox, ...(station.definitions.execution.sandbox.capabilities ? { capabilities: { ...station.definitions.execution.sandbox.capabilities } } : {}) } : undefined,
+        browser: station.definitions.execution.browser ? { ...station.definitions.execution.browser, ...(station.definitions.execution.browser.capabilities ? { capabilities: { ...station.definitions.execution.browser.capabilities } } : {}) } : undefined,
       } : undefined,
       beaconMetadata: station.definitions.beaconMetadata?.map((item) => ({
         ...item,
@@ -55,8 +56,9 @@ export class StationNetworkMemoryAdapter implements StationNetworkAdapter {
         broadcasts: [...heartbeat.definitions.broadcasts],
         beacons: [...heartbeat.definitions.beacons],
         execution: heartbeat.definitions.execution ? {
-          sandbox: heartbeat.definitions.execution.sandbox ? { ...heartbeat.definitions.execution.sandbox } : undefined,
-          browser: heartbeat.definitions.execution.browser ? { ...heartbeat.definitions.execution.browser } : undefined,
+          ...(heartbeat.definitions.execution.tenantId === undefined ? {} : { tenantId: heartbeat.definitions.execution.tenantId }),
+          sandbox: heartbeat.definitions.execution.sandbox ? { ...heartbeat.definitions.execution.sandbox, ...(heartbeat.definitions.execution.sandbox.capabilities ? { capabilities: { ...heartbeat.definitions.execution.sandbox.capabilities } } : {}) } : undefined,
+          browser: heartbeat.definitions.execution.browser ? { ...heartbeat.definitions.execution.browser, ...(heartbeat.definitions.execution.browser.capabilities ? { capabilities: { ...heartbeat.definitions.execution.browser.capabilities } } : {}) } : undefined,
         } : undefined,
         beaconMetadata: heartbeat.definitions.beaconMetadata?.map((item) => ({
           ...item,

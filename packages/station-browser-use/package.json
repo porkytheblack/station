@@ -1,7 +1,7 @@
 {
   "name": "station-browser-use",
   "version": "2.4.0",
-  "description": "Pluggable Bun WebView and Playwright browser sessions for Station workers",
+  "description": "Container-isolated, Bun WebView and Playwright browser sessions for Station workers",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -21,6 +21,10 @@
     "./playwright": {
       "types": "./dist/playwright.d.ts",
       "import": "./dist/playwright.js"
+    },
+    "./container": {
+      "types": "./dist/container.d.ts",
+      "import": "./dist/container.js"
     }
   },
   "files": [
@@ -31,7 +35,8 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
-    "test:browsers": "pnpm run build && node --import tsx --test test/browser.integration.ts"
+    "test:browsers": "pnpm run build && node --import tsx --test test/browser.integration.ts test/advanced.integration.ts",
+    "test:containers": "pnpm run build && node --import tsx --test test/container.integration.ts"
   },
   "peerDependencies": {
     "playwright": "^1.63.0"

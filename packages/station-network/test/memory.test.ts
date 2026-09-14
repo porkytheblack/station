@@ -69,11 +69,15 @@ test("controller leases are exclusive, renewable, fenced, and recover after expi
 test("execution capabilities survive heartbeats without sharing mutable state", async () => {
   const adapter = new StationNetworkMemoryAdapter();
   const member = station("execution");
-  member.definitions.execution = { sandbox: { backend: "host-process" } };
+  member.definitions.execution = { sandbox: { backend: "host-process", capabilities: { files: true } } };
   await adapter.upsertStation(member);
   member.definitions.execution.sandbox!.backend = "mutated";
+  member.definitions.execution.sandbox!.capabilities!.files = false;
   const first = await adapter.getStation(member.id);
   assert.equal(first?.definitions.execution?.sandbox?.backend, "host-process");
+  assert.equal(first!.definitions.execution!.sandbox!.capabilities!.files, true);
+  first!.definitions.execution!.sandbox!.capabilities!.files = false;
+  assert.equal((await adapter.getStation(member.id))!.definitions.execution!.sandbox!.capabilities!.files, true);
   first!.definitions.execution!.sandbox!.backend = "changed read";
   const heartbeat = { ...member, definitions: { ...member.definitions, execution: { browser: { backend: "playwright" } } } };
   await adapter.heartbeat(member.id, heartbeat);

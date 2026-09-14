@@ -1,6 +1,6 @@
 ---
 name: station
-description: Build, scale, test, or operate TypeScript background work with Station. Use for station-kit configuration, signals, broadcasts, beacons, runtime schedules, Station Networks and Headquarters, fleet concurrency and placement, SQLite/PostgreSQL/MySQL/Redis adapters, the dashboard and v1 API, browser-local signals/workflows/beacons in Web Workers or service workers, trusted shell workspaces and server browser automation, Bun process runtimes, environment variables, subscribers, deployment, or Station troubleshooting.
+description: Build, scale, test, or operate TypeScript background work with Station. Use for station-kit configuration, signals, broadcasts, beacons, runtime schedules, Station Networks and Headquarters, fleet concurrency and placement, SQLite/PostgreSQL/MySQL/Redis adapters, the dashboard and v1 API, browser-local signals/workflows/beacons in Web Workers or service workers, isolated container workspaces, terminals, services and server browser automation, Bun process runtimes, environment variables, subscribers, deployment, or Station troubleshooting.
 ---
 
 # Build with Station
@@ -14,7 +14,8 @@ Do not promise continuous polling after a PWA closes.
 For server shell workspaces, browser automation, owner-routed execution APIs, or
 optional Bun signal/beacon children, read [execution.md](execution.md). Sandbox and
 Browser Use are separate primitives; neither is the browser-local service-worker
-runtime. This first slice is for trusted workloads and does not restore live sessions.
+runtime. Host backends require trusted workloads. Public tenants require scoped credentials,
+dedicated workers and isolated, network-restricted adapters. Live sessions are not restored.
 
 For Node applications, use `station-kit` as the application entry point. Create a `station.config.ts`
 with `defineConfig`, export definitions from the configured directories, and run

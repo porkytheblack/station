@@ -79,7 +79,7 @@ async function browserAction(page, action, value = '', expected) {
   if (expected) await until(async () => expected.test(await page.getByLabel('Browser result', { exact: true }).innerText()), `browser result ${expected}`);
 }
 
-test('real dashboard controls private sandbox and Bun/Playwright workers; custom installs survive worker restart', { timeout: 240_000 }, async (t) => {
+test('real dashboard controls private sandbox and Bun/Playwright workers; custom installs survive worker restart', { timeout: 420_000 }, async (t) => {
   assert.ok(existsSync(nextServer), 'Build station-kit, including its dashboard, before running E2E.');
   assert.ok(existsSync(join(kitRoot, 'dist/server/index.js')), 'Build Station packages first.');
   const root = mkdtempSync(join(tmpdir(), 'station-dashboard-e2e-'));
@@ -112,7 +112,8 @@ test('real dashboard controls private sandbox and Bun/Playwright workers; custom
     return options;
   };
   t.after(async () => {
-    if (failed && page) await page.screenshot({ path: join(artifacts, 'failure.png'), fullPage: true }).catch(() => {});
+    if (failed && page) await page.screenshot({ path: join(artifacts, 'failure.png'), fullPage: true, animations: 'disabled' }).catch(() => {});
+    for (const [id, service] of services) writeFileSync(join(artifacts, `${id}.log`), service.output());
     await context?.close();
     await browser?.close();
     const results = await Promise.allSettled([...services.values()].map((service) => stop(service, true)));
@@ -141,9 +142,14 @@ test('real dashboard controls private sandbox and Bun/Playwright workers; custom
   const tarball = join(root, 'station-dashboard-e2e-tool-1.0.0.tgz');
   assert.ok(existsSync(tarball));
 
-  fixture = createServer((_request, response) => {
+  fixture = createServer((request, response) => {
+    if (request.url === '/download') {
+      response.writeHead(200, { 'content-type': 'text/plain', 'content-disposition': 'attachment; filename="station-result.txt"' });
+      response.end('STATION_BROWSER_DOWNLOAD_OK');
+      return;
+    }
     response.setHeader('content-type', 'text/html');
-    response.end(`<!doctype html><html><head><title>Station browser E2E</title></head><body><h1>Browser fixture</h1><input id="entry"><button id="apply" onclick="document.querySelector('#result').textContent=document.querySelector('#entry').value">Apply</button><p id="result"></p></body></html>`);
+    response.end(`<!doctype html><html><head><title>Station browser E2E</title></head><body><h1>Browser fixture</h1><input id="entry"><button id="apply" onclick="document.querySelector('#result').textContent=document.querySelector('#entry').value">Apply</button><p id="result"></p><select id="choice"><option value="one">One</option><option value="two">Two</option></select><input id="checked" type="checkbox"><input id="upload" type="file"><a id="download" href="/download">Download result</a></body></html>`);
   });
   await new Promise((resolve, reject) => { fixture.once('error', reject); fixture.listen(0, '127.0.0.1', resolve); });
   const fixtureUrl = `http://127.0.0.1:${fixture.address().port}`;
@@ -151,8 +157,9 @@ test('real dashboard controls private sandbox and Bun/Playwright workers; custom
   dashboard = processHandle(process.execPath, [nextServer], { cwd: kitRoot, env: { ...process.env, PORT: String(nextPort), HOSTNAME: '127.0.0.1' }, stdio: ['ignore', 'pipe', 'pipe'] });
   await until(async () => { try { return (await fetch(`http://127.0.0.1:${nextPort}/sandboxes`)).status === 200; } catch { return false; } }, 'Next dashboard startup');
   const sandboxOptions = await startWorker('sandbox-worker', 'sandbox');
-  await startWorker('bun-worker', 'bun');
-  await startWorker('playwright-worker', 'playwright');
+  const browserWorkers = new Map();
+  browserWorkers.set('bun-worker', await startWorker('bun-worker', 'bun'));
+  browserWorkers.set('playwright-worker', await startWorker('playwright-worker', 'playwright'));
   const hq = await startWorker('hq', undefined, { nextPort });
   const base = `http://127.0.0.1:${hq.port}`;
 
@@ -175,7 +182,7 @@ test('real dashboard controls private sandbox and Bun/Playwright workers; custom
   const workspace = await page.getByRole('combobox', { name: 'Workspace', exact: true }).inputValue();
   await command(page, `npm install --global --offline --ignore-scripts --no-audit --no-fund ${shellQuote(tarball)} && printf '\\nINSTALL_FINISHED\\n'`, /INSTALL_FINISHED/);
   await command(page, 'station-e2e-tool fresh-command', /STATION_CUSTOM_TOOL_OK:fresh-command/);
-  await page.screenshot({ path: join(artifacts, 'sandbox-installed-tool.png'), fullPage: true });
+  await page.screenshot({ path: join(artifacts, 'sandbox-installed-tool.png'), fullPage: true, animations: 'disabled' });
   record('UI login, workspace creation, offline npm install and fresh-command CLI invocation passed');
 
   await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
@@ -192,7 +199,7 @@ test('real dashboard controls private sandbox and Bun/Playwright workers; custom
   await selectOption(page, 'Sandbox station', 'sandbox-worker');
   await selectOption(page, 'Workspace', workspace);
   await command(page, 'station-e2e-tool after-restart', /STATION_CUSTOM_TOOL_OK:after-restart/);
-  await page.screenshot({ path: join(artifacts, 'sandbox-after-worker-restart.png'), fullPage: true });
+  await page.screenshot({ path: join(artifacts, 'sandbox-after-worker-restart.png'), fullPage: true, animations: 'disabled' });
   record('Custom install stayed out of a second workspace and survived owner process restart');
 
   await command(page, 'printf EXPECTED_COMMAND_FAILURE >&2; exit 7', /EXPECTED_COMMAND_FAILURE/);
@@ -206,8 +213,107 @@ test('real dashboard controls private sandbox and Bun/Playwright workers; custom
   await command(page, 'printf TIMEOUT_STARTED; sleep 20', /TIMEOUT_STARTED/);
   await until(async () => (await page.getByLabel('Command status', { exact: true }).textContent()) === 'timed_out', 'command timeout');
   await page.getByRole('spinbutton', { name: 'Timeout (seconds)', exact: true }).fill('30');
-  await page.screenshot({ path: join(artifacts, 'sandbox-command-timeout.png'), fullPage: true });
+  await page.screenshot({ path: join(artifacts, 'sandbox-command-timeout.png'), fullPage: true, animations: 'disabled' });
   record('Failed command exposes stderr/exit code; cancellation and configured timeout settle running commands');
+
+  const sandboxRpc = async (body) => {
+    const response = await context.request.post(`${base}/api/v1/stations/sandbox-worker/execution/sandbox`, { data: { id: workspace, ...body } });
+    assert.equal(response.status(), 200, await response.text());
+    return (await response.json()).data;
+  };
+  await page.getByRole('button', { name: 'Terminal', exact: true }).click();
+  await page.getByRole('button', { name: 'Open terminal', exact: true }).click();
+  await until(async () => !!(await page.getByRole('combobox', { name: 'Terminal session', exact: true }).inputValue()), 'interactive terminal created');
+  const terminalId = await page.getByRole('combobox', { name: 'Terminal session', exact: true }).inputValue();
+  const terminalInput = page.getByLabel('Sandbox terminal input', { exact: true });
+  await terminalInput.pressSequentially('station-e2e-tool terminal-input');
+  await terminalInput.press('Enter');
+  await until(async () => (await sandboxRpc({ method: 'terminal', terminalId, offset: 0 })).data.includes('STATION_CUSTOM_TOOL_OK:terminal-input'), 'installed CLI in real xterm PTY');
+  await page.getByRole('button', { name: 'Reconnect terminal', exact: true }).click();
+  await terminalInput.pressSequentially('station-e2e-tool reconnected');
+  await terminalInput.press('Enter');
+  await until(async () => (await sandboxRpc({ method: 'terminal', terminalId, offset: 0 })).data.includes('STATION_CUSTOM_TOOL_OK:reconnected'), 'same PTY accepts input after reconnect');
+  assert.equal(await page.getByRole('combobox', { name: 'Terminal session', exact: true }).inputValue(), terminalId);
+  await page.screenshot({ path: join(artifacts, 'sandbox-interactive-terminal.png'), fullPage: true, animations: 'disabled' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await until(async () => (await sandboxRpc({ method: 'terminal', terminalId, offset: 0 })).cols < 90, 'terminal resize reaches real PTY');
+  await page.screenshot({ path: join(artifacts, 'sandbox-terminal-mobile.png'), fullPage: true, animations: 'disabled' });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole('button', { name: 'Close terminal', exact: true }).click();
+  await until(async () => (await sandboxRpc({ method: 'terminal', terminalId, offset: 0 })).status === 'exited', 'terminal close');
+  record('Real xterm input, installed CLI, reconnect to same terminal, responsive resize and close passed');
+
+  await page.getByRole('button', { name: 'Commands', exact: true }).click();
+  await command(page, `node -e ${shellQuote("require('node:fs').writeFileSync('chunks.txt','x'.repeat(1048576+17));console.log('CHUNK_FILE_READY')")}`, /CHUNK_FILE_READY/);
+  await page.getByRole('button', { name: 'Files', exact: true }).click();
+  await page.getByRole('button', { name: 'chunks.txt', exact: true }).click();
+  await until(async () => (await page.getByRole('textbox', { name: 'Workspace file content', exact: true }).inputValue()).length === 1048576 + 17, 'file preview reads multiple worker-size chunks');
+  await page.getByRole('textbox', { name: 'Workspace file path', exact: true }).fill('empty.txt');
+  await page.getByRole('textbox', { name: 'Workspace file content', exact: true }).fill('');
+  await page.getByRole('button', { name: 'Save text file', exact: true }).click();
+  await page.getByRole('button', { name: 'empty.txt', exact: true }).waitFor();
+  await page.getByRole('textbox', { name: 'Workspace file content', exact: true }).fill('must be replaced by empty file');
+  await page.getByRole('button', { name: 'empty.txt', exact: true }).click();
+  await until(async () => (await page.getByRole('textbox', { name: 'Workspace file content', exact: true }).inputValue()) === '', 'empty file preview handles EOF');
+  await page.getByRole('textbox', { name: 'Workspace file path', exact: true }).fill('notes.txt');
+  await page.getByRole('textbox', { name: 'Workspace file content', exact: true }).fill('STATION_FILE_UI_OK — saved from dashboard');
+  await page.getByRole('button', { name: 'Save text file', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Workspace file content', exact: true }).fill('');
+  await page.getByRole('button', { name: 'notes.txt', exact: true }).click();
+  await until(async () => (await page.getByRole('textbox', { name: 'Workspace file content', exact: true }).inputValue()).includes('STATION_FILE_UI_OK'), 'saved file read through UI');
+  const uploadedBytes = Buffer.from('STATION_FILE_UPLOAD_OK\n');
+  await page.getByLabel('Upload workspace file', { exact: true }).setInputFiles({ name: 'uploaded.txt', mimeType: 'text/plain', buffer: uploadedBytes });
+  await page.getByRole('button', { name: 'uploaded.txt', exact: true }).click();
+  await until(async () => (await page.getByRole('textbox', { name: 'Workspace file content', exact: true }).inputValue()) === uploadedBytes.toString(), 'uploaded file read through UI');
+  await page.screenshot({ path: join(artifacts, 'sandbox-files.png'), fullPage: true, animations: 'disabled' });
+  const fileDownload = page.waitForEvent('download');
+  await page.getByRole('link', { name: 'Download file', exact: true }).click();
+  await (await fileDownload).saveAs(join(artifacts, 'workspace-uploaded.txt'));
+  assert.deepEqual(readFileSync(join(artifacts, 'workspace-uploaded.txt')), uploadedBytes);
+  record('Workspace file save, read, upload and download preserve bytes through Headquarters');
+
+  const serviceControl = async (label, method) => {
+    const pending = page.waitForResponse(response => response.url().endsWith('/execution/sandbox') && response.request().postDataJSON()?.method === method);
+    await page.getByRole('button', { name: label, exact: true }).click();
+    const response = await pending;
+    assert.equal(response.status(), 200, `${method}: ${await response.text()}\n${services.get('sandbox-worker').output()}`);
+  };
+  await page.getByRole('button', { name: 'Services', exact: true }).click();
+  const httpPort = await port();
+  const serviceScript = `require('node:http').createServer((req,res)=>res.end('STATION_SERVICE_HTTP_OK')).listen(${httpPort},'127.0.0.1',()=>console.log('SERVICE_LISTENING'))`;
+  await page.getByRole('textbox', { name: 'Service name', exact: true }).fill('dashboard-http');
+  await page.getByRole('textbox', { name: 'Service command', exact: true }).fill(`station-e2e-tool service && node -e ${shellQuote(serviceScript)}`);
+  await serviceControl('Start service', 'startService');
+  const httpResponds = async () => { try { return (await (await fetch(`http://127.0.0.1:${httpPort}`)).text()) === 'STATION_SERVICE_HTTP_OK'; } catch { return false; } };
+  await until(httpResponds, 'supervised service serves real HTTP');
+  await until(async () => (await page.getByLabel('Service output', { exact: true }).innerText()).includes('STATION_CUSTOM_TOOL_OK:service'), 'service uses installed CLI');
+  await serviceControl('Stop service', 'stopService');
+  await until(async () => !(await httpResponds()), 'service stop closes port');
+  await serviceControl('Restart service', 'restartService');
+  await until(httpResponds, 'service restart serves HTTP');
+  await page.screenshot({ path: join(artifacts, 'sandbox-services.png'), fullPage: true, animations: 'disabled' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: join(artifacts, 'sandbox-services-mobile.png'), fullPage: true, animations: 'disabled' });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const serviceId = await page.getByRole('combobox', { name: 'Workspace service', exact: true }).inputValue();
+  await stop(services.get('sandbox-worker'), true);
+  services.delete('sandbox-worker');
+  await until(async () => !(await httpResponds()), 'owner shutdown stops service process');
+  await startWorker('sandbox-worker', 'sandbox', { port: sandboxOptions.port });
+  await page.reload();
+  await selectOption(page, 'Sandbox station', 'sandbox-worker');
+  await selectOption(page, 'Workspace', workspace);
+  await page.getByRole('button', { name: 'Services', exact: true }).click();
+  await selectOption(page, 'Workspace service', serviceId);
+  await until(async () => (await page.getByLabel('Service status', { exact: true }).innerText()).includes('interrupted'), 'persisted service recovers interrupted without replay');
+  assert.equal(await httpResponds(), false, 'interrupted service does not restart implicitly');
+  await serviceControl('Restart service', 'restartService');
+  await until(httpResponds, 'explicit service recovery after worker restart');
+  assert.equal(Buffer.from((await sandboxRpc({ method: 'readFile', path: 'uploaded.txt' })).base64, 'base64').toString(), uploadedBytes.toString());
+  await serviceControl('Stop service', 'stopService');
+  await serviceControl('Remove service', 'removeService');
+  await until(async () => (await sandboxRpc({ method: 'services' })).length === 0, 'service definition removed');
+  record('Supervised service invokes installed tool, serves HTTP, stops, restarts, recovers explicitly after worker restart and removes through UI');
 
   await page.getByRole('button', { name: 'Delete workspace', exact: true }).click();
   await page.getByText('No workspaces on this station. Create one to run a command.', { exact: true }).waitFor();
@@ -218,6 +324,7 @@ test('real dashboard controls private sandbox and Bun/Playwright workers; custom
   await page.getByRole('heading', { name: 'Browser Use', exact: true }).waitFor();
   for (const owner of ['bun-worker', 'playwright-worker']) {
     await selectOption(page, 'Browser station', owner);
+    if (owner === 'playwright-worker') await page.getByRole('textbox', { name: 'Browser profile', exact: true }).fill('dashboard-profile');
     await page.getByRole('button', { name: 'Open browser', exact: true }).click();
     await until(async () => !!(await page.getByRole('combobox', { name: 'Browser session', exact: true }).inputValue()), `${owner} browser session`);
     await browserAction(page, 'navigate', fixtureUrl);
@@ -237,13 +344,66 @@ test('real dashboard controls private sandbox and Bun/Playwright workers; custom
     const downloadedPng = join(artifacts, `${owner}-download.png`);
     await download.saveAs(downloadedPng);
     assert.deepEqual([...readFileSync(downloadedPng).subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10], 'download contains real PNG bytes');
-    await page.screenshot({ path: join(artifacts, `${owner}-screenshot.png`), fullPage: true });
+    await page.screenshot({ path: join(artifacts, `${owner}-screenshot.png`), fullPage: true, animations: 'disabled' });
     const sessionId = await page.getByRole('combobox', { name: 'Browser session', exact: true }).inputValue();
     const browserRpc = async (body) => {
       const response = await context.request.post(`${base}/api/v1/stations/${owner}/execution/browser`, { data: body });
       assert.equal(response.status(), 200, await response.text());
       return (await response.json()).data;
     };
+    if (owner === 'playwright-worker') {
+      const pageOperation = async (op, selector, value) => {
+        await page.getByRole('combobox', { name: 'Page operation', exact: true }).selectOption(op);
+        if (selector !== undefined) await page.getByRole('textbox', { name: 'Element selector', exact: true }).fill(selector);
+        if (value !== undefined) await page.getByRole('textbox', { name: 'Page operation value', exact: true }).fill(value);
+        const pending = page.waitForResponse(response => response.url().endsWith('/execution/browser') && response.request().postDataJSON()?.method === 'execute' && response.request().postDataJSON()?.command?.op === op);
+        await page.getByRole('button', { name: 'Run page operation', exact: true }).click();
+        const response = await pending;
+        assert.equal(response.status(), 200, await response.text());
+      };
+      await pageOperation('fill', '#entry', 'ADVANCED_FILL_OK');
+      await pageOperation('select', '#choice', 'two');
+      await pageOperation('check', '#checked');
+      await browserAction(page, 'evaluate', "[document.querySelector('#entry').value,document.querySelector('#choice').value,document.querySelector('#checked').checked]", /ADVANCED_FILL_OK/);
+      const fields = await browserRpc({ method: 'action', id: sessionId, action: 'evaluate', value: "[document.querySelector('#entry').value,document.querySelector('#choice').value,document.querySelector('#checked').checked]" });
+      assert.deepEqual(fields, ['ADVANCED_FILL_OK', 'two', true]);
+      await page.getByRole('textbox', { name: 'Element selector', exact: true }).fill('#upload');
+      const uploadResponse = page.waitForResponse(response => response.url().endsWith('/execution/browser') && response.request().postDataJSON()?.command?.op === 'upload');
+      await page.getByLabel('Browser upload file', { exact: true }).setInputFiles({ name: 'browser-upload.txt', mimeType: 'text/plain', buffer: Buffer.from('BROWSER_UPLOAD_OK') });
+      assert.equal((await uploadResponse).status(), 200);
+      const uploaded = await browserRpc({ method: 'action', id: sessionId, action: 'evaluate', value: "document.querySelector('#upload').files[0].text()" });
+      assert.equal(uploaded, 'BROWSER_UPLOAD_OK');
+      await pageOperation('download', '#download');
+      await page.getByRole('button', { name: 'Retrieve download', exact: true }).click();
+      const fileDownload = page.waitForEvent('download');
+      await page.getByRole('link', { name: 'Save download', exact: true }).click();
+      await (await fileDownload).saveAs(join(artifacts, 'browser-result.txt'));
+      assert.equal(readFileSync(join(artifacts, 'browser-result.txt'), 'utf8'), 'STATION_BROWSER_DOWNLOAD_OK');
+      await page.getByRole('button', { name: 'Delete download', exact: true }).click();
+      await until(async () => !(await page.getByRole('button', { name: 'Retrieve download', exact: true }).count()), 'browser artifact deleted');
+      const pageControl = async (locator, op) => {
+        const pending = page.waitForResponse(response => response.url().endsWith('/execution/browser') && response.request().postDataJSON()?.method === 'execute' && response.request().postDataJSON()?.command?.op === op);
+        await locator.click();
+        const response = await pending;
+        assert.equal(response.status(), 200, await response.text());
+        await until(() => page.getByRole('button', { name: 'Run page operation', exact: true }).isEnabled(), `${op} UI refresh completed`);
+      };
+      await page.getByRole('textbox', { name: 'New page URL', exact: true }).fill(`${fixtureUrl}/second`);
+      await pageControl(page.getByRole('button', { name: 'New page', exact: true }), 'newPage');
+      await until(async () => (await browserRpc({ method: 'execute', id: sessionId, command: { op: 'pages' } })).length === 2, 'second browser page');
+      await pageControl(page.getByRole('button', { name: 'Station browser E2E', exact: true }), 'selectPage');
+      await until(async () => (await browserRpc({ method: 'execute', id: sessionId, command: { op: 'pages' } })).find(p => p.selected)?.url === `${fixtureUrl}/`, 'select original browser page');
+      await pageControl(page.getByRole('button', { name: 'Station browser E2E', exact: true }).locator('..').getByRole('button', { name: 'Close page', exact: true }), 'closePage');
+      await until(async () => (await browserRpc({ method: 'execute', id: sessionId, command: { op: 'pages' } })).length === 1, 'close second page');
+      await browserAction(page, 'evaluate', "localStorage.setItem('station-profile-test','PERSISTED_PROFILE_OK')");
+      await page.screenshot({ path: join(artifacts, 'browser-advanced-tools.png'), fullPage: true, animations: 'disabled' });
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.screenshot({ path: join(artifacts, 'browser-advanced-mobile.png'), fullPage: true, animations: 'disabled' });
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      record('Playwright profile, form fill/select/check, file upload/download, page creation/selection/close passed');
+    } else {
+      assert.equal(await page.getByRole('region', { name: 'Advanced browser controls', exact: true }).count(), 0, 'Bun does not advertise unsupported advanced browser controls');
+    }
     await page.getByRole('button', { name: 'Start recording', exact: true }).click();
     let trace;
     await until(async () => {
@@ -292,7 +452,32 @@ test('real dashboard controls private sandbox and Bun/Playwright workers; custom
     await until(async () => (await recordedImage.getAttribute('src')) === `data:image/png;base64,${laterFrame.base64}`, `${owner} playback advances`, 15_000);
     const pause = page.getByRole('button', { name: 'Pause recording', exact: true });
     if (await pause.isVisible()) await pause.click();
-    await page.screenshot({ path: join(artifacts, `${owner}-recording-playback.png`), fullPage: true });
+    await page.screenshot({ path: join(artifacts, `${owner}-recording-playback.png`), fullPage: true, animations: 'disabled' });
+    // Disk-backed recordings survive replacement of their owning worker, while live sessions do not.
+    await stop(services.get(owner), true);
+    services.delete(owner);
+    await startWorker(owner, browserWorkers.get(owner).primitive, { port: browserWorkers.get(owner).port });
+    await page.reload();
+    await selectOption(page, 'Browser station', owner);
+    await selectOption(page, 'Recording selector', trace.id);
+    await until(async () => (await page.getByRole('img', { name: 'Recorded browser frame', exact: true }).getAttribute('src')) === `data:image/png;base64,${initialFrame.base64}`, `${owner} durable recording UI after worker restart`);
+    assert.equal((await browserRpc({ method: 'recordingFrame', id: trace.id, frameId: trace.frames[0].id })).base64, initialFrame.base64);
+    await page.screenshot({ path: join(artifacts, `${owner}-durable-recording.png`), fullPage: true, animations: 'disabled' });
+    if (owner === 'playwright-worker') {
+      await selectOption(page, 'Saved browser profile', 'dashboard-profile');
+      await page.getByRole('button', { name: 'Open browser', exact: true }).click();
+      await until(async () => !!(await page.getByRole('combobox', { name: 'Browser session', exact: true }).inputValue()), 'reopened persistent browser profile');
+      await browserAction(page, 'navigate', fixtureUrl);
+      await browserAction(page, 'evaluate', "localStorage.getItem('station-profile-test')", /PERSISTED_PROFILE_OK/);
+      await page.getByRole('button', { name: 'Close browser', exact: true }).click();
+      await page.getByText('No live browser sessions on this station. Open a browser to begin.', { exact: true }).waitFor();
+      await selectOption(page, 'Saved browser profile', 'dashboard-profile');
+      await page.getByRole('button', { name: 'Delete profile', exact: true }).click();
+      await until(async () => (await browserRpc({ method: 'profiles' })).length === 0, 'persistent browser profile deletion');
+      await selectOption(page, 'Recording selector', trace.id);
+      record('Playwright localStorage profile survives browser close and worker restart, then deletes through UI');
+    }
+    record(`${owner} durable recording bytes and dashboard playback survive worker process restart`);
     await page.getByRole('button', { name: 'Delete recording', exact: true }).click();
     await until(async () => !(await browserRpc({ method: 'recordings' })).some((entry) => entry.id === trace.id), `${owner} recording deletion`);
     await selectOption(page, 'Recording selector', activeTrace.id);
@@ -300,6 +485,30 @@ test('real dashboard controls private sandbox and Bun/Playwright workers; custom
     await until(async () => (await browserRpc({ method: 'recordings' })).length === 0, `${owner} all recording frames deleted`);
     record(`${owner} UI actions, screenshots, five-second recording away from dashboard, playback after close and trace deletion passed`);
   }
+  await page.goto(`${base}/settings`);
+  await page.getByRole('button', { name: 'Create key', exact: true }).click();
+  await page.getByPlaceholder('e.g. Production App', { exact: true }).fill('dashboard-execution-only');
+  await page.getByRole('button', { name: 'execution', exact: true }).click();
+  const creatingKey = page.waitForResponse(response => response.url().endsWith('/api/v1/keys') && response.request().method() === 'POST');
+  await page.getByRole('button', { name: 'Create', exact: true }).click();
+  const keyResponse = await creatingKey;
+  assert.equal(keyResponse.status(), 201);
+  const executionKey = (await keyResponse.json()).data;
+  assert.deepEqual(executionKey.scopes, ['execution'], 'execution scope clears the default operator scopes');
+  const keyRow = page.getByRole('row').filter({ hasText: 'dashboard-execution-only' });
+  await keyRow.getByText(`Key ID: ${executionKey.id}`, { exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Dismiss', exact: true }).click();
+  await page.screenshot({ path: join(artifacts, 'settings-execution-key.png'), fullPage: true, animations: 'disabled' });
+  const keyContext = await browser.newContext();
+  try {
+    assert.equal((await keyContext.request.get(`${base}/api/v1/keys`, { headers: { authorization: `Bearer ${executionKey.key}` } })).status(), 403, 'execution-only key cannot list operator keys');
+    await keyRow.getByRole('button', { name: 'Revoke', exact: true }).click();
+    const revokingKey = page.waitForResponse(response => response.url().endsWith(`/api/v1/keys/${executionKey.id}`) && response.request().method() === 'DELETE');
+    await keyRow.getByRole('button', { name: 'Confirm', exact: true }).click();
+    assert.equal((await revokingKey).status(), 200);
+    assert.equal((await keyContext.request.get(`${base}/api/v1/keys`, { headers: { authorization: `Bearer ${executionKey.key}` } })).status(), 401, 'revoked key is rejected');
+  } finally { await keyContext.close(); }
+  record('Settings creates execution-only key, displays mapping ID, denies operator access and revokes key');
   assert.deepEqual(pageErrors, [], `Unexpected dashboard JavaScript errors: ${pageErrors.join('; ')}`);
   failed = false;
 });

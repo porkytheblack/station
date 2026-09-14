@@ -1681,3 +1681,9 @@ a:hover {
   .execution-card { padding: .85rem; }
   .execution-owner-controls > select, .execution-grow { flex-basis: 100%; max-width: none; }
 }
+
+.sandbox-terminal { height: 360px; padding: .75rem; background: #101214; border: 1px solid var(--wire); border-radius: 4px; overflow: hidden; }
+.execution-card > h2 { font-size: 1rem; font-weight: 500; margin: 0 0 .75rem; }
+.execution-file-list { display: grid; gap: .3rem; margin: .75rem 0; }
+.execution-file-row { display: flex; align-items: center; gap: .75rem; padding: .5rem 0; border-bottom: 1px solid var(--wire); }
+.execution-file-row > :first-child { flex: 1; min-width: 0; overflow-wrap: anywhere; text-align: left; }

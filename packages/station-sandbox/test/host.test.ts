@@ -171,7 +171,7 @@ test("persistence failures surface to callers instead of stale running results",
 
 test("offline npm-installed tools survive new commands and restart, without leaking through another workspace PATH", async (t) => {
   const configuredPath = process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin";
-  const { host, rootDir } = await fixture(t, { env: { PATH: configuredPath } });
+  const { host, rootDir } = await fixture(t, { enablePty: !("Bun" in globalThis), env: { PATH: configuredPath } });
   const workspace = await host.create();
   const other = await host.create();
   const workingDir = join(rootDir, workspace.id, "workspace");
@@ -201,12 +201,30 @@ test("offline npm-installed tools survive new commands and restart, without leak
   const path = await execute(host, workspace.id, 'printf "%s" "$PATH"');
   assert.equal(path.stdout, [join(realpathSync(workingDir), "node_modules/.bin"), join(rootDir, workspace.id, "home/.local/bin"), configuredPath].join(":"));
   await host.close();
-  const recovered = new HostSandboxAdapter({ rootDir, env: { PATH: configuredPath } });
+  const recovered = new HostSandboxAdapter({ rootDir, enablePty: !("Bun" in globalThis), env: { PATH: configuredPath } });
   t.after(() => recovered.close());
   const retained = await execute(recovered, workspace.id, "station-sandbox-fixture-tool");
   assert.equal(retained.status, "completed", retained.stderr);
   assert.equal(retained.stdout.trim(), "custom-tool-global");
   assert.equal((await execute(recovered, other.id, "station-sandbox-fixture-tool")).exitCode, 127);
+
+  if (!("Bun" in globalThis)) {
+  const terminal = await recovered.openTerminal(workspace.id);
+  await recovered.terminalInput(workspace.id, terminal.id, "station-sandbox-fixture-tool\r");
+  const terminalDeadline = Date.now() + 10_000;
+  while (!(await recovered.terminal(workspace.id, terminal.id)).data.includes("custom-tool-global")) {
+    assert.ok(Date.now() < terminalDeadline, "installed tool was not available in the PTY");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  await recovered.closeTerminal(workspace.id, terminal.id);
+  }
+  const service = await recovered.startService(workspace.id, { name: "installed-cli", command: "station-sandbox-fixture-tool; sleep 30" });
+  const serviceDeadline = Date.now() + 10_000;
+  while (!(await recovered.service(workspace.id, service.id)).stdout.includes("custom-tool-global")) {
+    assert.ok(Date.now() < serviceDeadline, "installed tool was not available to the service");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  await recovered.stopService(workspace.id, service.id);
 
   // A workspace-local dependency wins over a tool with the same global command name.
   writeFileSync(join(workingDir, "package.json"), JSON.stringify({ name: "workspace-fixture", version: "1.0.0", private: true }));

@@ -1,6 +1,6 @@
 # Headquarters with separate Sandbox and Browser Use workers
 
-This first execution slice runs three ordinary Station services. Headquarters is the public authenticated gateway. Two private workers own separate primitives: trusted Bash workspaces and live browser sessions. This is an explicit owner-routing API; it does not automatically schedule or migrate sessions. Existing Station signals still use their normal queue and placement policies.
+This trusted local example runs three ordinary Station services. Headquarters is the public authenticated gateway. Two private workers own separate primitives: trusted Bash workspaces and live browser sessions. This is an explicit owner-routing API; it does not automatically schedule or migrate sessions. Existing Station signals still use their normal queue and placement policies.
 
 ## Run locally
 
@@ -77,7 +77,7 @@ Execution returns a command ID immediately. Poll its persisted result using:
 { "method": "command", "id": "WORKSPACE_ID", "runId": "COMMAND_ID" }
 ```
 
-Sandbox supports `create`, `list`, `get`, `destroy`, `exec`, `command`, and `cancel`. `exec` additionally accepts an optional relative `cwd`. Commands are bounded jobs; PTYs and persistent interactive shells are deferred. The host-process adapter organizes trusted processes and does not isolate them from the worker filesystem or other workspaces.
+Sandbox supports `create`, `list`, `get`, `destroy`, `exec`, `command`, and `cancel`, plus file, service and terminal methods listed in the [agent API reference](../../.claude/skills/station/execution.md). `exec` additionally accepts an optional relative `cwd`. Additional APIs provide terminals, supervised services and bounded files. Set SANDBOX_PTY=1 with node-pty installed to enable a persistent interactive shell; the controller must run Node. The host-process adapter organizes trusted processes and does not isolate them from the worker filesystem or other workspaces.
 
 Browser requests go to `/api/v1/stations/browser/execution/browser`:
 
@@ -116,3 +116,12 @@ pnpm test:execution:dashboard
 ```
 
 This repository harness targets the built Headquarters dashboard and real private Sandbox and Browser Use workers. It includes installing a custom CLI from a local offline package, running it by name later and checking persistence, alongside browser interaction/screenshots. Prepare the built packages and browser dependencies first. The local end-to-end run passed with separate Headquarters and worker processes, including worker restart, installed-tool persistence, command failures/cancellation/timeouts, both browser backends and screenshot downloads. This does not establish cloud deployment readiness.
+
+
+## Advanced browser state
+
+The example now persists Playwright profiles under `BROWSER_PROFILE_ROOT` (default `.station/browser/profiles`) and screenshot recordings under `BROWSER_RECORDING_ROOT` (default `.station/browser/recordings`). Mount both on durable storage. The dashboard can choose a profile, manage pages/forms/uploads/downloads, and play five-second recordings after a worker replacement. Live tabs are interrupted; profile data and retained frames survive. Bun remains a basic browser backend and does not expose Playwright-only tools.
+
+## Public customer deployment
+
+This example intentionally uses trusted host adapters and administrator login. Do not issue its admin credentials to customers. Use the [tenant deployment contract](../../scripts/execution-container/README.md) for tenant-scoped keys, dedicated workers, isolated containers and required network/storage controls. The standard example is not a public multi-tenant deployment configuration.

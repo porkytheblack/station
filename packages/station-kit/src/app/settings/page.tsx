@@ -15,7 +15,7 @@ interface ApiKeyRecord {
   revoked: boolean;
 }
 
-const AVAILABLE_SCOPES = ["trigger", "read", "cancel", "admin"] as const;
+const AVAILABLE_SCOPES = ["trigger", "read", "cancel", "admin", "execution"] as const;
 
 function formatDate(iso: string): string {
   const d = new Date(iso);
@@ -91,7 +91,7 @@ export default function SettingsPage() {
 
   function toggleScope(scope: string) {
     setNewKeyScopes((prev) =>
-      prev.includes(scope) ? prev.filter((s) => s !== scope) : [...prev, scope],
+      scope === "execution" ? (prev.includes(scope) ? [] : ["execution"]) : (prev.includes(scope) ? prev.filter((s) => s !== scope) : [...prev.filter(s => s !== "execution"), scope]),
     );
   }
 
@@ -223,6 +223,7 @@ export default function SettingsPage() {
                 ))}
               </div>
             </div>
+            {newKeyScopes.includes("execution") && <p className="execution-note">Customer execution keys must be mapped to a tenant in Headquarters configuration. This scope grants no operator access.</p>}
             <button
               className="btn btn--primary"
               onClick={handleCreate}
@@ -253,7 +254,7 @@ export default function SettingsPage() {
             <tbody>
               {activeKeys.map((key, i) => (
                 <tr key={key.id} className="reveal-item" style={{ animationDelay: `${i * 40}ms` }}>
-                  <td style={{ fontWeight: 500 }}>{key.name}</td>
+                  <td style={{ fontWeight: 500 }}>{key.name}{key.scopes.includes("execution") && <div className="execution-note" style={{ overflowWrap: "anywhere" }}>Key ID: {key.id}</div>}</td>
                   <td className="mono" style={{ color: "var(--muted)", fontSize: "0.8125rem" }}>{key.keyPrefix}...</td>
                   <td>
                     <div style={{ display: "flex", gap: "0.25rem", flexWrap: "wrap" }}>

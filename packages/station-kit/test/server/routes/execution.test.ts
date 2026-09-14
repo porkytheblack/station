@@ -277,3 +277,84 @@ test("browser recordings stay owner-routed and admin-only, with retained frames 
   assert.equal((await call({ method: "recordingDelete", id: recording.id })).status, 200);
   assert.equal((await call({ method: "recording", id: recording.id })).status, 404);
 });
+
+test("advanced sandbox gateway preserves file bytes, service ownership and draining cleanup", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "station-advanced-rpc-"));
+  const sandbox = new HostSandboxAdapter({ rootDir: root });
+  t.after(async () => { await sandbox.close(); rmSync(root, { recursive: true, force: true }); });
+  const network = new StationNetworkMemoryAdapter();
+  await network.upsertStation(node("worker", "http://unused"));
+  const app = internalExecutionRoutes({ execution: { token, sandbox }, adapter: network, networkId: "test", stationId: "worker", role: "station" });
+  const call = (body: unknown) => app.request("/execution/sandbox", request(body, token));
+  const { data: workspace } = await (await call({ method: "create" })).json();
+  const id = workspace.id;
+  const bytes = Buffer.alloc(200_000, 123);
+  assert.equal((await call({ method: "writeFile", id, path: "nested/data.bin", options: { base64: bytes.toString("base64"), createParents: true } })).status, 200);
+  const read = await call({ method: "readFile", id, path: "nested/data.bin", options: { offset: 150_000, length: 100 } });
+  assert.equal(read.status, 200);
+  assert.deepEqual(Buffer.from((await read.json()).data.base64, "base64"), bytes.subarray(150_000, 150_100));
+  for (const body of [
+    { method: "writeFile", id, path: "../outside", options: { base64: "eA==" } },
+    { method: "readFile", id, path: "nested/data.bin", options: { offset: -1 } },
+    { method: "writeFile", id, path: "bad", options: { base64: "!@#$" } },
+    { method: "openTerminal", id, options: { cols: 0 } },
+    { method: "startService", id, options: { name: "bad", command: "true", restart: { policy: "always", maxRestarts: -1, delayMs: 100 } } },
+    { method: "exec", id, command: "true", options: { privileged: true } },
+  ]) assert.equal((await call(body)).status, 400, JSON.stringify(body));
+  assert.equal((await call({ method: "openTerminal", id })).status, 503, "PTY is opt-in");
+  const response = await call({ method: "startService", id, options: { name: "held", command: "sleep 30" } });
+  assert.equal(response.status, 200);
+  const { data: service } = await response.json();
+  const { data: other } = await (await call({ method: "create" })).json();
+  assert.equal((await call({ method: "service", id: other.id, serviceId: service.id })).status, 404);
+  await network.upsertStation(node("worker", "http://unused", { status: "draining" }));
+  assert.equal((await call({ method: "readFile", id, path: "nested/data.bin" })).status, 200);
+  assert.equal((await call({ method: "writeFile", id, path: "denied", options: { base64: "eA==" } })).status, 503);
+  assert.equal((await call({ method: "startService", id, options: { name: "denied", command: "true" } })).status, 503);
+  assert.equal((await call({ method: "stopService", id, serviceId: service.id })).status, 200);
+  assert.equal((await call({ method: "removeService", id, serviceId: service.id })).status, 200);
+});
+
+test("advanced browser requests are validated before dispatch and allow draining reads", async (t) => {
+  const commands: unknown[] = [];
+  const browser = new BrowserSessionManager({ name: "advanced-fixture", capabilities: { screenshots: true, independentSessions: true, commands: true, pages: true }, async open() {
+    return { async navigate() {}, async evaluate() {}, async click() {}, async type() {}, async press() {}, async screenshot() { return new Uint8Array(); }, async close() {}, async execute(command) { commands.push(command); return "handled"; } };
+  } });
+  t.after(() => browser.close());
+  const network = new StationNetworkMemoryAdapter();
+  await network.upsertStation(node("worker", "http://unused"));
+  const app = internalExecutionRoutes({ execution: { token, browser }, adapter: network, networkId: "test", stationId: "worker", role: "station" });
+  const call = (body: unknown) => app.request("/execution/browser", request(body, token));
+  const { data: handle } = await (await call({ method: "open" })).json();
+  const id = handle.id;
+  assert.equal((await call({ method: "execute", id, command: { op: "fill", selector: "#input", value: "hello" } })).status, 200);
+  for (const body of [
+    { method: "open", options: { profileId: "../secret" } },
+    { method: "execute", id, command: { op: "fill", selector: "#input", value: "hello", arbitrary: true } },
+    { method: "execute", id, command: { op: "upload", selector: "input", files: [{ name: "bad", mimeType: "text/plain", base64: "!" }] } },
+  ]) assert.equal((await call(body)).status, 400);
+  assert.equal(commands.length, 1);
+  await network.upsertStation(node("worker", "http://unused", { status: "draining" }));
+  assert.equal((await call({ method: "execute", id, command: { op: "pages" } })).status, 200);
+  assert.equal((await call({ method: "execute", id, command: { op: "newPage" } })).status, 503);
+  assert.equal((await call({ method: "audit" })).status, 200);
+  assert.equal((await call({ method: "close", id })).status, 200);
+});
+
+test("backend readiness failure releases both execution backends before advertising", async () => {
+  const { createStation } = await import("../../../src/server/index.js");
+  const root = mkdtempSync(join(tmpdir(), "station-ready-failure-"));
+  const sandbox = new HostSandboxAdapter({ rootDir: join(root, "workspaces") });
+  let closed = 0;
+  const browser = new BrowserSessionManager({ name: "fixture", capabilities: { screenshots: true, independentSessions: true }, async open() {
+    return { async navigate() {}, async evaluate() {}, async click() {}, async type() {}, async press() {}, async screenshot() { return new Uint8Array(); }, async close() { closed++; } };
+  } });
+  await browser.open();
+  Object.assign(sandbox, { async ready() { throw Error("engine unavailable"); } });
+  try {
+    await assert.rejects(createStation(resolveConfig({ execution: { token, sandbox, browser }, open: false }), root), /engine unavailable/);
+    assert.equal(closed, 1);
+    const recovered = new HostSandboxAdapter({ rootDir: join(root, "workspaces") });
+    await recovered.close();
+  } finally { await sandbox.close(); await browser.close(); rmSync(root, { recursive: true, force: true }); }
+});

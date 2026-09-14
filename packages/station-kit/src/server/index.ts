@@ -1,4 +1,6 @@
+import { bindStationTenant } from "./tenant-binding.js";
 import { Hono } from "hono";
+import { tenantExecutionRoutes, validateExecutionTenancy } from "./routes/tenant-execution.js";
 import { executionCatalogRoutes, internalExecutionRoutes, publicExecutionRoutes } from "./routes/execution.js";
 import { createMiddleware } from "hono/factory";
 import { bodyLimit } from "hono/body-limit";
@@ -92,6 +94,21 @@ export interface StationInstance {
 }
 
 export async function createStation(config: StationConfig, cwd: string, nextPort?: number): Promise<StationInstance> {
+  // Verify retained ownership and backend readiness before advertising or serving requests.
+  let dataDir: string;
+  try {
+    validateExecutionTenancy(config);
+    ({ dataDir } = ensureStationDir(cwd, config.stationDir));
+    bindStationTenant(dataDir, config.execution?.tenantId);
+    await config.execution?.sandbox?.ready?.();
+    await config.execution?.browser?.adapter.ready?.();
+    await config.execution?.sandbox?.bindTenant?.(config.execution.tenantId);
+    await config.execution?.browser?.bindTenant(config.execution.tenantId);
+  }
+  catch (error) {
+    await Promise.allSettled([config.execution?.sandbox?.close(), config.execution?.browser?.close()]);
+    throw error;
+  }
   const signalAdapter: SignalQueueAdapter = config.adapter ?? new MemoryAdapter();
   const networkAdapter: StationNetworkAdapter = config.network.adapter ?? new StationNetworkMemoryAdapter();
   const broadcastAdapter: BroadcastQueueAdapter | undefined =
@@ -99,7 +116,6 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
   const beaconAdapter: BeaconStateAdapter | undefined =
     config.beaconAdapter ?? (config.beaconsDir ? new BeaconMemoryAdapter() : undefined);
 
-  const { dataDir } = ensureStationDir(cwd, config.stationDir);
 
   warnIfLegacySqliteFiles(dataDir);
 
@@ -488,8 +504,9 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
       execution: config.execution, adapter: networkAdapter,
       networkId: config.network.id, stationId: config.network.stationId, role: config.role,
     };
-    // Execution remains admin-only even when the legacy APIs intentionally omit auth.
+    // Operator execution remains admin-only; the separate customer gateway uses tenant-only keys.
     v1.route("/", publicExecutionRoutes(executionDeps));
+    v1.route("/", tenantExecutionRoutes(executionDeps));
     app.route("/internal", internalExecutionRoutes(executionDeps));
   }
   app.route("/api/v1", v1);
@@ -567,8 +584,9 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
         beacons: registeredBeacons.map((item) => item.name).sort(),
         beaconMetadata: registeredBeacons,
         execution: config.execution ? {
-          sandbox: config.execution.sandbox ? { backend: config.execution.sandbox.name } : undefined,
-          browser: config.execution.browser ? { backend: config.execution.browser.adapter.name } : undefined,
+          tenantId: config.execution.tenantId,
+          sandbox: config.execution.sandbox ? { backend: config.execution.sandbox.name, capabilities: { ...config.execution.sandbox.capabilities } } : undefined,
+          browser: config.execution.browser ? { backend: config.execution.browser.adapter.name, capabilities: { ...config.execution.browser.adapter.capabilities, durableRecordings: config.execution.browser.recordingPersistence === "disk" } } : undefined,
         } : undefined,
       },
       endpoint: config.network.endpoint,

@@ -81,8 +81,8 @@ await sendEmail.trigger({
 | [`station-env`](./packages/station-env) | Runtime-managed environment variables injected into signal/beacon runs |
 | [`station-schedules`](./packages/station-schedules) | Runtime interval/cron schedules with atomic occurrence claims |
 | [`station-browser`](./packages/station-browser) | Experimental Station execution in Web Workers/service workers with IndexedDB |
-| [`station-sandbox`](./packages/station-sandbox) | Trusted native POSIX workspaces and supervised Bash commands |
-| [`station-browser-use`](./packages/station-browser-use) | Server browser sessions and screenshots through Bun WebView or Playwright |
+| [`station-sandbox`](./packages/station-sandbox) | Persistent workspaces, terminals and services with host/container adapters |
+| [`station-browser-use`](./packages/station-browser-use) | Browser sessions, profiles, page tools and durable screenshot playback |
 | [`station-expressions`](./packages/station-expressions) | Pure expression AST, validation and workflow mappings |
 | [`station-tauri`](./packages/station-tauri) | Local Station sidecar integration for Tauri applications |
 | [`station-network`](./packages/station-network) | Fleet membership, capacity reporting, draining, and distributed controller leases |
@@ -108,29 +108,32 @@ patterns and the supported API. The docs build includes both browser guides in
 
 ### Server execution primitives
 
-`station-sandbox` provides trusted shell workspaces; `station-browser-use` owns
-independent browser sessions through Bun WebView or Playwright. Headquarters can
-route admin requests to their exact private worker. See the
+`station-sandbox` supplies persistent workspaces, Bash commands, interactive terminals,
+supervised services and file transfer through host or Docker/Podman adapters.
+`station-browser-use` independently manages browser sessions, page controls,
+profiles, uploads/downloads and screenshot playback. Headquarters routes each
+operation to its owning private worker. See the
 [execution guide](https://station.dterminal.net/docs/execution),
-[three-service example](./examples/18-execution-network) and
-[agent reference](.claude/skills/station/execution.md). These are initial primitives:
-no automatic environment placement, tenant isolation or restoration of live
-processes/browser sessions. Both primitives pass Linux container checks; a Railway
-deployment remains unvalidated.
-Node stays the default signal/beacon runtime; `BunProcessRuntime` is an opt-in
-child-runtime adapter, independent of browser control.
+[network example](./examples/18-execution-network) and
+[agent reference](.claude/skills/station/execution.md).
 
-The administrator dashboard provides `/sandboxes` and `/browser-use`, discovering
-advertised workers through `GET /api/v1/execution`. Workspace-local and home-global
-npm tools are available by command name and persist with the worker's workspace
-volume across new shells/restarts; this does not provide filesystem isolation.
-Browser Use can record a screenshot every five seconds for timestamped playback
-and scrubbing. Recording continues without the dashboard; bounded frame history
-is retained in worker memory after session close and cleared on worker restart.
-The `pnpm test:execution:dashboard` harness exercises the built
-Headquarters/private-worker topology, browser control and a custom offline CLI
-installation. See the [validation report](./plans/station-dashboard-validation.md)
-for passing SQLite/PostgreSQL dashboard runs and Linux primitive checks.
+The operator dashboard exposes `/sandboxes` and `/browser-use`. Custom npm tools
+persist with workspace storage and are available in later commands, terminals
+and services. Playwright profiles and five-second screenshot recordings can use
+persistent storage; live shells and browser tabs are interrupted on worker restart.
+Bun supports basic browser actions; native terminals require a Node controller.
+
+Host adapters are for trusted workloads. Public customer execution uses separate
+tenant-scoped authorization and dedicated workers with isolated, network-restricted
+container backends. Operators must enforce storage quotas and any permitted egress;
+these primitives do not implement customer onboarding, billing, automatic placement
+or distributed failover. Node stays the default signal/beacon runtime;
+`BunProcessRuntime` independently selects Bun child processes.
+
+Run `pnpm test:execution:dashboard` for real dashboard/private-worker workflows,
+`pnpm test:execution:containers` for engine integration and
+`pnpm test:browser-use` for browser controls and persistence. Release preflight
+checks every package before uploads; cloud deployment still needs target validation.
 
 [station-docs](https://github.com/porkytheblack/station) — Getting started, API reference, examples.
 

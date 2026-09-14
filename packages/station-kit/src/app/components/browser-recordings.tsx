@@ -8,9 +8,9 @@ import type { BrowserRecording as Recording } from "station-browser-use";
 
 interface FrameImage { recordingId: string; frameId: string; src: string }
 
-export function BrowserRecordings({ owner, sessionId, reachable, admit, browserBusy, onBusy }: {
+export function BrowserRecordings({ owner, sessionId, reachable, admit, browserBusy, durable, onBusy }: {
   owner: string; sessionId: string; reachable: boolean; admit: boolean;
-  browserBusy: boolean; onBusy: (busy: boolean) => void;
+  browserBusy: boolean; durable?: boolean; onBusy: (busy: boolean) => void;
 }) {
   const [recordings, setRecordings] = useState<Recording[]>([]);
   const [selected, setSelected] = useState("");
@@ -120,7 +120,7 @@ export function BrowserRecordings({ owner, sessionId, reachable, admit, browserB
 
   return <section className="station-card execution-card" aria-label="Browser recordings">
     <h2 style={{ fontSize: "1rem", fontWeight: 500 }}>Recordings</h2>
-    <p className="execution-note">Capture a frame every 5 seconds by default, even with this dashboard closed. Recordings remain after a browser closes, until you delete them or the worker restarts. Busy frames are skipped; storage limits stop capture.</p>
+    <p className="execution-note">Capture a frame every 5 seconds by default, even with this dashboard closed. {durable ? "Recordings survive browser closure and worker restart on this worker’s persistent storage, until deleted or expired." : "Recordings remain after a browser closes, until you delete them or the worker restarts."} Busy frames are skipped; storage limits stop capture.</p>
     <ExecutionAlert error={error || loadError} />
     <div className="execution-toolbar">
       <button className="btn btn--primary" disabled={!admit || !sessionId || busy || browserBusy || alreadyRecording || !loaded} onClick={() => void mutate(async () => {

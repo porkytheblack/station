@@ -2,6 +2,10 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { resolve, relative, isAbsolute, join } from "node:path";
+import { acquireHostRoot } from "./host-lock.js";
+import { HostFacilities } from "./host-facilities.js";
+import type { FileList, FileRead, FileWrite, FileEntry, TerminalInput, TerminalSession, TerminalOutput, ServiceInput, SandboxService } from "./advanced.js";
+export type { FileList, FileRead, FileWrite, FileEntry, TerminalInput, TerminalSession, TerminalOutput, ServiceInput, ServiceRestart, ServiceAttempt, SandboxService } from "./advanced.js";
 import { StringDecoder } from "node:string_decoder";
 
 export interface Sandbox {
@@ -24,7 +28,10 @@ export interface CommandRun {
 }
 export interface SandboxAdapter {
   readonly name: string;
-  readonly capabilities: { filesystem: true; commands: true; isolated: boolean; pty: boolean };
+  readonly capabilities: { filesystem: true; commands: true; isolated: boolean; networkRestricted?: boolean; pty: boolean; files?: boolean; services?: boolean };
+  ready?(): Promise<void>;
+  /** Refuse reassigning retained tenant data, including removal of tenant mode. */
+  bindTenant?(tenantId?: string): Promise<void>;
   create(): Promise<Sandbox>;
   list(): Promise<Sandbox[]>;
   get(id: string): Promise<Sandbox>;
@@ -32,6 +39,22 @@ export interface SandboxAdapter {
   exec(id: string, input: CommandInput): Promise<CommandRun>;
   command(id: string, runId: string): Promise<CommandRun>;
   cancel(id: string, runId: string): Promise<CommandRun>;
+  listFiles?(id: string, path?: string, options?: { offset?: number; limit?: number }): Promise<FileList>;
+  readFile?(id: string, path: string, options?: { offset?: number; length?: number }): Promise<FileRead>;
+  writeFile?(id: string, path: string, input: FileWrite): Promise<FileEntry>;
+  removeFile?(id: string, path: string, options?: { recursive?: boolean }): Promise<void>;
+  openTerminal?(id: string, input?: TerminalInput): Promise<TerminalSession>;
+  terminals?(id: string): Promise<TerminalSession[]>;
+  terminal?(id: string, terminalId: string, offset?: number): Promise<TerminalOutput>;
+  terminalInput?(id: string, terminalId: string, data: string): Promise<void>;
+  resizeTerminal?(id: string, terminalId: string, cols: number, rows: number): Promise<void>;
+  closeTerminal?(id: string, terminalId: string): Promise<void>;
+  startService?(id: string, input: ServiceInput): Promise<SandboxService>;
+  services?(id: string): Promise<SandboxService[]>;
+  service?(id: string, serviceId: string): Promise<SandboxService>;
+  stopService?(id: string, serviceId: string): Promise<SandboxService>;
+  restartService?(id: string, serviceId: string): Promise<SandboxService>;
+  removeService?(id: string, serviceId: string): Promise<void>;
   close(): Promise<void>;
 }
 export class SandboxError extends Error {
@@ -45,6 +68,11 @@ export interface HostSandboxOptions {
   maxTimeoutMs?: number;
   /** Maximum completed command records retained per workspace. Default: 100. */
   maxHistoryPerSandbox?: number;
+  enablePty?: boolean;
+  maxTerminals?: number;
+  maxServices?: number;
+  maxFileBytes?: number;
+  maxTerminalInputBytes?: number;
   /** Explicit child environment. Host secrets are not inherited automatically. */
   env?: Record<string, string>;
   shell?: string;
@@ -55,7 +83,9 @@ const fail = (code: string, message: string): never => { throw new SandboxError(
 /** Trusted-code backend. One manager process must own a root directory. */
 export class HostSandboxAdapter implements SandboxAdapter {
   readonly name = "host-process";
-  readonly capabilities = { filesystem: true, commands: true, isolated: false, pty: false } as const;
+  readonly capabilities: { filesystem: true; commands: true; isolated: false; pty: boolean; files: true; services: true };
+  private readonly facilities: HostFacilities;
+  private readonly releaseRoot: () => void;
   private readonly root: string;
   private readonly environments = new Map<string, Sandbox>();
   private readonly running = new Map<string, { run: CommandRun; child: ChildProcess; done: Promise<void>; stop(status: CommandRun["status"]): void }>();
@@ -87,6 +117,10 @@ export class HostSandboxAdapter implements SandboxAdapter {
       if (!key || key.includes("=") || key.includes("\0") || typeof value !== "string" || value.includes("\0")) fail("invalid_input", "Invalid child environment.");
     }
     mkdirSync(this.root, { recursive: true, mode: 0o700 });
+    this.releaseRoot = acquireHostRoot(this.root);
+    try {
+    this.facilities = new HostFacilities({ ...options, root: this.root, shell: options.shell ?? "/bin/bash", env: options.env ?? {}, maxOutputBytes: this.maxOutput, maxHistory: this.maxHistory });
+    this.capabilities = { filesystem: true, commands: true, isolated: false, pty: this.facilities.ptyEnabled, files: true, services: true };
     for (const id of readdirSync(this.root)) {
       if (!validId.test(id)) continue;
       const sandbox = this.readMetadata(join(this.root, id, "sandbox.json")) as Sandbox;
@@ -100,7 +134,9 @@ export class HostSandboxAdapter implements SandboxAdapter {
         if (run.status === "running") this.write(path, { ...run, status: "interrupted", finishedAt: new Date().toISOString() });
       }
       this.prune(id);
+      this.facilities.recover(id);
     }
+    } catch (error) { this.releaseRoot(); throw error; }
   }
   private date(value: unknown): value is string { return typeof value === "string" && Number.isFinite(Date.parse(value)); }
   private readMetadata(path: string): unknown {
@@ -148,6 +184,7 @@ export class HostSandboxAdapter implements SandboxAdapter {
   }
   async create(): Promise<Sandbox> {
     if (this.closed || this.storageFailed) fail("unavailable", "Worker is closing or storage is unavailable.");
+    this.facilities.assertAvailable();
     if (this.environments.size >= this.maxEnvironments) fail("capacity", "Workspace capacity reached.");
     const sandbox: Sandbox = { id: randomUUID(), createdAt: new Date().toISOString(), backend: "host-process" };
     const dir = join(this.root, sandbox.id);
@@ -159,14 +196,16 @@ export class HostSandboxAdapter implements SandboxAdapter {
   async list() { return [...this.environments.values()].map((item) => ({ ...item })); }
   async get(id: string) { return { ...this.check(id) }; }
   async destroy(id: string) {
-    this.check(id);
-    if ([...this.running.values()].some(({ run }) => run.sandboxId === id)) fail("busy", "Cancel running commands before deleting the workspace.");
+    this.guard(id, true);
+    if (this.facilities.busy(id) || [...this.running.values()].some(({ run }) => run.sandboxId === id)) fail("busy", "Cancel running commands and stop terminals/services before deleting the workspace.");
     rmSync(join(this.root, id), { recursive: true });
     this.environments.delete(id);
+    this.facilities.forget(id);
   }
   async exec(id: string, input: CommandInput): Promise<CommandRun> {
     this.check(id);
     if (this.closed || this.storageFailed) fail("unavailable", "Worker is closing or storage is unavailable.");
+    this.facilities.assertAvailable();
     if (!input || typeof input.command !== "string" || !input.command.trim() || Buffer.byteLength(input.command) > 65_536 || input.command.includes("\0")) fail("invalid_input", "command must be a non-empty string up to 64 KiB.");
     if (input.cwd !== undefined && (typeof input.cwd !== "string" || isAbsolute(input.cwd) || input.cwd.includes("\0"))) fail("invalid_input", "cwd must be a relative directory.");
     const timeout = input.timeoutMs ?? Math.min(30_000, this.maxTimeout);
@@ -257,10 +296,32 @@ export class HostSandboxAdapter implements SandboxAdapter {
     if (active) { active.stop("cancelled"); await active.done; }
     return this.command(id, runId);
   }
+  private guard(id: string, mutation = false) {
+    this.check(id);
+    if (mutation && (this.closed || this.storageFailed)) fail("unavailable", "Worker is closing or storage is unavailable.");
+    if (mutation) this.facilities.assertAvailable();
+  }
+  async listFiles(id: string, path = ".", options = {}) { this.guard(id); return this.facilities.listFiles(id, path, options); }
+  async readFile(id: string, path: string, options = {}) { this.guard(id); return this.facilities.readFile(id, path, options); }
+  async writeFile(id: string, path: string, input: FileWrite) { this.guard(id, true); return this.facilities.writeFile(id, path, input); }
+  async removeFile(id: string, path: string, options = {}) { this.guard(id, true); return this.facilities.removeFile(id, path, options); }
+  async openTerminal(id: string, input: TerminalInput = {}) { this.guard(id, true); return this.facilities.openTerminal(id, input); }
+  async terminals(id: string) { this.guard(id); return this.facilities.terminals(id); }
+  async terminal(id: string, terminalId: string, offset = 0) { this.guard(id); return this.facilities.terminal(id, terminalId, offset); }
+  async terminalInput(id: string, terminalId: string, data: string) { this.guard(id, true); return this.facilities.terminalInput(id, terminalId, data); }
+  async resizeTerminal(id: string, terminalId: string, cols: number, rows: number) { this.guard(id, true); return this.facilities.resizeTerminal(id, terminalId, cols, rows); }
+  async closeTerminal(id: string, terminalId: string) { this.guard(id, true); return this.facilities.closeTerminal(id, terminalId); }
+  async startService(id: string, input: ServiceInput) { this.guard(id, true); return this.facilities.startService(id, input); }
+  async services(id: string) { this.guard(id); return this.facilities.services(id); }
+  async service(id: string, serviceId: string) { this.guard(id); return this.facilities.service(id, serviceId); }
+  async stopService(id: string, serviceId: string) { this.guard(id, true); return this.facilities.stopService(id, serviceId); }
+  async restartService(id: string, serviceId: string) { this.guard(id, true); return this.facilities.restartService(id, serviceId); }
+  async removeService(id: string, serviceId: string) { this.guard(id, true); return this.facilities.removeService(id, serviceId); }
   async close() {
     this.closed = true;
     const active = [...this.running.values()];
     for (const entry of active) entry.stop("interrupted");
-    await Promise.all(active.map((entry) => entry.done));
+    try { await Promise.all([...active.map((entry) => entry.done), this.facilities.close()]); }
+    finally { this.releaseRoot(); }
   }
 }

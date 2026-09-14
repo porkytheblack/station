@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useBreadcrumb } from "../hooks/use-breadcrumb";
 import { executionError, executionRequest, useExecutionStations, type ExecutionStation } from "../hooks/use-execution";
+import { BrowserAdvanced } from "../components/browser-advanced";
 import { BrowserRecordings } from "../components/browser-recordings";
 import { ExecutionAlert, ExecutionOwner, OwnerNotice } from "../components/execution-common";
 import type { BrowserHandle, BrowserAction } from "station-browser-use";
@@ -33,9 +34,11 @@ function BrowserWorkspace({ owner, station, onBusy }: { owner: string; station?:
   const [busy, setBusy] = useState(false);
   const [closing, setClosing] = useState(false);
   const [recordingBusy, setRecordingBusy] = useState(false);
+  const [advancedBusy, setAdvancedBusy] = useState(false);
+  const [profile, setProfile] = useState("");
   const [actionPending, setActionPending] = useState(false);
   const closeRequested = useRef(new Set<string>());
-  const locked = busy || closing || recordingBusy;
+  const locked = busy || closing || recordingBusy || advancedBusy;
   const [error, setError] = useState("");
   const [result, setResult] = useState("");
   const [screenshot, setScreenshot] = useState("");
@@ -93,8 +96,9 @@ function BrowserWorkspace({ owner, station, onBusy }: { owner: string; station?:
     <OwnerNotice station={station} />
     <p className="execution-note">Sessions remain on their owning worker. Restarting that worker ends its live browsers.</p>
     <ExecutionAlert error={error} />
+    {station?.features?.browser?.profiles && <label className="execution-field"><span>Persistent profile for next browser (optional)</span><input className="input-text" aria-label="Browser profile" placeholder="agent-workspace" value={profile} disabled={locked} onChange={e => setProfile(e.target.value)} /></label>}
     <div className="execution-toolbar">
-      <button className="btn btn--primary" disabled={!admit || locked || loading} onClick={() => void act(async () => { const handle = await rpc<BrowserHandle>({ method: "open" }); listRevision.current++; setSessions((items) => [...items, handle]); setSelected(handle.id); })}>Open browser</button>
+      <button className="btn btn--primary" disabled={!admit || locked || loading} onClick={() => void act(async () => { const handle = await rpc<BrowserHandle>({ method: "open", ...(profile && station?.features?.browser?.profiles ? { options: { profileId: profile } } : {}) }); listRevision.current++; setSessions((items) => [...items, handle]); setSelected(handle.id); })}>Open browser</button>
       <button className="btn" disabled={!reachable || locked} onClick={() => void act(refresh)}>Refresh sessions</button>
       <span className="execution-note">{sessions.length} session{sessions.length === 1 ? "" : "s"}</span>
     </div>
@@ -115,6 +119,7 @@ function BrowserWorkspace({ owner, station, onBusy }: { owner: string; station?:
       {result && <div className="execution-result"><h2>Result</h2><pre className="execution-output" aria-label="Browser result">{result}</pre></div>}
       {screenshot && <figure className="execution-screenshot"><img src={screenshot} alt="Browser screenshot" /><figcaption className="execution-note">Captured from the selected browser session.</figcaption><a className="btn btn--sm" href={screenshot} download={`station-browser-${selected}.png`}>Download screenshot</a></figure>}
     </div> : <div className="empty-state"><p className="empty-state-text">{loading && reachable ? "Loading browser sessions…" : "No live browser sessions on this station. Open a browser to begin."}</p></div>}
-    <BrowserRecordings owner={owner} sessionId={selected} reachable={reachable} admit={admit} browserBusy={busy || closing} onBusy={setRecordingBusy} />
+    {station?.features?.browser?.commands && <BrowserAdvanced key={selected || "no-session"} owner={owner} sessionId={selected} reachable={reachable} admit={admit && !busy && !closing && !recordingBusy} features={station.features.browser} onBusy={setAdvancedBusy} profile={profile} onProfile={setProfile} />}
+    <BrowserRecordings owner={owner} sessionId={selected} reachable={reachable} admit={admit} browserBusy={busy || closing || advancedBusy} durable={station?.features?.browser?.durableRecordings} onBusy={setRecordingBusy} />
   </section>;
 }

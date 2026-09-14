@@ -1,7 +1,7 @@
 {
   "name": "station-sandbox",
   "version": "2.4.0",
-  "description": "Native POSIX workspaces and supervised commands for Station workers",
+  "description": "Persistent Station workspaces, terminals and supervised services with host and container adapters",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -13,6 +13,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./container": {
+      "types": "./dist/container.d.ts",
+      "import": "./dist/container.js"
     }
   },
   "files": [
@@ -22,6 +26,18 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test test/*.test.ts"
+    "test": "node --import tsx --test test/*.test.ts",
+    "test:containers": "node --import tsx --test test/container.integration.ts"
+  },
+  "peerDependencies": {
+    "node-pty": "^1.1.0"
+  },
+  "peerDependenciesMeta": {
+    "node-pty": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "node-pty": "^1.1.0"
   }
 }
