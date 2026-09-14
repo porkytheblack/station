@@ -16,9 +16,9 @@ OPENROUTER_MODEL=openai/gpt-4.1-mini
 
 The connection defaults to tenant access. `STATION_BROWSER_ACCESS=operator` is an explicit alternative for an authorized operator connection. Public tenant deployments require the isolated worker and enforced storage/network configuration documented in the Station execution guide. The agent does not choose credentials, workers, mounts or its isolation backend.
 
-The bridge maps Station JSON schemas to Glove's `jsonSchema` tool field and forwards abort signals. Screenshots remain separate binary image results. Glove's current model adapters serialize ordinary tool data as text, so the bridge queues the newest PNG (maximum4MiB) and appends a native image message in the **next model request**, after Glove commits the tool-results message. It never inserts an image between a tool call and its result or asks the model to interpret base64 text. Images are transient model observations rather than durable conversation attachments. Optional `STATION_BROWSER_ARTIFACT_DIR` saves PNGs and safe call/usage metadata under host-selected paths.
+The bridge maps Station JSON schemas to Glove's `jsonSchema` tool field and forwards abort signals. Screenshots remain separate binary image results. Glove's current model adapters serialize ordinary tool data as text, so the bridge queues the newest PNG (maximum 4 MiB) and appends a native image message in the **next model request**, after Glove commits the tool-results message. It never inserts an image between a tool call and its result or asks the model to interpret base64 text. Images are transient model observations rather than durable conversation attachments. Optional `STATION_BROWSER_ARTIFACT_DIR` saves PNGs and safe call/usage metadata under host-selected paths.
 
-The example permits structured form/navigation interactions and prohibits JavaScript evaluation. It caps sessions at one and model turns at18. Adapt this explicit command policy for your application; page text remains untrusted input.
+The example permits structured form/navigation interactions and prohibits JavaScript evaluation. It caps sessions at one, model turns at 14 and generated output at 600 tokens per call, with no agent-level retries. Adapt this explicit command policy for your application; page text remains untrusted input.
 
 ## Real-model integration test
 

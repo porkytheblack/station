@@ -41,10 +41,11 @@ export function createFoundryBrowserBridge({ model, toolset, onImage, onEvent })
       onEvent?.({ type: 'model_request', imageParts: image ? 1 : 0 });
       let result;
       try { result = await model.prompt({ ...request, messages }, notify, signal); }
-      catch {
+      catch (error) {
         // Provider SDK errors may carry request/config objects. Do not persist
         // those through Foundry's run-error or subprocess logging surfaces.
-        onEvent?.({ type: 'model_error' });
+        const status = error?.status;
+        onEvent?.({ type: 'model_error', ...(Number.isInteger(status) && status >= 400 && status <= 599 ? { httpStatus: status } : {}) });
         throw new Error('Configured model request failed.');
       }
       if (pendingImage === image) pendingImage = undefined;

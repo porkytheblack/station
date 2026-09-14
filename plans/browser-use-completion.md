@@ -9,7 +9,7 @@ packages: builds, typechecks, **400 passing tests**, two existing skips,
 26/26 browser-runtime checks, archive validation and npm publish dry runs.
 [Release validation record](artifacts/browser-use-completion/release-validation.json).
 Nothing was uploaded. The code is committed locally; the real-model test below
-is the remaining verification awaiting approval.
+is the remaining verification, currently blocked by the configured OpenRouter credential.
 
 The published Browser Use package now exports `station-browser-use/agent` and
 `station-browser-use/client`. Nine framework-neutral tools provide workflow-scoped
@@ -29,13 +29,18 @@ The lifecycle review also fixed expired-session cleanup and uncertain opens:
 unknown opens fence further admission and report unresolved cleanup instead of
 silently freeing capacity or claiming successful shutdown.
 
-The real-model Foundry test is implemented but remains pending explicit approval.
-Automatic approval review rejected reading the configured OpenRouter credential
-and sending screenshots/task data to the external provider without explicit
-authorization. The prepared test sends only generated local fixture screenshots,
-fake registration data, instructions and tool schemas/results; it has an 18-turn
-limit and incurs provider usage. No real-model test has run and nothing has been
-published.
+The user approved one low-usage real-model test. It attempted one model call and
+failed before any browser tool ran; a separate read-only key-status check returned
+**401 Unauthorized**. No screenshot was captured or sent and no successful model
+response or token usage was reported. No further generation attempts were made.
+The remaining verification requires a working OpenRouter credential.
+
+The example now limits runs to 14 turns and 600 output tokens per call, and reports
+provider HTTP status without recording raw errors or credentials. Its three local
+bridge tests pass. These example/test-report changes follow the 400-test release
+preflight above; the published package implementation is unchanged.
+[Approved test result](artifacts/browser-use-completion/real-model-attempt.json).
+Nothing has been published.
 
 - [Foundry example and test instructions](../examples/19-foundry-browser/README.md)
 - [Real browser tool integration evidence](artifacts/browser-use-completion/browser-agent-protocol.log)

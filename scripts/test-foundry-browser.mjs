@@ -97,7 +97,7 @@ try {
   assert.equal(manager.list().length, 0, 'Agent cleanup left an active browser.');
   const pngs = readdirSync(artifacts).filter(file => file.endsWith('.png')); assert.ok(pngs.length);
   for (const file of pngs) assert.equal(readFileSync(join(artifacts, file)).subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
-  summary = { passed: true, realModel: true, model: process.env.OPENROUTER_MODEL ?? 'openai/gpt-4.1-mini', modelCalls: events.filter(event => event.type === 'model_request').length, imageRequests: events.filter(event => event.type === 'model_request' && event.imageParts).length, toolCalls: events.filter(event => event.type === 'tool').length, screenshots: pngs.length, formSubmitted: true, remainingBrowserSessions: manager.list().length };
+  summary = { passed: true, realModel: true, model: process.env.OPENROUTER_MODEL ?? 'openai/gpt-4.1-mini', modelCalls: events.filter(event => event.type === 'model_request').length, tokensIn: events.reduce((sum, event) => sum + (event.tokensIn ?? 0), 0), tokensOut: events.reduce((sum, event) => sum + (event.tokensOut ?? 0), 0), imageRequests: events.filter(event => event.type === 'model_request' && event.imageParts).length, toolCalls: events.filter(event => event.type === 'tool').length, screenshots: pngs.length, formSubmitted: true, remainingBrowserSessions: manager.list().length };
   }
   writeFileSync(join(artifacts, 'summary.json'), JSON.stringify(summary, null, 2), { mode: 0o600 });
   console.log(JSON.stringify({ ...summary, artifacts }));

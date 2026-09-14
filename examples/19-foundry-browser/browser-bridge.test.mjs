@@ -42,3 +42,14 @@ test('a failed provider attempt preserves the observation for retry', async () =
   assert.equal(attempts, 2);
   await bridge.close();
 });
+
+test('provider errors expose only a bounded HTTP status, never raw credentials or request data', async () => {
+  const events = [];
+  const bridge = createFoundryBrowserBridge({
+    toolset: [], onEvent: event => events.push(event),
+    model: { name: 'unit', setSystemPrompt() {}, async prompt() { throw Object.assign(new Error('private credential and request body'), { status: 401, headers: { authorization: 'private token' } }); } },
+  });
+  await assert.rejects(bridge.model.prompt({ messages: [] }, () => {}), error => error.message === 'Configured model request failed.' && error.cause === undefined);
+  assert.deepEqual(events.at(-1), { type: 'model_error', httpStatus: 401 });
+  assert.ok(!JSON.stringify(events).includes('private'));
+});

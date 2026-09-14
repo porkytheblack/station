@@ -14,5 +14,6 @@
   "archiveValidation": "passed",
   "npmPublishDryRuns": "passed",
   "uploaded": false,
-  "realModelVerification": "pending explicit approval for paid OpenRouter test"
+  "realModelVerificationAtDryRun": "pending explicit approval for paid OpenRouter test",
+  "realModelFollowUp": "real-model-attempt.json"
 }
