@@ -82,7 +82,7 @@ await sendEmail.trigger({
 | [`station-schedules`](./packages/station-schedules) | Runtime interval/cron schedules with atomic occurrence claims |
 | [`station-browser`](./packages/station-browser) | Experimental Station execution in Web Workers/service workers with IndexedDB |
 | [`station-sandbox`](./packages/station-sandbox) | Persistent workspaces, terminals and services with host/container adapters |
-| [`station-browser-use`](./packages/station-browser-use) | Browser sessions, profiles, page tools and durable screenshot playback |
+| [`station-browser-use`](./packages/station-browser-use) | Browser sessions, live takeover, inspection, traces and durable screenshot playback |
 | [`station-expressions`](./packages/station-expressions) | Pure expression AST, validation and workflow mappings |
 | [`station-tauri`](./packages/station-tauri) | Local Station sidecar integration for Tauri applications |
 | [`station-network`](./packages/station-network) | Fleet membership, capacity reporting, draining, and distributed controller leases |
@@ -110,29 +110,40 @@ patterns and the supported API. The docs build includes both browser guides in
 
 `station-sandbox` supplies persistent workspaces, Bash commands, interactive terminals,
 supervised services and file transfer through host or Docker/Podman adapters.
-`station-browser-use` independently manages browser sessions, page controls,
+`station-browser-use` independently manages browser sessions, semantic/iframe targeting,
+live viewing and human takeover, DOM/accessibility inspection, diagnostics/trace exports,
 profiles, uploads/downloads and screenshot playback. Headquarters routes each
 operation to its owning private worker. See the
 [execution guide](https://station.dterminal.net/docs/execution),
 [network example](./examples/18-execution-network) and
 [agent reference](.claude/skills/station/execution.md).
 
+Agents can mount `createBrowserAgentTools` from `station-browser-use/agent` against
+an authenticated Headquarters connection. Tools scope sessions and profile grants
+to a workflow, provide DOM/ARIA observations and image screenshots, and respect
+human takeover. The [Foundry agent example](examples/19-foundry-browser) includes
+the tool and native-image bridge plus an opt-in real-model verification harness.
+
 The operator dashboard exposes `/sandboxes` and `/browser-use`. Custom npm tools
 persist with workspace storage and are available in later commands, terminals
 and services. Playwright profiles and five-second screenshot recordings can use
 persistent storage; live shells and browser tabs are interrupted on worker restart.
+Explicit checkpoints reopen saved page URLs/profile options in a new session; durable
+action journals record started/finished outcomes without automatically replaying work.
 Bun supports basic browser actions; native terminals require a Node controller.
 
 Host adapters are for trusted workloads. Public customer execution uses separate
 tenant-scoped authorization and dedicated workers with isolated, network-restricted
-container backends. Operators must enforce storage quotas and any permitted egress;
-these primitives do not implement customer onboarding, billing, automatic placement
+container backends. The included [Linux browser deployment profile](scripts/execution-container/enforced/README.md)
+provides an HTTPS proxy, host deny rules and XFS quotas with protected quota metadata.
+Operators must deploy and verify those controls on their host; these primitives do not implement customer onboarding, billing, automatic placement
 or distributed failover. Node stays the default signal/beacon runtime;
 `BunProcessRuntime` independently selects Bun child processes.
 
 Run `pnpm test:execution:dashboard` for real dashboard/private-worker workflows,
 `pnpm test:execution:containers` for engine integration and
-`pnpm test:browser-use` for browser controls and persistence. Release preflight
+`pnpm test:browser-use` for browser controls and persistence.
+`pnpm test:execution:policy` checks the browser egress proxy and deployment verifier. Release preflight
 checks every package before uploads; cloud deployment still needs target validation.
 
 [station-docs](https://github.com/porkytheblack/station) — Getting started, API reference, examples.

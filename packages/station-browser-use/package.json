@@ -10,6 +10,14 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
+    "./agent": {
+      "types": "./dist/agent.d.ts",
+      "import": "./dist/agent.js"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "import": "./dist/client.js"
+    },
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
@@ -35,7 +43,7 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
-    "test:browsers": "pnpm run build && node --import tsx --test test/browser.integration.ts test/advanced.integration.ts",
+    "test:browsers": "pnpm run build && node --import tsx --test test/browser.integration.ts test/advanced.integration.ts test/interaction.integration.ts",
     "test:containers": "pnpm run build && node --import tsx --test test/container.integration.ts"
   },
   "peerDependencies": {
@@ -47,6 +55,7 @@
     }
   },
   "devDependencies": {
+    "ajv": "^8.20.0",
     "playwright": "^1.63.0"
   }
 }

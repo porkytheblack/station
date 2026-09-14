@@ -1,3 +1,5 @@
+import { commandLocator, locatorFor, boundedResult, inspect } from "./targeting.js";
+import { PlaywrightTools } from "./playwright-tools.js";
 import { managedSession, validateTimeout } from "./session.js";
 import { BrowserUseError, type BrowserAdapter, type BrowserSession } from "./browser.js";
 import { validateBrowserCommand, validateBrowserOpenOptions, type BrowserArtifact, type BrowserCommand, type BrowserOpenOptions, type BrowserPage, type BrowserProfile, type BrowserViewport } from "./commands.js";
@@ -24,7 +26,7 @@ export class PlaywrightBrowserAdapter implements BrowserAdapter {
   readonly capabilities: BrowserAdapter["capabilities"];
   private readonly profileRoot?: string;
   constructor(private readonly options: PlaywrightBrowserOptions = {}) {
-    this.capabilities = { screenshots: true, independentSessions: true, isolated: false, networkRestricted: false, profiles: Boolean(options.profileRootDir), pages: true, commands: true, uploads: true, downloads: true };
+    this.capabilities = { screenshots: true, independentSessions: true, isolated: false, networkRestricted: false, profiles: Boolean(options.profileRootDir), pages: true, commands: true, uploads: true, downloads: true, pointer: true, inspection: true, locators: true, dialogs: true, diagnostics: true, tracing: true };
     validateTimeout(options.timeoutMs ?? 30_000);
     validateBrowserOpenOptions({ viewport: options.viewport });
     for (const [value, max] of [[options.maxPages ?? 8, 64], [options.maxArtifacts ?? 16, 128], [options.maxArtifactBytes ?? 4 * 1024 * 1024, 16 * 1024 * 1024]]) {
@@ -54,7 +56,8 @@ export class PlaywrightBrowserAdapter implements BrowserAdapter {
     let context: BrowserContext | undefined;
     let closeProcess: (() => Promise<void>) | undefined;
     try {
-      const settings = { headless: true, executablePath: this.options.executablePath, timeout: timeoutMs, proxy: this.options.proxy, downloadsPath };
+      const traceRoot = join(downloadsPath, "traces");
+      const settings = { tracesDir: traceRoot, headless: true, executablePath: this.options.executablePath, timeout: timeoutMs, proxy: this.options.proxy, downloadsPath };
       const viewport = options.viewport ?? this.options.viewport ?? { width: 1280, height: 720 };
       if (options.profileId) {
         if (!this.profileRoot) throw new BrowserUseError("unsupported", "Persistent profiles are not configured.");
@@ -76,10 +79,17 @@ export class PlaywrightBrowserAdapter implements BrowserAdapter {
       const maxBytes = this.options.maxArtifactBytes ?? 4 * 1024 * 1024;
       const artifacts = new Map<string, { metadata: BrowserArtifact; bytes: Buffer }>();
       let artifactBytes = 0;
+      const capacity = () => { if (artifacts.size >= (this.options.maxArtifacts ?? 16) || artifactBytes >= maxBytes) throw new BrowserUseError("capacity", "Download artifact capacity reached."); };
+      const addArtifact = (bytes: Buffer, name: string, mimeType: string): BrowserArtifact => {
+        capacity(); if (bytes.length > maxBytes - artifactBytes) throw new BrowserUseError("output_limit", "Artifact exceeds session byte budget.");
+        const id = randomUUID(); const metadata: BrowserArtifact = { id, name, mimeType, bytes: bytes.length, createdAt: new Date().toISOString() };
+        artifacts.set(id, { metadata, bytes }); artifactBytes += bytes.length; return { ...metadata };
+      };
+      const tools = new PlaywrightTools(context, traceRoot, () => maxBytes - artifactBytes, capacity, addArtifact);
       const register = (page: Page) => {
         if ([...pages.values()].includes(page)) return;
         if (pages.size >= maxPages) { void page.close().catch(() => undefined); return; }
-        const id = randomUUID(); pages.set(id, page); selected ||= id;
+        const id = randomUUID(); pages.set(id, page); selected ||= id; tools.register(page);
         page.on("close", () => { pages.delete(id); if (selected === id) selected = pages.keys().next().value ?? ""; });
         page.on("download", (download) => {
           if (downloadPage === page && !acceptedDownload) acceptedDownload = download;
@@ -93,15 +103,28 @@ export class PlaywrightBrowserAdapter implements BrowserAdapter {
       const listPages = async (): Promise<BrowserPage[]> => Promise.all([...pages].map(async ([id, page]) => ({ id, url: page.url(), title: await page.title(), selected: id === selected })));
       const execute = async (input: BrowserCommand): Promise<unknown> => {
         const command = validateBrowserCommand(input);
-        if (!["pages", "newPage", "selectPage", "closePage", "downloadRead", "downloadDelete"].includes(command.op)) current();
+        if (!["pages", "newPage", "selectPage", "closePage", "downloadRead", "downloadDelete", "diagnostics", "traceStart", "traceStop"].includes(command.op)) current();
         const page = pages.get(selected)!;
         switch (command.op) {
-          case "fill": await page.locator(command.selector).fill(command.value); return null;
-          case "select": return page.locator(command.selector).selectOption(command.values);
-          case "check": await page.locator(command.selector).setChecked(command.checked); return null;
-          case "hover": await page.locator(command.selector).hover(); return null;
+          case "fill": await commandLocator(page, command).fill(command.value); return null;
+          case "select": return commandLocator(page, command).selectOption(command.values);
+          case "check": await commandLocator(page, command).setChecked(command.checked); return null;
+          case "hover": await commandLocator(page, command).hover(); return null;
+          case "click": await commandLocator(page, command).click(); return null;
+          case "focus": await commandLocator(page, command).focus(); return null;
+          case "press": await commandLocator(page, command).press(command.key); return null;
+          case "mouseClick": await page.mouse.click(command.x, command.y, { button: command.button, clickCount: command.clickCount }); return null;
+          case "mouseMove": await page.mouse.move(command.x, command.y); return null;
+          case "drag": await locatorFor(page, command.source).dragTo(locatorFor(page, command.destination)); return null;
+          case "dragCoordinates": await page.mouse.move(command.from.x, command.from.y); await page.mouse.down(); try { await page.mouse.move(command.to.x, command.to.y, { steps: command.steps ?? 10 }); } finally { await page.mouse.up(); } return null;
+          case "inspect": return inspect(page, command.target, command.maxElements, command.maxTextLength);
+          case "accessibility": return boundedResult({ format: "aria-yaml", snapshot: await locatorFor(page, command.target ?? { by: "selector", value: "body" }).ariaSnapshot({ depth: command.depth ?? 10, boxes: command.boxes ?? false }) });
+          case "dialog": return tools.dialog(page, command.action, command.promptText, command.expiresInMs);
+          case "diagnostics": return tools.diagnostics(command);
+          case "traceStart": return tools.traceStart();
+          case "traceStop": return tools.traceStop();
           case "scroll": await page.mouse.wheel(command.x, command.y); return null;
-          case "waitFor": await page.locator(command.selector).waitFor({ state: command.state ?? "visible" }); return null;
+          case "waitFor": await commandLocator(page, command).waitFor({ state: command.state ?? "visible" }); return null;
           case "content": { const html = await page.content(); if (Buffer.byteLength(html) > 4 * 1024 * 1024) throw new BrowserUseError("output_limit", "Page content exceeds 4 MiB."); return html; }
           case "back": await page.goBack(); return null;
           case "forward": await page.goForward(); return null;
@@ -121,18 +144,18 @@ export class PlaywrightBrowserAdapter implements BrowserAdapter {
             if (pages.size === 1) throw new BrowserUseError("invalid_input", "Close the session to close its last page.");
             await target.close(); return null;
           }
-          case "upload": await page.locator(command.selector).setInputFiles(command.files.map((file) => ({ name: file.name, mimeType: file.mimeType, buffer: Buffer.from(file.base64, "base64") }))); return null;
+          case "upload": await commandLocator(page, command).setInputFiles(command.files.map((file) => ({ name: file.name, mimeType: file.mimeType, buffer: Buffer.from(file.base64, "base64") }))); return null;
           case "download": {
-            if (artifacts.size >= (this.options.maxArtifacts ?? 16) || artifactBytes >= maxBytes) throw new BrowserUseError("capacity", "Download artifact capacity reached.");
+            capacity();
             downloadPage = page; acceptedDownload = undefined;
             const pending = page.waitForEvent("download"); void pending.catch(() => undefined);
             let download: import("playwright").Download | undefined;
             let guard: ReturnType<typeof setInterval> | undefined;
             try {
-              await page.locator(command.selector).click(); download = await pending;
+              await commandLocator(page, command).click(); download = await pending;
               guard = setInterval(() => {
                 try {
-                  const bytes = readdirSync(downloadsPath).reduce((sum, file) => sum + statSync(join(downloadsPath, file)).size, 0);
+                  const bytes = readdirSync(downloadsPath).reduce((sum, file) => { const entry = statSync(join(downloadsPath, file)); return sum + (entry.isFile() ? entry.size : 0); }, 0);
                   if (bytes > maxBytes - artifactBytes) void download!.cancel().catch(() => undefined);
                 } catch { /* Download files can disappear during cancellation/cleanup. */ }
               }, 50);
@@ -144,10 +167,7 @@ export class PlaywrightBrowserAdapter implements BrowserAdapter {
                 if (bytes > maxBytes - artifactBytes) { stream.destroy(); throw new BrowserUseError("output_limit", "Download exceeds session artifact budget."); }
                 chunks.push(Buffer.from(chunk));
               }
-              const id = randomUUID();
-              const metadata: BrowserArtifact = { id, name: download.suggestedFilename().replace(/[\\/\x00-\x1f]/g, "_").slice(0, 255) || "download", mimeType: "application/octet-stream", bytes, createdAt: new Date().toISOString() };
-              artifacts.set(id, { metadata, bytes: Buffer.concat(chunks) }); artifactBytes += bytes;
-              return { ...metadata };
+              return addArtifact(Buffer.concat(chunks), download.suggestedFilename().replace(/[\\/\x00-\x1f]/g, "_").slice(0, 255) || "download", "application/octet-stream");
             } finally { downloadPage = undefined; acceptedDownload = undefined; clearInterval(guard); await download?.cancel().catch(() => undefined); await download?.delete().catch(() => undefined); }
           }
           case "downloadRead": { const artifact = artifacts.get(command.artifactId); if (!artifact) throw new BrowserUseError("not_found", "Download artifact not found."); return { ...artifact.metadata, base64: artifact.bytes.toString("base64") }; }
@@ -158,7 +178,7 @@ export class PlaywrightBrowserAdapter implements BrowserAdapter {
       return managedSession({
         navigate: async (url) => { await current().goto(url); }, evaluate: (expression) => current().evaluate(expression), click: (selector) => current().locator(selector).click(),
         type: (text) => current().keyboard.insertText(text), press: (key) => current().keyboard.press(key), screenshot: () => current().screenshot({ type: "png" }), execute,
-        close: () => closing ??= (async () => { try { await closeProcess!(); } finally { release?.(); artifacts.clear(); rmSync(downloadsPath, { recursive: true, force: true }); } })(),
+        close: () => closing ??= (async () => { try { await closeProcess!(); } finally { try { await tools.close(); } finally { release?.(); artifacts.clear(); rmSync(downloadsPath, { recursive: true, force: true }); } } })(),
       }, timeoutMs);
     } catch (error) {
       try { await closeProcess?.(); } finally { release?.(); rmSync(downloadsPath, { recursive: true, force: true }); }

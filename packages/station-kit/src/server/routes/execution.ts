@@ -59,7 +59,7 @@ export function assertAvailable(node: StationNode | null, networkId: string, pri
   if (node.status === "offline" || node.leaseExpiresAt.getTime() <= Date.now()) throw new SandboxError("unavailable", messages.unavailable);
   const cleanup = primitive === "sandbox"
     ? ["list", "get", "command", "cancel", "destroy", "listFiles", "readFile", "services", "service", "stopService", "removeService", "terminals", "terminal", "closeTerminal"].includes(body.method)
-    : ["list", "close", "recordings", "recording", "recordingFrame", "recordingStop", "recordingDelete", "profiles", "profileDelete", "audit"].includes(body.method) || (body.method === "execute" && ["pages", "downloadRead", "downloadDelete", "closePage"].includes((body.command as BrowserCommand).op));
+    : ["list", "close", "recordings", "recording", "recordingFrame", "recordingStop", "recordingDelete", "profiles", "profileDelete", "audit", "control", "controlRelease", "liveFrame", "checkpoints", "checkpointDelete"].includes(body.method) || (body.method === "execute" && ["pages", "downloadRead", "downloadDelete", "closePage"].includes((body.command as BrowserCommand).op));
   if (node.status !== "online" && !(node.status === "draining" && cleanup)) throw new SandboxError("unavailable", messages.unavailable);
 }
 export async function dispatch(config: ExecutionConfig, primitive: string, b: RequestBody): Promise<unknown> {
@@ -96,12 +96,21 @@ export async function dispatch(config: ExecutionConfig, primitive: string, b: Re
     switch (b.method) {
       case "open": return a.open(b.options as BrowserOpenOptions | undefined);
       case "list": return a.list();
-      case "execute": return a.execute(b.id as string, b.command as BrowserCommand);
+      case "execute": return a.execute(b.id as string, b.command as BrowserCommand, b.controlToken as string | undefined);
       case "profiles": return a.listProfiles();
       case "profileDelete": await a.deleteProfile(b.id as string); return null;
       case "audit": return a.audit();
-      case "action": return a.perform(b.id as string, b.action as BrowserAction, b.value as string | undefined);
-      case "close": await a.closeSession(b.id as string); return null;
+      case "control": return a.control(b.id as string);
+      case "controlAcquire": return a.acquireControl(b.id as string, b.ttlMs as number | undefined);
+      case "controlRenew": return a.renewControl(b.id as string, b.controlToken as string, b.ttlMs as number | undefined);
+      case "controlRelease": a.releaseControl(b.id as string, b.controlToken as string); return null;
+      case "liveFrame": return a.liveFrame(b.id as string);
+      case "checkpoints": return a.listCheckpoints();
+      case "checkpoint": return a.checkpoint(b.id as string, b.controlToken as string | undefined);
+      case "checkpointDelete": a.deleteCheckpoint(b.id as string); return null;
+      case "checkpointResume": return a.resumeCheckpoint(b.id as string);
+      case "action": return a.perform(b.id as string, b.action as BrowserAction, b.value as string | undefined, b.controlToken as string | undefined);
+      case "close": await a.requestCloseSession(b.id as string, b.controlToken as string | undefined); return null;
       case "recordingStart": return a.startRecording(b.id as string);
       case "recordingStop": return a.stopRecording(b.id as string);
       case "recordings": return a.listRecordings();
@@ -183,35 +192,49 @@ export function publicExecutionRoutes(deps: ExecutionDeps): Hono {
 
 /** Shared bounded transport; tenant identity is supplied only by authenticated Headquarters routing. */
 export async function forwardExecution(c: Context, deps: ExecutionDeps, node: StationNode, body: RequestBody, tenantId?: string) {
-      if (!node.endpoint) return c.json({ error: "unavailable" }, 503);
-      const endpoint = new URL(node.endpoint);
-      if (!["http:", "https:"].includes(endpoint.protocol) || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) return c.json({ error: "unavailable" }, 503);
-      endpoint.pathname = `/internal/execution/${c.req.param("primitive")}`;
-      const response = await fetch(endpoint, {
-        method: "POST", redirect: "error", signal: AbortSignal.timeout(120_000),
-        headers: { "content-type": "application/json", authorization: `Bearer ${deps.execution.token}`, ...(tenantId ? { "x-station-execution-tenant": tenantId } : {}) },
-        body: JSON.stringify(body),
-      });
-      if (!response.ok) {
-        await response.body?.cancel();
-        // Never forward arbitrary upstream error text or authentication headers.
-        const status = [400, 404, 409, 413, 429].includes(response.status) ? response.status as 400 | 404 | 409 | 413 | 429 : 503;
-        return c.json({ error: "execution_failed", message: "Worker could not complete the operation." }, status);
+  if (!node.endpoint) return c.json({ error: "unavailable" }, 503);
+  const endpoint = new URL(node.endpoint);
+  if (!["http:", "https:"].includes(endpoint.protocol) || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) return c.json({ error: "unavailable" }, 503);
+  endpoint.pathname = `/internal/execution/${c.req.param("primitive")}`;
+  const unknownFailure = () => c.json({ error: "execution_failed", message: "Worker outcome is unknown. Inspect resource state before repeating a mutation.", outcome: "unknown" }, 503);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120_000);
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST", redirect: "error", signal: controller.signal,
+      headers: { "content-type": "application/json", authorization: `Bearer ${deps.execution.token}`, ...(tenantId ? { "x-station-execution-tenant": tenantId } : {}) },
+      body: JSON.stringify(body),
+    });
+    // Error envelopes are small and never forwarded verbatim. Successful frame
+    // payloads retain the larger browser transport allowance.
+    const maxBytes = response.ok ? 33 * 1024 * 1024 : 16 * 1024;
+    const declared = response.headers.get("content-length");
+    if (declared && /^\d+$/.test(declared) && Number(declared) > maxBytes) return unknownFailure();
+    const reader = response.body?.getReader();
+    if (!reader) return unknownFailure();
+    const chunks: Uint8Array[] = [];
+    let length = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        length += value.byteLength;
+        if (length > maxBytes) return unknownFailure();
+        chunks.push(value);
       }
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error("Empty response");
-      const chunks: Uint8Array[] = [];
-      let length = 0;
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          length += value.byteLength;
-          if (length > 33 * 1024 * 1024) throw new Error("Response limit exceeded");
-          chunks.push(value);
-        }
-      } finally { await reader.cancel(); }
-      const result = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-      if (!result || !Object.hasOwn(result, "data")) throw new Error("Invalid response");
-      return c.json({ data: result.data });
+    } finally { reader.releaseLock(); }
+    const result = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    if (!response.ok) {
+      const remoteStatuses = { ...statuses, payload_too_large: 413 } as const;
+      const remoteMessages = { ...messages, payload_too_large: "Execution request exceeds the input limit." } as const;
+      if (result && typeof result === "object" && result.outcome === undefined && typeof result.error === "string" && Object.hasOwn(remoteStatuses, result.error)) {
+        const code = result.error as keyof typeof remoteStatuses;
+        if (response.status === remoteStatuses[code]) return c.json({ error: code, message: remoteMessages[code], ...(response.status >= 500 ? { outcome: "unknown" } : {}) }, remoteStatuses[code]);
+      }
+      return unknownFailure();
+    }
+    if (!result || typeof result !== "object" || Array.isArray(result) || !Object.hasOwn(result, "data") || Object.hasOwn(result, "error")) return unknownFailure();
+    return c.json({ data: result.data });
+  } catch { return unknownFailure(); }
+  finally { clearTimeout(timeout); controller.abort(); }
 }

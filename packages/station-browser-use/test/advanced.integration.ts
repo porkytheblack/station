@@ -29,6 +29,7 @@ test("Playwright profiles, pages, structured actions, safe file artifacts and du
   const first = new BrowserSessionManager(firstAdapter, 4, { recordingRootDir: recordings, intervalMs: 100 });
   let second: BrowserSessionManager | undefined;
   let limited: BrowserSessionManager | undefined;
+  let exact: BrowserSessionManager | undefined;
   try {
     const session = await first.open({ profileId: "persistent", viewport: { width: 640, height: 480 } });
     await first.perform(session.id, "navigate", `${base}/first`);
@@ -82,11 +83,15 @@ test("Playwright profiles, pages, structured actions, safe file artifacts and du
     assert.equal((await second.listProfiles())[0].inUse, false);
     await second.deleteProfile("persistent"); assert.deepEqual(await second.listProfiles(), []);
     await second.deleteRecording(recording.id); assert.deepEqual(second.listRecordings(), []);
+    exact = new BrowserSessionManager(new PlaywrightBrowserAdapter({ executablePath, maxArtifactBytes: Buffer.byteLength("downloaded file content") }));
+    const fit = await exact.open(); await exact.perform(fit.id, "navigate", `${base}/first`);
+    const fits = await exact.execute(fit.id, { op: "download", selector: "#download" }) as BrowserArtifact;
+    assert.equal(fits.bytes, Buffer.byteLength("downloaded file content"));
     limited = new BrowserSessionManager(new PlaywrightBrowserAdapter({ executablePath, maxArtifactBytes: 8 }));
     const short = await limited.open(); await limited.perform(short.id, "navigate", `${base}/first`);
     await assert.rejects(limited.execute(short.id, { op: "download", selector: "#download" }));
   } finally {
-    await Promise.allSettled([first.close(), second?.close(), limited?.close()]);
+    await Promise.allSettled([first.close(), second?.close(), limited?.close(), exact?.close()]);
     await new Promise<void>((resolve) => server.close(() => resolve()));
     rmSync(root, { recursive: true, force: true });
   }

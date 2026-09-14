@@ -17,6 +17,7 @@ export function validateExecutionTenancy(config: Pick<StationConfig, "execution"
     if (typeof e.tenantId !== "string" || !tenantPattern.test(e.tenantId) || config.role !== "station" || e.tenants) throw new Error("execution.tenantId requires a dedicated station worker and a valid tenant ID.");
     if (!e.sandbox && !e.browser) throw new Error("Tenant workers require an execution backend.");
     if (e.sandbox && (!safeBackend(e.sandbox.capabilities) || typeof e.sandbox.bindTenant !== "function")) throw new Error("Tenant sandbox workers require isolated and networkRestricted capabilities plus persistent tenant binding.");
+    if (e.browser && (e.browser.statePersistence !== "disk" || e.browser.recordingPersistence !== "disk")) throw new Error("Tenant browser workers require durable stateRootDir and recordingRootDir storage.");
     if (e.browser && (!safeBackend(e.browser.adapter.capabilities) || typeof e.browser.adapter.bindTenant !== "function")) throw new Error("Tenant browser workers require isolated and networkRestricted capabilities plus persistent tenant binding.");
   }
   if (e.tenants !== undefined) {

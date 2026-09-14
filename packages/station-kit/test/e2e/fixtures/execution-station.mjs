@@ -19,7 +19,7 @@ if (options.primitive === 'sandbox') execution.sandbox = new HostSandboxAdapter(
   rootDir: join(options.cwd, 'workspaces'), maxConcurrent: 2, maxTimeoutMs: 60_000, enablePty: true,
 });
 if (options.primitive === 'bun' || options.primitive === 'playwright') {
-  execution.browser = new BrowserSessionManager(options.primitive === 'bun' ? new BunBrowserAdapter() : new PlaywrightBrowserAdapter({ profileRootDir: join(options.cwd, 'profiles') }), 2, { recordingRootDir: join(options.cwd, 'recordings') });
+  execution.browser = new BrowserSessionManager(options.primitive === 'bun' ? new BunBrowserAdapter() : new PlaywrightBrowserAdapter({ profileRootDir: join(options.cwd, 'profiles') }), 2, { recordingRootDir: join(options.cwd, 'recordings'), stateRootDir: join(options.cwd, 'browser-state') });
 }
 const station = await createStation(resolveConfig({
   name: options.id, role: options.id === 'hq' ? 'headquarters' : 'station',

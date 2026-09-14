@@ -75,6 +75,7 @@ execution: {
     network: 'none', memoryMb: 1024, cpus: 1, pidsLimit: 256,
   }), 3, {
     recordingRootDir: '/data/customer-a/recordings', tenantId: 'customer-a',
+    stateRootDir: '/data/customer-a/browser-state',
     recordingTtlMs: 7 * 24 * 60 * 60 * 1000,
     idleTimeoutMs: 15 * 60 * 1000,
   }),
@@ -87,7 +88,9 @@ Each browser session runs in its own nonroot container with a read-only root, bo
 
 `network: 'none'` means no public internet, private LAN or metadata access; browser tests use a loopback fixture inside their own container. Offline tool tarballs and bundled applications still work. An ordinary bridge is not tenant-safe and cannot be declared restricted.
 
-To allow external traffic, provision a separately named engine network whose gateway enforces your egress policy. Block loopback outside the sandbox, private/service networks, link-local/cloud metadata, IPv6 equivalents and tenant-to-tenant routes. Enforce policy below workload-controlled DNS and processes so redirects, DNS rebinding and raw sockets cannot bypass it. Permit only required destinations/ports and deny unknown routes. Then configure that named network with `networkRestricted: true`. This is an explicit operator assertion of **external enforcement**; Station does not create a firewall or verify arbitrary network appliances. Validate the policy from inside both browser and shell containers before admitting customers.
+For browser internet access, the included [enforced Linux deployment](./enforced/README.md) provisions a dedicated internal Docker bridge, HTTPS proxy, effective iptables deny rules and XFS project quota covering profiles, recordings, durable state and controller metadata. Its real kernel harness checks positive HTTPS, direct/peer/metadata/DNS bypass denial and disk exhaustion. It requires a rootful local Linux Docker/XFS host; it is not a managed Railway service configuration. Run its verifier before starting workers and after host networking changes.
+
+Other deployments can provision a separately named engine network with equivalent enforcement. `networkRestricted: true` remains an explicit operator assertion; the adapter does not attest arbitrary firewalls continuously. Keep unvalidated networks disabled. The included HTTPS profile is browser-specific; Sandbox networking and named-volume disk limits require separate enforcement.
 
 CPU/memory/PID constraints are passed to and checked against the engine. Hard disk quotas require filesystem/storage-driver enforcement on workspace/profile named volumes and recording disks. Limits on output, uploaded bytes or recording frames cannot stop arbitrary code from filling a volume. Set those quotas, reserve capacity for the controller and retain emergency headroom. Containers share the host kernel: patch it and the runtime, monitor advisories, and choose stronger VM isolation if your threat model requires a separate kernel.
 

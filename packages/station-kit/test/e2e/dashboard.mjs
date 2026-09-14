@@ -8,6 +8,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { randomBytes } from 'node:crypto';
+import { browserGapFlow } from './browser-gap-flow.mjs';
 
 const { chromium } = createRequire(import.meta.resolve('station-browser-use'))('playwright');
 const here = fileURLToPath(new URL('.', import.meta.url));
@@ -63,6 +64,22 @@ async function stop(handle, ipc = false) {
 async function selectOption(page, label, value) {
   await until(async () => (await page.getByRole('combobox', { name: label, exact: true }).locator('option').evaluateAll((options) => options.map((option) => option.value))).includes(value), `option ${label}: ${value}`);
   await page.getByRole('combobox', { name: label, exact: true }).selectOption(value);
+  if (label === 'Sandbox station' || label === 'Browser station') {
+    const section = label === 'Sandbox station' ? 'sandboxes' : 'browser-use';
+    await page.waitForURL(`**/${section}/${encodeURIComponent(value)}`);
+  }
+}
+async function resourceId(page, kind) {
+  const attribute = kind === 'workspace' ? 'data-workspace-id' : 'data-browser-session-id';
+  const detail = page.locator(`[${attribute}]`);
+  await detail.waitFor();
+  const id = await detail.getAttribute(attribute);
+  assert.ok(new URL(page.url()).pathname.includes(`/${id}/`), 'resource identity is addressable in the URL');
+  return id;
+}
+async function toolPage(page, label) {
+  await page.getByRole('navigation', { name: /Workspace tools|Browser session tools|Browser collections/ }).getByRole('link', { name: label, exact: true }).click();
+  await until(async () => (await page.getByRole('navigation', { name: /Workspace tools|Browser session tools|Browser collections/ }).getByRole('link', { name: label, exact: true }).getAttribute('aria-current')) === 'page', `${label} route active`);
 }
 async function command(page, value, expected) {
   await page.getByRole('textbox', { name: 'Command', exact: true }).fill(value);
@@ -70,6 +87,7 @@ async function command(page, value, expected) {
   await until(async () => expected.test(await page.getByLabel('Command output', { exact: true }).innerText()), `command output ${expected}`, 60_000);
 }
 async function browserAction(page, action, value = '', expected) {
+  if (!new URL(page.url()).pathname.endsWith('/control')) await toolPage(page, 'Control');
   await page.getByRole('combobox', { name: 'Browser action', exact: true }).selectOption(action);
   if (action !== 'screenshot') await page.getByRole('textbox', { name: 'Action value', exact: true }).fill(value);
   const response = page.waitForResponse((response) => response.url().endsWith('/execution/browser') && response.request().method() === 'POST' && response.request().postDataJSON()?.method === 'action');
@@ -178,17 +196,21 @@ test('real dashboard controls private sandbox and Bun/Playwright workers; custom
   assert.equal(discovery.status(), 200);
   await selectOption(page, 'Sandbox station', 'sandbox-worker');
   await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
-  await until(async () => !!(await page.getByRole('combobox', { name: 'Workspace', exact: true }).inputValue()), 'created workspace');
-  const workspace = await page.getByRole('combobox', { name: 'Workspace', exact: true }).inputValue();
+  const workspace = await resourceId(page, 'workspace');
+  assert.equal(await page.getByRole('button', { name: 'Create workspace', exact: true }).count(), 0, 'detail does not repeat collection controls');
   await command(page, `npm install --global --offline --ignore-scripts --no-audit --no-fund ${shellQuote(tarball)} && printf '\\nINSTALL_FINISHED\\n'`, /INSTALL_FINISHED/);
   await command(page, 'station-e2e-tool fresh-command', /STATION_CUSTOM_TOOL_OK:fresh-command/);
   await page.screenshot({ path: join(artifacts, 'sandbox-installed-tool.png'), fullPage: true, animations: 'disabled' });
   record('UI login, workspace creation, offline npm install and fresh-command CLI invocation passed');
 
+  await page.getByRole('link', { name: '← All workspaces', exact: true }).click();
+  await page.getByRole('link', { name: `Open workspace ${workspace}`, exact: true }).waitFor();
+  assert.equal(await page.getByRole('textbox', { name: 'Command', exact: true }).count(), 0, 'collection does not mount command controls');
+  await page.screenshot({ path: join(artifacts, 'sandbox-workspace-list.png'), fullPage: true, animations: 'disabled' });
   await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
-  await until(async () => { const value = await page.getByRole('combobox', { name: 'Workspace', exact: true }).inputValue(); return value && value !== workspace; }, 'second isolated home');
+  assert.notEqual(await resourceId(page, 'workspace'), workspace);
   await command(page, 'if command -v station-e2e-tool; then printf TOOL_LEAKED; else printf TOOL_NOT_INSTALLED_HERE; fi', /TOOL_NOT_INSTALLED_HERE/);
-  const secondWorkspace = await page.getByRole('combobox', { name: 'Workspace', exact: true }).inputValue();
+  const secondWorkspace = await resourceId(page, 'workspace');
   await page.getByRole('button', { name: 'Delete workspace', exact: true }).click();
   await until(async () => !existsSync(join(sandboxOptions.cwd, 'workspaces', secondWorkspace)), 'second workspace files removed');
   await stop(services.get('sandbox-worker'), true);
@@ -197,7 +219,7 @@ test('real dashboard controls private sandbox and Bun/Playwright workers; custom
   await page.reload();
   await page.getByRole('heading', { name: 'Sandboxes', exact: true }).waitFor();
   await selectOption(page, 'Sandbox station', 'sandbox-worker');
-  await selectOption(page, 'Workspace', workspace);
+  await page.getByRole('link', { name: `Open workspace ${workspace}`, exact: true }).click();
   await command(page, 'station-e2e-tool after-restart', /STATION_CUSTOM_TOOL_OK:after-restart/);
   await page.screenshot({ path: join(artifacts, 'sandbox-after-worker-restart.png'), fullPage: true, animations: 'disabled' });
   record('Custom install stayed out of a second workspace and survived owner process restart');
@@ -221,7 +243,7 @@ test('real dashboard controls private sandbox and Bun/Playwright workers; custom
     assert.equal(response.status(), 200, await response.text());
     return (await response.json()).data;
   };
-  await page.getByRole('button', { name: 'Terminal', exact: true }).click();
+  await toolPage(page, 'Terminal');
   await page.getByRole('button', { name: 'Open terminal', exact: true }).click();
   await until(async () => !!(await page.getByRole('combobox', { name: 'Terminal session', exact: true }).inputValue()), 'interactive terminal created');
   const terminalId = await page.getByRole('combobox', { name: 'Terminal session', exact: true }).inputValue();
@@ -236,6 +258,7 @@ test('real dashboard controls private sandbox and Bun/Playwright workers; custom
   assert.equal(await page.getByRole('combobox', { name: 'Terminal session', exact: true }).inputValue(), terminalId);
   await page.screenshot({ path: join(artifacts, 'sandbox-interactive-terminal.png'), fullPage: true, animations: 'disabled' });
   await page.setViewportSize({ width: 390, height: 844 });
+  await until(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'nested page fits phone width');
   await until(async () => (await sandboxRpc({ method: 'terminal', terminalId, offset: 0 })).cols < 90, 'terminal resize reaches real PTY');
   await page.screenshot({ path: join(artifacts, 'sandbox-terminal-mobile.png'), fullPage: true, animations: 'disabled' });
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -243,9 +266,18 @@ test('real dashboard controls private sandbox and Bun/Playwright workers; custom
   await until(async () => (await sandboxRpc({ method: 'terminal', terminalId, offset: 0 })).status === 'exited', 'terminal close');
   record('Real xterm input, installed CLI, reconnect to same terminal, responsive resize and close passed');
 
-  await page.getByRole('button', { name: 'Commands', exact: true }).click();
+  await toolPage(page, 'Commands');
   await command(page, `node -e ${shellQuote("require('node:fs').writeFileSync('chunks.txt','x'.repeat(1048576+17));console.log('CHUNK_FILE_READY')")}`, /CHUNK_FILE_READY/);
-  await page.getByRole('button', { name: 'Files', exact: true }).click();
+  await toolPage(page, 'Files');
+  const filesUrl = page.url();
+  assert.equal(await page.getByRole('textbox', { name: 'Command', exact: true }).count(), 0);
+  await page.goBack();
+  await page.getByRole('textbox', { name: 'Command', exact: true }).waitFor();
+  await page.goForward();
+  assert.equal(page.url(), filesUrl);
+  await page.reload();
+  await page.getByRole('textbox', { name: 'Workspace file path', exact: true }).waitFor();
+  assert.equal(page.url(), filesUrl, 'files deep link survives refresh and browser history');
   await page.getByRole('button', { name: 'chunks.txt', exact: true }).click();
   await until(async () => (await page.getByRole('textbox', { name: 'Workspace file content', exact: true }).inputValue()).length === 1048576 + 17, 'file preview reads multiple worker-size chunks');
   await page.getByRole('textbox', { name: 'Workspace file path', exact: true }).fill('empty.txt');
@@ -270,6 +302,48 @@ test('real dashboard controls private sandbox and Bun/Playwright workers; custom
   await page.getByRole('link', { name: 'Download file', exact: true }).click();
   await (await fileDownload).saveAs(join(artifacts, 'workspace-uploaded.txt'));
   assert.deepEqual(readFileSync(join(artifacts, 'workspace-uploaded.txt')), uploadedBytes);
+  await sandboxRpc({ method: 'writeFile', path: 'src/example.ts', options: { base64: Buffer.from('export const station = true;\n').toString('base64'), createParents: true } });
+  await sandboxRpc({ method: 'writeFile', path: '.hidden-note', options: { base64: Buffer.from('hidden').toString('base64') } });
+  await sandboxRpc({ method: 'writeFile', path: 'binary.dat', options: { base64: Buffer.from([0, 255, 1, 2]).toString('base64') } });
+  await page.getByRole('button', { name: 'Refresh files', exact: true }).click();
+  await page.getByRole('button', { name: 'src/', exact: true }).waitFor();
+  await page.getByRole('searchbox', { name: 'Filter files', exact: true }).fill('no-such-file');
+  await page.getByText('No files match this filter.', { exact: true }).waitFor();
+  await page.getByRole('searchbox', { name: 'Filter files', exact: true }).fill('');
+  await page.getByRole('checkbox', { name: 'Hidden files', exact: true }).uncheck();
+  assert.equal(await page.getByRole('button', { name: '.hidden-note', exact: true }).count(), 0);
+  await page.getByRole('checkbox', { name: 'Hidden files', exact: true }).check();
+  await page.getByRole('button', { name: '.hidden-note', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'src/', exact: true }).click();
+  await page.getByRole('button', { name: 'example.ts', exact: true }).click();
+  await until(async () => (await page.getByRole('textbox', { name: 'Workspace file content', exact: true }).inputValue()).includes('export const'), 'nested text file opens');
+  await page.getByRole('textbox', { name: 'Workspace file content', exact: true }).fill('unsaved edits');
+  await page.getByText('Unsaved changes', { exact: true }).waitFor();
+  // Reject the discard prompt once: switching files must preserve the buffer.
+  page.removeAllListeners('dialog');
+  page.once('dialog', dialog => void dialog.dismiss());
+  await page.getByRole('button', { name: 'New file', exact: true }).click();
+  assert.equal(await page.getByRole('textbox', { name: 'Workspace file content', exact: true }).inputValue(), 'unsaved edits');
+  page.on('dialog', dialog => void dialog.accept());
+  await page.getByRole('button', { name: 'Discard changes', exact: true }).click();
+  await until(async () => (await page.getByRole('textbox', { name: 'Workspace file content', exact: true }).inputValue()).includes('export const'), 'discard restores saved text');
+  await page.screenshot({ path: join(artifacts, 'sandbox-explorer-nested.png'), fullPage: true, animations: 'disabled' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await until(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'file explorer fits phone width');
+  await page.screenshot({ path: join(artifacts, 'sandbox-explorer-mobile.png'), fullPage: true, animations: 'disabled' });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole('navigation', { name: 'Directory breadcrumbs', exact: true }).getByRole('button', { name: 'Workspace', exact: true }).click();
+  await page.getByRole('button', { name: 'binary.dat', exact: true }).click();
+  await page.getByRole('heading', { name: 'Binary file', exact: true }).waitFor();
+  assert.equal(await page.getByRole('textbox', { name: 'Workspace file content', exact: true }).count(), 0, 'binary bytes never enter the editor');
+  assert.equal(await page.getByRole('button', { name: 'Save text file', exact: true }).count(), 0);
+  const binaryDownload = page.waitForEvent('download');
+  await page.getByRole('link', { name: 'Download file', exact: true }).click();
+  await (await binaryDownload).saveAs(join(artifacts, 'binary.dat'));
+  assert.deepEqual(readFileSync(join(artifacts, 'binary.dat')), Buffer.from([0, 255, 1, 2]));
+  await page.getByRole('navigation', { name: 'Directory breadcrumbs', exact: true }).getByRole('button', { name: 'Workspace', exact: true }).click();
+  await page.getByRole('button', { name: 'binary.dat', exact: true }).waitFor();
+  record('File explorer supports nested folders, breadcrumbs, filters, hidden files, unsaved-change protection and binary downloads on desktop/mobile');
   record('Workspace file save, read, upload and download preserve bytes through Headquarters');
 
   const serviceControl = async (label, method) => {
@@ -278,7 +352,7 @@ test('real dashboard controls private sandbox and Bun/Playwright workers; custom
     const response = await pending;
     assert.equal(response.status(), 200, `${method}: ${await response.text()}\n${services.get('sandbox-worker').output()}`);
   };
-  await page.getByRole('button', { name: 'Services', exact: true }).click();
+  await toolPage(page, 'Services');
   const httpPort = await port();
   const serviceScript = `require('node:http').createServer((req,res)=>res.end('STATION_SERVICE_HTTP_OK')).listen(${httpPort},'127.0.0.1',()=>console.log('SERVICE_LISTENING'))`;
   await page.getByRole('textbox', { name: 'Service name', exact: true }).fill('dashboard-http');
@@ -293,6 +367,7 @@ test('real dashboard controls private sandbox and Bun/Playwright workers; custom
   await until(httpResponds, 'service restart serves HTTP');
   await page.screenshot({ path: join(artifacts, 'sandbox-services.png'), fullPage: true, animations: 'disabled' });
   await page.setViewportSize({ width: 390, height: 844 });
+  await until(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'nested page fits phone width');
   await page.screenshot({ path: join(artifacts, 'sandbox-services-mobile.png'), fullPage: true, animations: 'disabled' });
   await page.setViewportSize({ width: 1440, height: 1000 });
   const serviceId = await page.getByRole('combobox', { name: 'Workspace service', exact: true }).inputValue();
@@ -300,10 +375,10 @@ test('real dashboard controls private sandbox and Bun/Playwright workers; custom
   services.delete('sandbox-worker');
   await until(async () => !(await httpResponds()), 'owner shutdown stops service process');
   await startWorker('sandbox-worker', 'sandbox', { port: sandboxOptions.port });
+  const serviceUrl = page.url();
   await page.reload();
-  await selectOption(page, 'Sandbox station', 'sandbox-worker');
-  await selectOption(page, 'Workspace', workspace);
-  await page.getByRole('button', { name: 'Services', exact: true }).click();
+  await resourceId(page, 'workspace');
+  assert.equal(page.url(), serviceUrl, 'refresh retains the workspace and Services subpage');
   await selectOption(page, 'Workspace service', serviceId);
   await until(async () => (await page.getByLabel('Service status', { exact: true }).innerText()).includes('interrupted'), 'persisted service recovers interrupted without replay');
   assert.equal(await httpResponds(), false, 'interrupted service does not restart implicitly');
@@ -318,15 +393,20 @@ test('real dashboard controls private sandbox and Bun/Playwright workers; custom
   await page.getByRole('button', { name: 'Delete workspace', exact: true }).click();
   await page.getByText('No workspaces on this station. Create one to run a command.', { exact: true }).waitFor();
   assert.equal(existsSync(join(sandboxOptions.cwd, 'workspaces', workspace)), false);
-  record('Deleting the original workspace removes its installed tool and workspace files');
+  await page.goto(`${base}/sandboxes/sandbox-worker/${workspace}/files`);
+  await page.getByText('This workspace could not be found on its owner. Return to the workspace list to refresh.', { exact: true }).waitFor();
+  assert.equal(await page.getByRole('textbox', { name: 'Workspace file path', exact: true }).count(), 0, 'deleted deep link cannot operate on another workspace');
+  record('Deleting the original workspace removes its files; stale deep links do not select another workspace');
 
   await page.goto(`${base}/browser-use`);
   await page.getByRole('heading', { name: 'Browser Use', exact: true }).waitFor();
   for (const owner of ['bun-worker', 'playwright-worker']) {
+    await page.goto(`${base}/browser-use`);
     await selectOption(page, 'Browser station', owner);
     if (owner === 'playwright-worker') await page.getByRole('textbox', { name: 'Browser profile', exact: true }).fill('dashboard-profile');
     await page.getByRole('button', { name: 'Open browser', exact: true }).click();
-    await until(async () => !!(await page.getByRole('combobox', { name: 'Browser session', exact: true }).inputValue()), `${owner} browser session`);
+    await resourceId(page, 'browser');
+    assert.equal(await page.getByRole('button', { name: 'Start recording', exact: true }).count(), 0, 'control page does not mount recordings');
     await browserAction(page, 'navigate', fixtureUrl);
     await browserAction(page, 'click', '#entry');
     await browserAction(page, 'type', `input-${owner}x`);
@@ -345,14 +425,20 @@ test('real dashboard controls private sandbox and Bun/Playwright workers; custom
     await download.saveAs(downloadedPng);
     assert.deepEqual([...readFileSync(downloadedPng).subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10], 'download contains real PNG bytes');
     await page.screenshot({ path: join(artifacts, `${owner}-screenshot.png`), fullPage: true, animations: 'disabled' });
-    const sessionId = await page.getByRole('combobox', { name: 'Browser session', exact: true }).inputValue();
+    const sessionId = await resourceId(page, 'browser');
+    const controlUrl = page.url();
+    await page.reload();
+    assert.equal(await resourceId(page, 'browser'), sessionId);
+    assert.equal(page.url(), controlUrl, 'browser refresh preserves owner and session');
     const browserRpc = async (body) => {
       const response = await context.request.post(`${base}/api/v1/stations/${owner}/execution/browser`, { data: body });
       assert.equal(response.status(), 200, await response.text());
       return (await response.json()).data;
     };
     if (owner === 'playwright-worker') {
+      await browserGapFlow({ page, base, owner, sessionId, fixtureUrl, rpc: browserRpc, artifacts, record });
       const pageOperation = async (op, selector, value) => {
+        if (!new URL(page.url()).pathname.endsWith('/tools')) await toolPage(page, 'Tools');
         await page.getByRole('combobox', { name: 'Page operation', exact: true }).selectOption(op);
         if (selector !== undefined) await page.getByRole('textbox', { name: 'Element selector', exact: true }).fill(selector);
         if (value !== undefined) await page.getByRole('textbox', { name: 'Page operation value', exact: true }).fill(value);
@@ -367,6 +453,7 @@ test('real dashboard controls private sandbox and Bun/Playwright workers; custom
       await browserAction(page, 'evaluate', "[document.querySelector('#entry').value,document.querySelector('#choice').value,document.querySelector('#checked').checked]", /ADVANCED_FILL_OK/);
       const fields = await browserRpc({ method: 'action', id: sessionId, action: 'evaluate', value: "[document.querySelector('#entry').value,document.querySelector('#choice').value,document.querySelector('#checked').checked]" });
       assert.deepEqual(fields, ['ADVANCED_FILL_OK', 'two', true]);
+      await toolPage(page, 'Tools');
       await page.getByRole('textbox', { name: 'Element selector', exact: true }).fill('#upload');
       const uploadResponse = page.waitForResponse(response => response.url().endsWith('/execution/browser') && response.request().postDataJSON()?.command?.op === 'upload');
       await page.getByLabel('Browser upload file', { exact: true }).setInputFiles({ name: 'browser-upload.txt', mimeType: 'text/plain', buffer: Buffer.from('BROWSER_UPLOAD_OK') });
@@ -386,8 +473,10 @@ test('real dashboard controls private sandbox and Bun/Playwright workers; custom
         await locator.click();
         const response = await pending;
         assert.equal(response.status(), 200, await response.text());
-        await until(() => page.getByRole('button', { name: 'Run page operation', exact: true }).isEnabled(), `${op} UI refresh completed`);
+        await until(() => page.getByRole('button', { name: 'Refresh pages', exact: true }).isEnabled(), `${op} UI refresh completed`);
       };
+      await toolPage(page, 'Pages');
+      assert.equal(await page.getByRole('combobox', { name: 'Page operation', exact: true }).count(), 0, 'pages and tools are separate');
       await page.getByRole('textbox', { name: 'New page URL', exact: true }).fill(`${fixtureUrl}/second`);
       await pageControl(page.getByRole('button', { name: 'New page', exact: true }), 'newPage');
       await until(async () => (await browserRpc({ method: 'execute', id: sessionId, command: { op: 'pages' } })).length === 2, 'second browser page');
@@ -398,12 +487,14 @@ test('real dashboard controls private sandbox and Bun/Playwright workers; custom
       await browserAction(page, 'evaluate', "localStorage.setItem('station-profile-test','PERSISTED_PROFILE_OK')");
       await page.screenshot({ path: join(artifacts, 'browser-advanced-tools.png'), fullPage: true, animations: 'disabled' });
       await page.setViewportSize({ width: 390, height: 844 });
+  await until(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'nested page fits phone width');
       await page.screenshot({ path: join(artifacts, 'browser-advanced-mobile.png'), fullPage: true, animations: 'disabled' });
       await page.setViewportSize({ width: 1440, height: 1000 });
       record('Playwright profile, form fill/select/check, file upload/download, page creation/selection/close passed');
     } else {
       assert.equal(await page.getByRole('region', { name: 'Advanced browser controls', exact: true }).count(), 0, 'Bun does not advertise unsupported advanced browser controls');
     }
+    await toolPage(page, 'Recordings');
     await page.getByRole('button', { name: 'Start recording', exact: true }).click();
     let trace;
     await until(async () => {
@@ -421,18 +512,19 @@ test('real dashboard controls private sandbox and Bun/Playwright workers; custom
     const laterFrame = await browserRpc({ method: 'recordingFrame', id: trace.id, frameId: trace.frames[1].id });
     assert.notEqual(initialFrame.base64, laterFrame.base64, 'recording captures changed page content');
     assert.ok(Date.parse(trace.frames[1].capturedAt) - Date.parse(trace.frames[0].capturedAt) >= 4000, 'default cadence is approximately five seconds');
-    await page.goto(`${base}/browser-use`);
-    await selectOption(page, 'Browser station', owner);
+    await page.goto(`${base}/browser-use/${owner}/sessions/${sessionId}/recordings`);
     await selectOption(page, 'Recording selector', trace.id);
     await page.getByRole('button', { name: 'Stop recording', exact: true }).click();
     await until(async () => (await browserRpc({ method: 'recording', id: trace.id })).status === 'stopped', `${owner} stops recording`);
     // A second recording is left active: closing the session must stop it too.
+    await toolPage(page, 'Recordings');
     await page.getByRole('button', { name: 'Start recording', exact: true }).click();
     let activeTrace;
     await until(async () => {
       activeTrace = (await browserRpc({ method: 'recordings' })).find((entry) => entry.status === 'recording');
       return activeTrace?.frames.length >= 1;
     }, `${owner} second recording`);
+    await toolPage(page, 'Control');
     await page.getByRole('combobox', { name: 'Browser action', exact: true }).selectOption('evaluate');
     await page.getByRole('textbox', { name: 'Action value', exact: true }).fill('new Promise(() => {})');
     const pendingAction = page.waitForResponse((response) => response.url().endsWith('/execution/browser') && response.request().method() === 'POST' && response.request().postDataJSON()?.method === 'action');
@@ -442,6 +534,8 @@ test('real dashboard controls private sandbox and Bun/Playwright workers; custom
     assert.equal((await pendingAction).status(), 503, 'closing cancels the pending browser operation');
     await page.getByText('No live browser sessions on this station. Open a browser to begin.', { exact: true }).waitFor();
     assert.equal((await browserRpc({ method: 'recording', id: activeTrace.id })).status, 'stopped', 'browser close stops automatic recording');
+    await toolPage(page, 'Recordings');
+    assert.equal(await page.getByRole('button', { name: 'Start recording', exact: true }).count(), 0, 'collection only offers playback; capture belongs to a session');
     await selectOption(page, 'Recording selector', trace.id);
     const recordedImage = page.getByRole('img', { name: 'Recorded browser frame', exact: true });
     await until(() => recordedImage.evaluate((element) => element.complete && element.naturalWidth > 0), `${owner} recording frame displayed after close`);
@@ -457,23 +551,27 @@ test('real dashboard controls private sandbox and Bun/Playwright workers; custom
     await stop(services.get(owner), true);
     services.delete(owner);
     await startWorker(owner, browserWorkers.get(owner).primitive, { port: browserWorkers.get(owner).port });
+    const recordingUrl = page.url();
     await page.reload();
-    await selectOption(page, 'Browser station', owner);
+    assert.equal(page.url(), recordingUrl, 'recording collection deep link survives refresh');
     await selectOption(page, 'Recording selector', trace.id);
     await until(async () => (await page.getByRole('img', { name: 'Recorded browser frame', exact: true }).getAttribute('src')) === `data:image/png;base64,${initialFrame.base64}`, `${owner} durable recording UI after worker restart`);
     assert.equal((await browserRpc({ method: 'recordingFrame', id: trace.id, frameId: trace.frames[0].id })).base64, initialFrame.base64);
     await page.screenshot({ path: join(artifacts, `${owner}-durable-recording.png`), fullPage: true, animations: 'disabled' });
     if (owner === 'playwright-worker') {
+      await toolPage(page, 'Profiles');
       await selectOption(page, 'Saved browser profile', 'dashboard-profile');
-      await page.getByRole('button', { name: 'Open browser', exact: true }).click();
-      await until(async () => !!(await page.getByRole('combobox', { name: 'Browser session', exact: true }).inputValue()), 'reopened persistent browser profile');
+      await page.getByRole('button', { name: 'Open browser with profile', exact: true }).click();
+      await resourceId(page, 'browser');
       await browserAction(page, 'navigate', fixtureUrl);
       await browserAction(page, 'evaluate', "localStorage.getItem('station-profile-test')", /PERSISTED_PROFILE_OK/);
       await page.getByRole('button', { name: 'Close browser', exact: true }).click();
       await page.getByText('No live browser sessions on this station. Open a browser to begin.', { exact: true }).waitFor();
+      await toolPage(page, 'Profiles');
       await selectOption(page, 'Saved browser profile', 'dashboard-profile');
       await page.getByRole('button', { name: 'Delete profile', exact: true }).click();
       await until(async () => (await browserRpc({ method: 'profiles' })).length === 0, 'persistent browser profile deletion');
+      await toolPage(page, 'Recordings');
       await selectOption(page, 'Recording selector', trace.id);
       record('Playwright localStorage profile survives browser close and worker restart, then deletes through UI');
     }

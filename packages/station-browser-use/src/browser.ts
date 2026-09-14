@@ -13,7 +13,7 @@ export interface BrowserSession {
 
 export interface BrowserAdapter {
   readonly name: string;
-  readonly capabilities: { screenshots: true; independentSessions: true; profiles?: boolean; pages?: boolean; commands?: boolean; uploads?: boolean; downloads?: boolean; isolated?: boolean; networkRestricted?: boolean };
+  readonly capabilities: { screenshots: true; independentSessions: true; profiles?: boolean; pages?: boolean; commands?: boolean; uploads?: boolean; downloads?: boolean; isolated?: boolean; pointer?: boolean; inspection?: boolean; locators?: boolean; dialogs?: boolean; diagnostics?: boolean; tracing?: boolean; networkRestricted?: boolean };
   open(options?: BrowserOpenOptions): Promise<BrowserSession>;
   ready?(): Promise<void>;
   bindTenant?(tenantId?: string): Promise<void>;

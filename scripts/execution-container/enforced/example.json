@@ -1,0 +1,13 @@
+{
+  "tenantId": "customer-a",
+  "network": "station-customer-a",
+  "subnet": "172.30.200.0/24",
+  "storageRoot": "/srv/station-xfs/customer-a",
+  "projectId": 42001,
+  "diskMiB": 2048,
+  "inodes": 200000,
+  "uid": 1000,
+  "gid": 1000,
+  "proxyImage": "localhost/station-egress:tested",
+  "allowedHosts": ["example.com", "*.example.com"]
+}

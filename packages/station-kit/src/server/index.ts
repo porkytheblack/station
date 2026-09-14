@@ -586,7 +586,7 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
         execution: config.execution ? {
           tenantId: config.execution.tenantId,
           sandbox: config.execution.sandbox ? { backend: config.execution.sandbox.name, capabilities: { ...config.execution.sandbox.capabilities } } : undefined,
-          browser: config.execution.browser ? { backend: config.execution.browser.adapter.name, capabilities: { ...config.execution.browser.adapter.capabilities, durableRecordings: config.execution.browser.recordingPersistence === "disk" } } : undefined,
+          browser: config.execution.browser ? { backend: config.execution.browser.adapter.name, capabilities: { ...config.execution.browser.adapter.capabilities, durableRecordings: config.execution.browser.recordingPersistence === "disk", liveView: true, humanControl: true, durableAudit: config.execution.browser.statePersistence === "disk", checkpoints: config.execution.browser.statePersistence === "disk" && Boolean(config.execution.browser.adapter.capabilities.pages) } } : undefined,
         } : undefined,
       },
       endpoint: config.network.endpoint,

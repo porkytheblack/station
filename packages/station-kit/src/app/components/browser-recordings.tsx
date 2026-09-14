@@ -36,13 +36,14 @@ export function BrowserRecordings({ owner, sessionId, reachable, admit, browserB
 
   const refresh = useCallback(async () => {
     const version = ++revision.current;
-    const list = await rpc<Recording[]>({ method: "recordings" });
+    const all = await rpc<Recording[]>({ method: "recordings" });
+    const list = sessionId ? all.filter(item => item.sessionId === sessionId) : all;
     if (!alive.current || version !== revision.current || mutating.current) return;
     setRecordings(list);
     setSelected((previous) => list.some((item) => item.id === previous) ? previous : list[0]?.id ?? "");
     setLoaded(true);
     setLoadError("");
-  }, [rpc]);
+  }, [rpc, sessionId]);
   useEffect(() => {
     if (!reachable) return;
     let stopped = false;
@@ -121,12 +122,13 @@ export function BrowserRecordings({ owner, sessionId, reachable, admit, browserB
   return <section className="station-card execution-card" aria-label="Browser recordings">
     <h2 style={{ fontSize: "1rem", fontWeight: 500 }}>Recordings</h2>
     <p className="execution-note">Capture a frame every 5 seconds by default, even with this dashboard closed. {durable ? "Recordings survive browser closure and worker restart on this worker’s persistent storage, until deleted or expired." : "Recordings remain after a browser closes, until you delete them or the worker restarts."} Busy frames are skipped; storage limits stop capture.</p>
+    {!sessionId && <p className="execution-note">To start capture, open a live browser session and choose Recordings.</p>}
     <ExecutionAlert error={error || loadError} />
     <div className="execution-toolbar">
-      <button className="btn btn--primary" disabled={!admit || !sessionId || busy || browserBusy || alreadyRecording || !loaded} onClick={() => void mutate(async () => {
+      {sessionId && <button className="btn btn--primary" disabled={!admit || !sessionId || busy || browserBusy || alreadyRecording || !loaded} onClick={() => void mutate(async () => {
         const created = await rpc<Recording>({ method: "recordingStart", id: sessionId });
         replace(created); if (alive.current) setSelected(created.id);
-      })}>Start recording</button>
+      })}>Start recording</button>}
       <button className="btn" disabled={!reachable || busy} onClick={() => void refresh().catch((e) => setLoadError(executionError(e)))}>Refresh recordings</button>
       <span className="execution-note">{recordings.length} recording{recordings.length === 1 ? "" : "s"}</span>
     </div>

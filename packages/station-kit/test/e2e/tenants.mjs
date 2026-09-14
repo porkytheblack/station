@@ -40,7 +40,7 @@ test('public tenant keys control real isolated containers through Headquarters w
     const port = await freePort();
     const sandbox = new ContainerSandboxAdapter({ rootDir: join(root, tenantId, 'sandbox'), tenantId, executable, engine, image: process.env.STATION_CONTAINER_IMAGE ?? 'docker.io/library/node:22-bookworm-slim', network: 'none', maxEnvironments: 1, maxConcurrent: 1, enablePty: false });
     adapters.push(sandbox);
-    const browser = new BrowserSessionManager(new ContainerBrowserAdapter({ rootDir: join(root, tenantId, 'browser'), tenantId, executable, engine, image: browserImage, network: 'none', workerPath: '/opt/station/container-fixture.mjs' }), 1, { recordingRootDir: join(root, tenantId, 'recordings'), tenantId });
+    const browser = new BrowserSessionManager(new ContainerBrowserAdapter({ rootDir: join(root, tenantId, 'browser'), tenantId, executable, engine, image: browserImage, network: 'none', workerPath: '/opt/station/container-fixture.mjs' }), 1, { recordingRootDir: join(root, tenantId, 'recordings'), stateRootDir: join(root, tenantId, 'browser-state'), tenantId });
     managers.push(browser);
     const station = await createStation(resolveConfig({ role: 'station', name: tenantId, host: '127.0.0.1', port, open: false, runRunners: false, network: { id: 'public-test', stationId: tenantId, adapter: network, endpoint: `http://127.0.0.1:${port}` }, execution: { token, tenantId, sandbox, browser } }), join(root, tenantId));
     stations.push(station); await station.start();

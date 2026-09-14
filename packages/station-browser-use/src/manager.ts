@@ -1,3 +1,4 @@
+import { BrowserStateStore, safeCheckpointUrl, type BrowserCheckpoint, type DurableBrowserAuditEntry } from "./state-store.js";
 import { RecordingStore } from "./recording-store.js";
 import { validateBrowserCommand, validateBrowserOpenOptions, type BrowserCommand, type BrowserOpenOptions, type BrowserAuditEntry, type BrowserProfile } from "./commands.js";
 import type { BrowserRecording, BrowserRecordingOptions } from "./recording.js";
@@ -16,18 +17,26 @@ interface RecordingState {
 }
 
 export class BrowserSessionManager {
-  private readonly sessions = new Map<string, { browser: BrowserSession; busy: boolean; handle: BrowserHandle; activity: number }>();
+  private readonly sessions = new Map<string, { browser: BrowserSession; busy: boolean; handle: BrowserHandle; activity: number; options: BrowserOpenOptions; control?: { token: string; expiresAt: number } }>();
   private opening = 0;
   private closed = false;
   private readonly openings = new Set<Promise<BrowserHandle>>();
   private readonly closings = new Set<Promise<void>>();
+  private readonly cancelledOpenings = new WeakSet<Error>();
   private closing?: Promise<void>;
   private readonly recordings = new Map<string, RecordingState>();
-  private readonly recordingOptions: Required<Omit<BrowserRecordingOptions, "recordingRootDir" | "tenantId">>;
+  private readonly recordingOptions: Required<Omit<BrowserRecordingOptions, "recordingRootDir" | "stateRootDir" | "tenantId">>;
   private readonly recordingStore?: RecordingStore;
   private maintenance?: ReturnType<typeof setInterval>;
   private recordingStorageFailed = false;
-  private readonly auditEntries: BrowserAuditEntry[] = [];
+  private readonly auditEntries: DurableBrowserAuditEntry[] = [];
+  private readonly stateStore?: BrowserStateStore;
+  private stateFailed = false;
+  private auditSequence = 0;
+  private tenantInitialized = false;
+  private tenantId?: string;
+  private binding?: Promise<void>;
+  private used = false;
   private recordingBytes = 0;
   constructor(readonly adapter: BrowserAdapter, private readonly maxSessions = 4, recordingOptions: BrowserRecordingOptions = {}) {
     if (!Number.isSafeInteger(maxSessions) || maxSessions < 1) throw new BrowserUseError("invalid_input", "maxSessions must be a positive integer.");
@@ -45,6 +54,12 @@ export class BrowserSessionManager {
       maxRecordings: bound(recordingOptions.maxRecordings, 16, 1, 1024),
       maxTotalBytes: bound(recordingOptions.maxTotalBytes, 64 * 1024 * 1024, 1, 1024 * 1024 * 1024),
     };
+    if (recordingOptions.tenantId !== undefined) {
+      if (typeof recordingOptions.tenantId !== "string" || !recordingOptions.tenantId || recordingOptions.tenantId.length > 200 || /[\0\r\n]/.test(recordingOptions.tenantId)) throw new BrowserUseError("invalid_input", "Invalid tenant identity.");
+      this.tenantInitialized = true; this.tenantId = recordingOptions.tenantId;
+    }
+    if (recordingOptions.stateRootDir) this.stateStore = new BrowserStateStore(recordingOptions.stateRootDir, recordingOptions.tenantId);
+    try {
     if (recordingOptions.recordingRootDir) {
       this.recordingStore = new RecordingStore(recordingOptions.recordingRootDir, recordingOptions.tenantId);
       try {
@@ -53,11 +68,21 @@ export class BrowserSessionManager {
       } catch (error) { this.recordingStore.close(); throw error; }
       this.ensureMaintenance();
     }
+    } catch (error) { this.stateStore?.close(); throw error; }
   }
   async bindTenant(tenantId?: string): Promise<void> {
-    if (this.closed) throw new BrowserUseError("unavailable", "Browser worker is closing.");
-    this.recordingStore?.bindTenant(tenantId);
-    await this.adapter.bindTenant?.(tenantId);
+    if (tenantId !== undefined && (typeof tenantId !== "string" || !tenantId || tenantId.length > 200 || /[\0\r\n]/.test(tenantId))) throw new BrowserUseError("invalid_input", "Invalid tenant identity.");
+    if (this.tenantInitialized && this.tenantId !== tenantId) throw new BrowserUseError("invalid_state", "Browser manager belongs to another tenant.");
+    if (this.binding) return this.binding;
+    this.checkState();
+    if (!this.tenantInitialized && tenantId !== undefined && this.used) throw new BrowserUseError("invalid_state", "Existing browser work cannot be assigned to a tenant.");
+    this.tenantInitialized = true; this.tenantId = tenantId;
+    const binding = (async () => {
+      try { this.stateStore?.bindTenant(tenantId); this.recordingStore?.bindTenant(tenantId); await this.adapter.bindTenant?.(tenantId); }
+      catch (error) { this.stateFailed = true; throw error; }
+    })();
+    this.binding = binding;
+    try { await binding; } finally { if (this.binding === binding) this.binding = undefined; }
   }
   get recordingPersistence(): "memory" | "disk" { return this.recordingStore ? "disk" : "memory"; }
   private ensureMaintenance() {
@@ -66,18 +91,94 @@ export class BrowserSessionManager {
       try { this.cleanupRecordings(); } catch { this.recordingStorageFailed = true; }
       for (const [id, session] of this.sessions) {
         if (Date.now() - session.activity >= session.handle.idleTimeoutMs!) {
-          this.recordAudit(id, "idle-expired");
+          try { this.recordAudit(id, "idle-expired"); } catch { /* Still reap the expired browser when durable audit storage fails. */ }
           void this.closeSession(id).catch(() => undefined);
         }
       }
     }, 100);
     this.maintenance.unref?.();
   }
-  private recordAudit(sessionId: string, event: BrowserAuditEntry["event"], operation?: string, outcome?: BrowserAuditEntry["outcome"]) {
-    this.auditEntries.push({ at: new Date().toISOString(), sessionId, backend: this.adapter.name, event, ...(operation ? { operation } : {}), ...(outcome ? { outcome } : {}) });
+  get statePersistence(): "memory" | "disk" { return this.stateStore ? "disk" : "memory"; }
+  private checkState() {
+    if (this.binding) throw new BrowserUseError("busy", "Browser tenant binding is in progress.");
+    if (this.closed || this.stateFailed) throw new BrowserUseError("unavailable", "Browser state storage is unavailable or closing.");
+  }
+  private recordAudit(sessionId: string, event: BrowserAuditEntry["event"], operation?: string, outcome?: BrowserAuditEntry["outcome"], phase?: "started" | "finished") {
+    const entry = { at: new Date().toISOString(), sessionId, backend: this.adapter.name, event, ...(operation ? { operation } : {}), ...(outcome ? { outcome } : {}), ...(phase ? { phase } : {}) };
+    try { this.stateStore?.append(entry, this.recordingOptions.auditLimit); }
+    catch { this.stateFailed = true; throw new BrowserUseError("storage_error", "Browser action journal could not be persisted."); }
+    this.auditEntries.push({ ...entry, sequence: ++this.auditSequence });
     if (this.auditEntries.length > this.recordingOptions.auditLimit) this.auditEntries.splice(0, this.auditEntries.length - this.recordingOptions.auditLimit);
   }
-  audit(): BrowserAuditEntry[] { return this.auditEntries.map((entry) => ({ ...entry })); }
+  audit(): DurableBrowserAuditEntry[] { return this.stateStore?.audit() ?? this.auditEntries.map((entry) => ({ ...entry })); }
+  private session(id: string) {
+    const session = this.sessions.get(id);
+    if (!session) throw new BrowserUseError("not_found", "Browser session not found.");
+    if (session.control && session.control.expiresAt <= Date.now()) session.control = undefined;
+    return session;
+  }
+  control(id: string): { mode: "automation" | "human"; expiresAt?: string } {
+    const control = this.session(id).control;
+    return control ? { mode: "human", expiresAt: new Date(control.expiresAt).toISOString() } : { mode: "automation" };
+  }
+  private controlTtl(ttl = 30_000) {
+    if (!Number.isSafeInteger(ttl) || ttl < 1000 || ttl > 120_000) throw new BrowserUseError("invalid_input", "Control leases must be 1–120 seconds.");
+    return ttl;
+  }
+  acquireControl(id: string, ttlMs?: number) {
+    this.checkState(); const ttl = this.controlTtl(ttlMs), session = this.session(id);
+    if (session.control || session.busy) throw new BrowserUseError("busy", "Browser already has an owner or active operation.");
+    this.recordAudit(id, "action", "controlAcquire", "ok");
+    session.control = { token: randomUUID(), expiresAt: Date.now() + ttl };
+    session.activity = Date.now();
+    return { token: session.control.token, expiresAt: new Date(session.control.expiresAt).toISOString() };
+  }
+  renewControl(id: string, token: string, ttlMs?: number) {
+    this.checkState(); const ttl = this.controlTtl(ttlMs), session = this.session(id);
+    if (!session.control || session.control.token !== token) throw new BrowserUseError("busy", "Browser control lease was lost.");
+    session.control.expiresAt = Date.now() + ttl; session.activity = Date.now();
+    return { expiresAt: new Date(session.control.expiresAt).toISOString() };
+  }
+  releaseControl(id: string, token: string) {
+    const session = this.session(id);
+    if (!session.control || session.control.token !== token) throw new BrowserUseError("busy", "Browser control lease was lost.");
+    session.control = undefined;
+    this.recordAudit(id, "action", "controlRelease", "ok");
+  }
+  private authorizeControl(id: string, token?: string) {
+    const session = this.session(id); this.checkState();
+    if (session.control ? session.control.token !== token : token !== undefined) throw new BrowserUseError("busy", "Browser control lease is required or has expired.");
+    return session;
+  }
+  async liveFrame(id: string) {
+    this.checkState(); const session = this.session(id);
+    if (session.busy) throw new BrowserUseError("busy", "Browser has an operation in progress.");
+    session.busy = true;
+    try { return { mimeType: "image/png" as const, base64: Buffer.from(await session.browser.screenshot()).toString("base64"), capturedAt: new Date().toISOString() }; }
+    finally { session.busy = false; }
+  }
+  listCheckpoints(): BrowserCheckpoint[] { return this.stateStore?.checkpoints() ?? []; }
+  async checkpoint(id: string, controlToken?: string): Promise<BrowserCheckpoint> {
+    if (!this.stateStore) throw new BrowserUseError("unsupported", "Durable browser state storage is not configured.");
+    const session = this.authorizeControl(id, controlToken);
+    const pages = await this.execute(id, { op: "pages" }, controlToken) as import("./commands.js").BrowserPage[];
+    const checkpoint: BrowserCheckpoint = { id: randomUUID(), sessionId: id, createdAt: new Date().toISOString(), backend: this.adapter.name, options: { ...session.options }, urls: pages.map(page => safeCheckpointUrl(page.url)), selectedPage: Math.max(0, pages.findIndex(page => page.selected)) };
+    this.stateStore.save(checkpoint); this.recordAudit(id, "action", "checkpoint", "ok"); return structuredClone(checkpoint);
+  }
+  deleteCheckpoint(id: string) { this.checkState(); if (!this.stateStore) throw new BrowserUseError("unsupported", "Durable browser state storage is not configured."); this.stateStore.delete(id); }
+  async resumeCheckpoint(id: string): Promise<BrowserHandle> {
+    this.checkState(); const checkpoint = this.listCheckpoints().find(item => item.id === id);
+    if (!checkpoint) throw new BrowserUseError("not_found", "Checkpoint not found.");
+    if (checkpoint.backend !== this.adapter.name) throw new BrowserUseError("unsupported", "Checkpoint backend differs from this worker.");
+    const handle = await this.open(checkpoint.options);
+    try {
+      await this.perform(handle.id, "navigate", checkpoint.urls[0]);
+      for (const url of checkpoint.urls.slice(1)) await this.execute(handle.id, { op: "newPage", url });
+      const pages = await this.execute(handle.id, { op: "pages" }) as import("./commands.js").BrowserPage[];
+      if (pages[checkpoint.selectedPage]) await this.execute(handle.id, { op: "selectPage", pageId: pages[checkpoint.selectedPage].id });
+      this.recordAudit(handle.id, "action", "resumeCheckpoint", "ok"); return handle;
+    } catch (error) { await this.closeSession(handle.id).catch(() => undefined); throw error; }
+  }
   async listProfiles(): Promise<BrowserProfile[]> {
     if (!this.adapter.listProfiles) throw new BrowserUseError("unsupported", "This browser backend does not support profiles.");
     return this.adapter.listProfiles();
@@ -93,25 +194,32 @@ export class BrowserSessionManager {
     return opening;
   }
   private async openSession(options: BrowserOpenOptions): Promise<BrowserHandle> {
-    if (this.closed) throw new BrowserUseError("unavailable", "Browser worker is closing.");
+    this.checkState();
     if (this.sessions.size + this.opening + this.closings.size >= this.maxSessions) throw new BrowserUseError("capacity", "Browser session capacity reached.");
+    this.used = true;
     this.opening++;
     try {
       const browser = await this.adapter.open(options);
-      if (this.closed) { await browser.close(); throw new BrowserUseError("unavailable", "Browser worker is closing."); }
+      if (this.closed) {
+        await browser.close();
+        const cancelled = new BrowserUseError("unavailable", "Browser worker is closing.");
+        this.cancelledOpenings.add(cancelled);
+        throw cancelled;
+      }
       const id = randomUUID();
       const handle: BrowserHandle = { id, backend: this.adapter.name, ...(options.profileId ? { profileId: options.profileId } : {}), createdAt: new Date().toISOString(), lastActivityAt: new Date().toISOString(), idleTimeoutMs: options.idleTimeoutMs ?? this.recordingOptions.idleTimeoutMs };
-      this.sessions.set(id, { browser, busy: false, handle, activity: Date.now() });
-      this.recordAudit(id, "opened"); this.ensureMaintenance();
+      this.sessions.set(id, { browser, busy: false, handle, activity: Date.now(), options: { ...options } });
+      try { this.recordAudit(id, "opened"); } catch (error) { this.sessions.delete(id); await browser.close(); throw error; }
+      this.ensureMaintenance();
       return { ...handle };
     } finally { this.opening--; }
   }
   list(): BrowserHandle[] { return [...this.sessions.values()].map((session) => ({ ...session.handle })); }
-  async perform(id: string, action: BrowserAction, value?: string): Promise<unknown> {
-    const session = this.sessions.get(id);
-    if (!session) throw new BrowserUseError("not_found", "Browser session not found.");
+  async perform(id: string, action: BrowserAction, value?: string, controlToken?: string): Promise<unknown> {
+    const session = this.authorizeControl(id, controlToken);
     if (session.busy) throw new BrowserUseError("busy", "Browser session has an operation in progress.");
     if (action !== "screenshot") validateInput(value!);
+    this.recordAudit(id, "action", action, undefined, "started");
     session.busy = true; session.activity = Date.now(); session.handle.lastActivityAt = new Date().toISOString();
     let outcome: "ok" | "error" = "error";
     try {
@@ -125,20 +233,21 @@ export class BrowserSessionManager {
         case "screenshot": return { mimeType: "image/png", base64: Buffer.from(await session.browser.screenshot()).toString("base64") };
         default: throw new BrowserUseError("invalid_input", "Unknown browser action.");
       }
-    } catch (error) { outcome = "error"; throw error; } finally { session.busy = false; session.activity = Date.now(); this.recordAudit(id, "action", action, outcome); }
+    } catch (error) { outcome = "error"; throw error; } finally { session.busy = false; session.activity = Date.now(); this.recordAudit(id, "action", action, outcome, "finished"); }
   }
-  async execute(id: string, input: BrowserCommand): Promise<unknown> {
+  async execute(id: string, input: BrowserCommand, controlToken?: string): Promise<unknown> {
     const command = validateBrowserCommand(input);
-    const session = this.sessions.get(id);
-    if (!session) throw new BrowserUseError("not_found", "Browser session not found.");
+    const session = this.authorizeControl(id, controlToken);
     if (!session.browser.execute) throw new BrowserUseError("unsupported", "Structured browser commands are not supported by this backend.");
     if (session.busy) throw new BrowserUseError("busy", "Browser session has an operation in progress.");
+    this.recordAudit(id, "action", command.op, undefined, "started");
     session.busy = true; session.activity = Date.now(); session.handle.lastActivityAt = new Date().toISOString();
     let outcome: "ok" | "error" = "error";
     try { const result = await session.browser.execute(command); outcome = "ok"; return result; }
-    finally { session.busy = false; session.activity = Date.now(); this.recordAudit(id, "action", command.op, outcome); }
+    finally { session.busy = false; session.activity = Date.now(); this.recordAudit(id, "action", command.op, outcome, "finished"); }
   }
   startRecording(sessionId: string): BrowserRecording {
+    this.checkState();
     if (this.closed || this.recordingStorageFailed) throw new BrowserUseError("unavailable", "Browser recording storage is unavailable or closing.");
     this.cleanupRecordings(); this.ensureMaintenance();
     if (!this.sessions.has(sessionId)) throw new BrowserUseError("not_found", "Browser session not found.");
@@ -252,10 +361,18 @@ export class BrowserSessionManager {
     this.recordingStore?.delete(id);
     if (this.recordings.delete(id)) this.recordingBytes -= state.metadata.bytes;
   }
+  async requestCloseSession(id: string, controlToken?: string) {
+    const session = this.session(id);
+    if (session.control ? session.control.token !== controlToken : controlToken !== undefined) throw new BrowserUseError("busy", "Browser control lease is required or has expired.");
+    await this.closeSession(id);
+  }
   async closeSession(id: string) {
     const session = this.sessions.get(id);
     if (!session) throw new BrowserUseError("not_found", "Browser session not found.");
-    this.sessions.delete(id); this.recordAudit(id, "closed");
+    this.sessions.delete(id);
+    // Cleanup must run even if the journal is unavailable.
+    let auditError: unknown;
+    try { this.recordAudit(id, "closed"); } catch (error) { auditError = error; }
     const recordings = [...this.recordings.values()].filter((state) => state.metadata.sessionId === id);
     for (const state of recordings) this.finishRecording(state);
     const closing = Promise.resolve().then(async () => {
@@ -264,7 +381,7 @@ export class BrowserSessionManager {
       finally { await Promise.all(recordings.map((state) => state.capture)); }
     });
     this.closings.add(closing);
-    try { await closing; } finally { this.closings.delete(closing); }
+    try { await closing; if (auditError) throw auditError; } finally { this.closings.delete(closing); }
   }
   close(): Promise<void> {
     if (this.closing) return this.closing;
@@ -272,12 +389,16 @@ export class BrowserSessionManager {
     for (const state of this.recordings.values()) this.finishRecording(state);
     this.closing = (async () => {
       const results = await Promise.allSettled([
-        ...this.openings, ...this.closings,
+        ...(this.binding ? [this.binding] : []), ...this.openings, ...this.closings,
         ...[...this.sessions.keys()].map((id) => this.closeSession(id)),
       ]);
       // Opening requests reject when shutdown wins the race; they close their own browser.
-      try { await this.adapter.close?.(); } finally { this.recordingStore?.close(); }
-      const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected" && !(result.reason instanceof BrowserUseError && result.reason.code === "unavailable"));
+      try { await this.adapter.close?.(); } catch (reason) { results.push({ status: "rejected", reason }); }
+      // Each storage owner must be released even if another release fails.
+      for (const store of [this.recordingStore, this.stateStore]) {
+        try { store?.close(); } catch (reason) { results.push({ status: "rejected", reason }); }
+      }
+      const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected" && !(result.reason instanceof Error && this.cancelledOpenings.has(result.reason)));
       if (failures.length) throw new AggregateError(failures.map((failure) => failure.reason), "Browser shutdown failed.");
     })();
     return this.closing;

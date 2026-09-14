@@ -18,6 +18,8 @@ export interface BrowserRecordingOptions {
   tenantId?: string;
   /** Dedicated durable recording root; exclusive single-manager ownership. */
   recordingRootDir?: string;
+  /** Dedicated single-owner journal for bounded audit history and explicit checkpoints. */
+  stateRootDir?: string;
   /** Stopped recording retention, default 7 days; minimum 100 ms. */
   recordingTtlMs?: number;
   /** Session inactivity timeout, default 15 minutes. Recording ticks do not renew it. */

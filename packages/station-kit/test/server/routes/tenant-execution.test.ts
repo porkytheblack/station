@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { StationNetworkMemoryAdapter, type StationNode } from "station-network";
+import type { BrowserSessionManager } from "station-browser-use";
 import type { SandboxAdapter } from "station-sandbox";
 import { authResolver } from "../../../src/server/middleware/auth.js";
 import { KeyStore, MemoryKeyStorage } from "../../../src/server/auth/keys.js";
@@ -145,4 +146,13 @@ test("tenant mapping ignores inherited prototype keys", async () => {
   app.use("/*", async (c, next) => { c.set("authType", "api-key"); c.set("apiKeyId", "__proto__"); c.set("scopes", ["execution"]); return next(); });
   app.route("/", tenantExecutionRoutes({ execution: { token, tenants: { apiKeyTenants: {} } }, adapter: network, networkId: "tenants", stationId: "hq", role: "headquarters" }));
   assert.equal((await app.request("/tenant/execution")).status, 403);
+});
+
+
+test("tenant browser admission requires both durable journal and recording storage", () => {
+  const make = (statePersistence: string, recordingPersistence: string) => ({ role: "station" as const, execution: { token, tenantId: "a", browser: { statePersistence, recordingPersistence, adapter: { capabilities: capability, bindTenant() {} } } as unknown as BrowserSessionManager } });
+  for (const [state, recordings] of [["memory", "memory"], ["disk", "memory"], ["memory", "disk"]]) {
+    assert.throws(() => validateExecutionTenancy(make(state, recordings)), /durable stateRootDir and recordingRootDir/);
+  }
+  assert.doesNotThrow(() => validateExecutionTenancy(make("disk", "disk")));
 });

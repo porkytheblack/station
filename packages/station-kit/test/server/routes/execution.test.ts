@@ -125,6 +125,16 @@ test("browser RPC has its own lifecycle and sanitized failures", async () => {
   const { data: handle } = await (await call({ method: "open" })).json();
   const { data: screenshot } = await (await call({ method: "action", id: handle.id, action: "screenshot" })).json();
   assert.deepEqual(screenshot, { mimeType: "image/png", base64: "AQID" });
+  assert.equal((await call({ method: "controlAcquire", id: handle.id, ttlMs: 0 })).status, 400);
+  const { data: lease } = await (await call({ method: "controlAcquire", id: handle.id, ttlMs: 30000 })).json();
+  assert.equal((await call({ method: "action", id: handle.id, action: "click", value: "button" })).status, 409);
+  assert.equal((await call({ method: "close", id: handle.id })).status, 409);
+  assert.equal((await call({ method: "action", id: handle.id, action: "click", value: "button", controlToken: lease.token })).status, 200);
+  assert.equal((await call({ method: "liveFrame", id: handle.id })).status, 200);
+  const control = await (await call({ method: "control", id: handle.id })).json();
+  assert.equal(control.data.mode, "human"); assert.equal(JSON.stringify(control).includes(lease.token), false);
+  assert.equal((await call({ method: "controlRelease", id: handle.id, controlToken: "wrong" })).status, 409);
+  assert.equal((await call({ method: "controlRelease", id: handle.id, controlToken: lease.token })).status, 200);
   const failed = await call({ method: "action", id: handle.id, action: "navigate", value: "https://example.com" });
   assert.equal(failed.status, 503);
   assert.ok(!(await failed.text()).includes("secret-database-password"));
@@ -357,4 +367,41 @@ test("backend readiness failure releases both execution backends before advertis
     const recovered = new HostSandboxAdapter({ rootDir: join(root, "workspaces") });
     await recovered.close();
   } finally { await sandbox.close(); await browser.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('Headquarters preserves worker busy conflicts and sanitizes uncertain or malformed failures without retry', async t => {
+  const network = new StationNetworkMemoryAdapter();
+  const keys = new KeyStore(new MemoryKeyStorage());
+  const admin = (await keys.create('operator', ['admin'])).key;
+  let mode = 'busy'; let calls = 0;
+  const worker = new Hono();
+  worker.post('/internal/execution/browser', c => {
+    calls++;
+    assert.equal(c.req.header('authorization'), `Bearer ${token}`);
+    if (mode === 'busy') return c.json({ error: 'busy', message: `private lease ${token}` }, 409);
+    if (mode === 'unknown') return c.json({ error: 'unrecognized_worker_error', message: token }, 409);
+    if (mode === 'declared-unknown') return c.json({ error: 'busy', outcome: 'unknown', message: token }, 409);
+    if (mode === 'oversized') return new Response('x'.repeat(17 * 1024) + token, { status: 503 });
+    if (mode === 'malformed-success') return c.json({ secret: token });
+    return c.json({ error: 'unavailable', message: token }, 503);
+  });
+  const server = serve({ fetch: worker.fetch, hostname: '127.0.0.1', port: 0 });
+  await new Promise<void>(resolve => server.listening ? resolve() : server.once('listening', resolve));
+  const address = server.address(); assert.ok(address && typeof address !== 'string');
+  t.after(() => new Promise<void>(resolve => server.close(() => resolve())));
+  await network.upsertStation(node('worker', `http://127.0.0.1:${address.port}`));
+  const hq = new Hono(); hq.use('/*', authResolver({ keyStore: keys }));
+  hq.route('/api/v1', publicExecutionRoutes({ execution: { token }, adapter: network, networkId: 'test', stationId: 'hq', role: 'headquarters' }));
+  const call = () => hq.request('/api/v1/stations/worker/execution/browser', request({ method: 'close', id: 'session' }, admin));
+  const busy = await call(); assert.equal(busy.status, 409);
+  assert.deepEqual(await busy.json(), { error: 'busy', message: 'Execution resource is busy.' });
+  for (const scenario of ['unknown', 'declared-unknown', 'oversized', 'malformed-success', 'unavailable']) {
+    mode = scenario;
+    const response = await call(); assert.equal(response.status, 503);
+    const body = await response.json();
+    assert.equal(body.error, mode === 'unavailable' ? 'unavailable' : 'execution_failed');
+    assert.equal(body.outcome, 'unknown');
+    assert.ok(!JSON.stringify(body).includes(token));
+  }
+  assert.equal(calls, 6);
 });

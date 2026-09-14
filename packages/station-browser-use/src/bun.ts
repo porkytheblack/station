@@ -16,7 +16,7 @@ export interface BunBrowserOptions {
 
 export class BunBrowserAdapter implements BrowserAdapter {
   readonly name = "bun-webview";
-  readonly capabilities = { screenshots: true, independentSessions: true, isolated: false, networkRestricted: false, profiles: false, pages: false, commands: false, uploads: false, downloads: false } as const;
+  readonly capabilities = { screenshots: true, independentSessions: true, isolated: false, networkRestricted: false, profiles: false, pages: false, commands: false, uploads: false, downloads: false, pointer: false, inspection: false, locators: false, dialogs: false, diagnostics: false, tracing: false } as const;
   constructor(private readonly options: BunBrowserOptions = {}) {}
 
   async open(input: BrowserOpenOptions = {}): Promise<BrowserSession> {

@@ -1,0 +1,40 @@
+TAP version 13
+# Subtest: container browsers enforce runtime flags, isolate sessions, persist profiles and recover recordings
+ok 1 - container browsers enforce runtime flags, isolate sessions, persist profiles and recover recordings
+  ---
+  duration_ms: 9010.668671
+  type: 'test'
+  ...
+# Profile mode: managed named volume
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 9135.438038
+TAP version 13
+# Subtest: container browsers enforce runtime flags, isolate sessions, persist profiles and recover recordings
+ok 1 - container browsers enforce runtime flags, isolate sessions, persist profiles and recover recordings
+  ---
+  duration_ms: 8034.649293
+  type: 'test'
+  ...
+# Profile mode: local Linux bind directory with quota guard
+# Subtest: real container browser uses the enforced HTTPS proxy and rejects metadata access
+ok 2 - real container browser uses the enforced HTTPS proxy and rejects metadata access
+  ---
+  duration_ms: 4143.856391
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 12310.399608

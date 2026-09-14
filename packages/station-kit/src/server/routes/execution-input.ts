@@ -26,7 +26,9 @@ export function validateExecutionRequest(primitive: string, input: unknown): Req
     startService: ["id", "options"], services: ["id"], service: ["id", "serviceId"], stopService: ["id", "serviceId"], restartService: ["id", "serviceId"], removeService: ["id", "serviceId"],
     openTerminal: ["id", "options"], terminals: ["id"], terminal: ["id", "terminalId", "offset"], terminalInput: ["id", "terminalId", "data"], resizeTerminal: ["id", "terminalId", "cols", "rows"], closeTerminal: ["id", "terminalId"],
   } : primitive === "browser" ? {
-    open: ["options"], list: [], action: ["id", "action", "value"], close: ["id"], execute: ["id", "command"], profiles: [], profileDelete: ["id"], audit: [],
+    open: ["options"], list: [], action: ["id", "action", "value", "controlToken"], close: ["id", "controlToken"], execute: ["id", "command", "controlToken"], profiles: [], profileDelete: ["id"], audit: [],
+    control: ["id"], controlAcquire: ["id", "ttlMs"], controlRenew: ["id", "controlToken", "ttlMs"], controlRelease: ["id", "controlToken"], liveFrame: ["id"],
+    checkpoints: [], checkpoint: ["id", "controlToken"], checkpointDelete: ["id"], checkpointResume: ["id"],
     recordingStart: ["id"], recordingStop: ["id"], recordings: [], recording: ["id"], recordingFrame: ["id", "frameId"], recordingDelete: ["id"],
   } : {};
   if (typeof b.method !== "string" || !Object.hasOwn(layouts, b.method)) invalid();
@@ -35,6 +37,12 @@ export function validateExecutionRequest(primitive: string, input: unknown): Req
   for (const key of ["id", "runId", "frameId", "serviceId", "terminalId"]) {
     if (keys.includes(key) && (typeof b[key] !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(b[key] as string))) invalid();
   }
+  if (keys.includes("controlToken")) {
+    if (b.controlToken !== undefined || ["controlRenew", "controlRelease"].includes(b.method)) {
+      if (typeof b.controlToken !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(b.controlToken)) invalid();
+    }
+  }
+  if (keys.includes("ttlMs")) optionalInteger(b.ttlMs, 1000, 120000);
   if (keys.includes("path")) {
     if (b.method === "listFiles" && b.path === undefined) {} else string(b.path, 4096, true);
   }

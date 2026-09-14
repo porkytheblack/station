@@ -63,7 +63,7 @@ export function lockDirectory(root: string): () => void {
   };
 }
 export function entries(root: string): string[] { return readdirSync(root).filter((name) => !name.startsWith(".")); }
-export function namespaceRoot(root: string, kind: "recordings" | "profiles"): void {
+export function namespaceRoot(root: string, kind: "recordings" | "profiles" | "browser-state"): void {
   const path = join(root, ".station-store.json");
   let fd: number | undefined;
   try {

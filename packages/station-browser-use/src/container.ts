@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID, createHash } from "node:crypto";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, rmSync, lstatSync } from "node:fs";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { BrowserUseError, type BrowserAdapter, type BrowserSession } from "./browser.js";
@@ -16,6 +16,10 @@ export interface ContainerBrowserOptions {
   engine?: "docker" | "podman";
   executable?: string;
   workerPath?: string;
+  /** Local Linux Docker only: operator-provisioned profile directory, e.g. under enforced XFS project quota. */
+  profileStorageRoot?: string;
+  /** Operator-selected egress proxy. Public deployment profile enforces this below the workload. */
+  proxy?: { server: string };
   /** none by default. host/container networking is rejected. */
   network?: string;
   /** Operator assertion for an externally enforced named-network egress policy. */
@@ -43,6 +47,7 @@ export class ContainerBrowserAdapter implements BrowserAdapter {
   readonly capabilities: BrowserAdapter["capabilities"];
   private readonly root: string;
   private readonly profiles: string;
+  private readonly profileStorageRoot?: string;
   private readonly journals: string;
   private readonly release: () => void;
   private readonly executable: string;
@@ -75,7 +80,16 @@ export class ContainerBrowserAdapter implements BrowserAdapter {
     this.cpus = options.cpus ?? 1; if (!Number.isFinite(this.cpus) || this.cpus <= 0 || this.cpus > 1024) throw error("invalid_input", "Invalid CPU limit.");
     this.timeout = options.timeoutMs ?? 30_000; validateTimeout(this.timeout);
     bounded(options.maxProfiles, 64, 1024); bounded(options.maxPages, 8, 64); bounded(options.maxArtifactBytes, 4 * 1024 * 1024, 16 * 1024 * 1024); bounded(options.maxArtifacts, 16, 128);
-    this.capabilities = { screenshots: true, independentSessions: true, profiles: true, pages: true, commands: true, uploads: true, downloads: true, isolated: true, networkRestricted: network === "none" || Boolean(options.networkRestricted) };
+    this.capabilities = { screenshots: true, independentSessions: true, profiles: true, pages: true, commands: true, uploads: true, downloads: true, pointer: true, inspection: true, locators: true, dialogs: true, diagnostics: true, tracing: true, isolated: true, networkRestricted: network === "none" || Boolean(options.networkRestricted) };
+    if (options.proxy) {
+      const proxy = new URL(options.proxy.server);
+      if (proxy.protocol !== "http:" || proxy.username || proxy.password || proxy.pathname !== "/" || proxy.search || proxy.hash || !/^\d+\.\d+\.\d+\.\d+$/.test(proxy.hostname) || !proxy.port) throw error("invalid_input", "Egress proxy must be an explicit IPv4 HTTP endpoint without credentials or bypass rules.");
+    }
+    if (options.profileStorageRoot) {
+      if (process.platform !== "linux" || options.engine === "podman" || options.profileStorageRoot.includes(",")) throw error("unsupported", "Profile storage directories require local Linux Docker.");
+      this.profileStorageRoot = directory(options.profileStorageRoot);
+      if (lstatSync(this.profileStorageRoot).uid !== Number(this.user.split(":")[0])) throw error("invalid_state", "Profile storage root must belong to the configured workload UID.");
+    }
     this.root = directory(options.rootDir); this.release = lockDirectory(this.root);
     try {
       this.profiles = directory(join(this.root, "profiles")); this.journals = directory(join(this.root, "sessions"));
@@ -115,6 +129,11 @@ export class ContainerBrowserAdapter implements BrowserAdapter {
     if ((info.OSType ?? info.host?.os ?? info.Host?.OS) !== "linux") throw error("unsupported", "A Linux container engine is required.");
     if ([info.MemoryLimit, info.CpuCfsQuota, info.PidsLimit].some((supported) => supported === false)) throw error("unsupported", "Container resource limits are unavailable.");
     if (Array.isArray(info.host?.cgroupControllers) && ["cpu", "memory", "pids"].some((item) => !info.host.cgroupControllers.includes(item))) throw error("unsupported", "CPU, memory and PID controller delegation is required.");
+    if (this.profileStorageRoot) {
+      if ((process.env.DOCKER_HOST && !process.env.DOCKER_HOST.startsWith("unix://")) || info.SecurityOptions?.some((value: string) => value.includes("rootless"))) throw error("unsupported", "Profile storage requires local rootful Docker.");
+      const endpoint = JSON.parse(await this.call(["context", "inspect", "--format", "{{json .Endpoints.docker.Host}}"]));
+      if (typeof endpoint !== "string" || !endpoint.startsWith("unix://")) throw error("unsupported", "Remote Docker cannot mount local profile storage.");
+    }
     const image = JSON.parse(await this.call(["image", "inspect", this.options.image]))[0];
     if (typeof image.Id !== "string" || !/^(sha256:)?[0-9a-f]{64}$/.test(image.Id)) throw error("invalid_state", "Cannot resolve immutable container image."); this.image = image.Id;
     for (const id of entries(this.journals)) {
@@ -143,7 +162,19 @@ export class ContainerBrowserAdapter implements BrowserAdapter {
     if (this.busyProfiles.has(id)) throw error("busy", "Browser profile is in use.");
     const path = ownedPath(this.profiles, id); if (!existsSync(path)) throw error("not_found", "Browser profile not found.");
     this.busyProfiles.add(id);
-    try { const volume = this.volumeName(id); const value = await this.inspect("volume", volume); if (value) { if (value.Labels?.[OWNER] !== this.owner || value.Labels?.[PROFILE] !== id) throw error("invalid_state", "Profile ownership mismatch."); await this.call(["volume", "rm", volume]); } rmSync(path); }
+    try {
+      const record = JSON.parse(readBounded(path, 4096).toString());
+      if (this.profileStorageRoot) {
+        const expected = join(this.profileStorageRoot, this.volumeName(id));
+        if (record.directory !== expected) throw error("invalid_state", "Profile storage configuration changed.");
+        rmSync(ownedPath(this.profileStorageRoot, this.volumeName(id)), { recursive: true, force: true });
+      } else {
+        if (record.directory) throw error("invalid_state", "Profile storage configuration changed.");
+        const volume = this.volumeName(id); const value = await this.inspect("volume", volume);
+        if (value) { if (value.Labels?.[OWNER] !== this.owner || value.Labels?.[PROFILE] !== id) throw error("invalid_state", "Profile ownership mismatch."); await this.call(["volume", "rm", volume]); }
+      }
+      rmSync(path);
+    }
     finally { this.busyProfiles.delete(id); }
   }
   open(input: BrowserOpenOptions = {}): Promise<BrowserSession> {
@@ -169,18 +200,33 @@ export class ContainerBrowserAdapter implements BrowserAdapter {
       const mounts: string[] = [];
       if (options.profileId) {
         if (!existsSync(ownedPath(this.profiles, options.profileId)) && entries(this.profiles).length + [...this.busyProfiles].filter((id) => !existsSync(ownedPath(this.profiles, id))).length > (this.options.maxProfiles ?? 64)) throw error("capacity", "Persistent browser profile capacity reached.");
-        const volume = this.volumeName(options.profileId); const existing = await this.inspect("volume", volume);
-        if (existing && (existing.Labels?.[OWNER] !== this.owner || existing.Labels?.[PROFILE] !== options.profileId)) throw error("invalid_state", "Profile ownership mismatch.");
-        if (!existing) await this.call(["volume", "create", "--label", `${OWNER}=${this.owner}`, "--label", `${PROFILE}=${options.profileId}`, volume]);
-        atomicWrite(ownedPath(this.profiles, options.profileId), JSON.stringify({ volume }));
-        mounts.push("--mount", `type=volume,source=${volume},target=/home/node`);
+        const volume = this.volumeName(options.profileId);
+        const marker = ownedPath(this.profiles, options.profileId);
+        const saved = existsSync(marker) ? JSON.parse(readBounded(marker, 4096).toString()) : undefined;
+        if (this.profileStorageRoot) {
+          const expected = join(this.profileStorageRoot, volume);
+          if (saved && saved.directory !== expected) throw error("invalid_state", "Profile storage configuration changed; migrate explicitly.");
+          const path = directory(ownedPath(this.profileStorageRoot, volume));
+          if (lstatSync(path).uid !== Number(this.user.split(":")[0])) throw error("invalid_state", "Run the controller as the configured workload UID for directory profiles.");
+          atomicWrite(marker, JSON.stringify({ directory: path }));
+          mounts.push("--mount", `type=bind,source=${path},target=/home/node`);
+        } else {
+          if (saved?.directory) throw error("invalid_state", "Profile storage configuration changed; migrate explicitly.");
+          const existing = await this.inspect("volume", volume);
+          if (existing && (existing.Labels?.[OWNER] !== this.owner || existing.Labels?.[PROFILE] !== options.profileId)) throw error("invalid_state", "Profile ownership mismatch.");
+          if (!existing) await this.call(["volume", "create", "--label", `${OWNER}=${this.owner}`, "--label", `${PROFILE}=${options.profileId}`, volume]);
+          atomicWrite(marker, JSON.stringify({ volume }));
+          mounts.push("--mount", `type=volume,source=${volume},target=/home/node`);
+        }
       } else mounts.push("--tmpfs", `/home/node:rw,nosuid,nodev,size=${this.tmpfs}m,mode=1777`);
       atomicWrite(journal, JSON.stringify({ name }));
       await this.call(["create", "-i", "--name", name, "--label", `${OWNER}=${this.owner}`, "--label", `${SESSION}=${id}`,
         "--log-driver", "none", "--user", this.user, "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--read-only", "--init",
         "--memory", `${this.memory}m`, "--cpus", String(this.cpus), "--pids-limit", String(this.pids), "--network", this.options.network ?? "none",
+        ...(this.options.proxy ? ["--dns", "127.0.0.1", "--sysctl", "net.ipv6.conf.all.disable_ipv6=1", "--sysctl", "net.ipv6.conf.default.disable_ipv6=1"] : []),
         "--tmpfs", `/tmp:rw,nosuid,nodev,size=${this.tmpfs}m,mode=1777`, "--shm-size", "128m", ...mounts,
-        "--env", "HOME=/home/node", "--env", "TMPDIR=/tmp", "--entrypoint", "node", this.image,
+        "--env", "HOME=/home/node", "--env", "TMPDIR=/tmp", "--entrypoint", this.profileStorageRoot ? "/usr/local/bin/station-quota-guard" : "/usr/local/bin/node", this.image,
+        ...(this.profileStorageRoot ? ["/usr/local/bin/node"] : []),
         this.options.workerPath ?? "/opt/station/packages/station-browser-use/dist/container-worker.js"]);
       child = spawn(this.executable, ["start", "--attach", "--interactive", name], { stdio: ["pipe", "pipe", "pipe"] });
       const decoder = new StringDecoder("utf8"); let buffer = ""; let bytes = 0;
@@ -204,7 +250,7 @@ export class ContainerBrowserAdapter implements BrowserAdapter {
         return new Promise((resolve, reject) => { pending.set(id, { resolve, reject }); child!.stdin.write(message, (reason) => { if (reason) { pending.delete(id); reject(error("unavailable", "Container browser transport failed.")); } }); });
       };
       let timer: ReturnType<typeof setTimeout> | undefined;
-      try { await Promise.race([rpc("open", undefined, { options, settings: { timeoutMs: this.timeout, maxPages: this.options.maxPages, maxArtifactBytes: this.options.maxArtifactBytes, maxArtifacts: this.options.maxArtifacts } }), new Promise((_, reject) => { timer = setTimeout(() => reject(error("timeout", "Container browser startup timed out.")), this.timeout); })]); }
+      try { await Promise.race([rpc("open", undefined, { options, settings: { proxy: this.options.proxy, timeoutMs: this.timeout, maxPages: this.options.maxPages, maxArtifactBytes: this.options.maxArtifactBytes, maxArtifacts: this.options.maxArtifacts } }), new Promise((_, reject) => { timer = setTimeout(() => reject(error("timeout", "Container browser startup timed out.")), this.timeout); })]); }
       finally { clearTimeout(timer); }
       session = managedSession({ navigate: (value) => rpc("navigate", value), click: (value) => rpc("click", value), type: (value) => rpc("type", value), press: (value) => rpc("press", value), evaluate: (value) => rpc("evaluate", value), screenshot: async () => Buffer.from(await rpc("screenshot"), "base64"), execute: (value) => rpc("execute", value), close: async () => {
         if (!closed) { let timer: ReturnType<typeof setTimeout> | undefined; try { await Promise.race([rpc("close"), new Promise((resolve) => { timer = setTimeout(resolve, 2000); })]); } catch { /* Engine removal is authoritative. */ } finally { clearTimeout(timer); } }

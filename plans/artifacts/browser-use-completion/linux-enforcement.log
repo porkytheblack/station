@@ -1,0 +1,8 @@
+kernel.yama.ptrace_scope = 1
+PASS: readiness rejects earlier FORWARD accepts and changed proxy policy
+PASS: direct public, peer, host gateway, metadata and IPv6 sockets denied
+PASS: allowed HTTPS succeeds; private, unlisted and non443 CONNECT denied
+owned directory project mutation denied, including exec child
+owned directory project mutation denied, including exec child
+quota-enforced ENOSPC 33488896
+PASS: direct/peer/metadata/IPv6/DNS bypass denied, proxy restrictions enforced, real disk allocation bounded

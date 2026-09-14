@@ -1,5 +1,7 @@
 # Station execution environments — production review
 
+This report records the earlier production baseline. See [Browser Use completion review](browser-use-completion.md) for the subsequent browser capabilities, validation and remaining deployment limits.
+
 The implementation now includes public tenant execution boundaries alongside the operator dashboard. Sandbox and Browser Use remain separate primitives with separate adapters and lifecycles. The public architecture uses one dedicated private worker per tenant, not customer code inside the Headquarters process.
 
 ## What is implemented

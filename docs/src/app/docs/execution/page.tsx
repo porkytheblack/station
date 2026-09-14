@@ -144,6 +144,40 @@ await sandbox.ready();`}</Code>
         an operator-enforced egress policy. Named volumes need storage-level disk quotas;
         command output limits do not limit what a program can write to disk. Root ownership
         locks are local, not distributed fencing.</p>
+      <h3>Agent-controlled browser workflows</h3>
+      <p>Mount Browser Use as agent tools; use the dashboard to observe sessions or
+        take temporary human control. The toolset binds to one authenticated worker
+        and scopes resource IDs to a workflow.</p>
+      <Code>{`import { BrowserUseClient, createBrowserAgentTools } from "station-browser-use/agent";
+
+const tools = createBrowserAgentTools({
+  client: new BrowserUseClient({
+    baseUrl: "https://station.example.com",
+    stationId: "tenant-browser-worker",
+    apiKey: process.env.STATION_EXECUTION_KEY!,
+  }),
+  maxSessions: 2,
+  profileIds: ["research"],
+});
+// Mount name, description, inputSchema and execute(input, { signal }).
+// Feed result.images into the model's native image input channel.
+try { await runYourAgent(tools); }
+finally { await tools.close(); }`}</Code>
+      <p>Tools cover opening sessions, DOM/ARIA observation, navigation, structured
+        interactions, screenshots, checkpoints, resume and close. Each name starts
+        with <code>station_browser_</code>. The model cannot choose credentials,
+        tenant identity, worker or a human-control token. Retained profiles,
+        sessions and checkpoints require explicit host grants.</p>
+      <p>Screenshot bytes are returned separately from text. The Foundry example
+        maps them to native model image observations after tool results have been
+        committed. Ordinary JSON containing base64 does not provide vision.
+        Treat website content as untrusted data. Text results are bounded and
+        explicitly marked when truncated.</p>
+      <p>The client defaults to tenant execution-only API keys. Operator access
+        requires an explicit development configuration. Requests refuse redirects
+        and never retry mutations; an unknown transport outcome requires checking
+        worker state. Cleanup respects human control and surfaces failures for retry
+        after the lease releases.</p>
       <h3>Independent browser sessions</h3>
       <Code>{`import { BrowserSessionManager } from "station-browser-use";
 import { BunBrowserAdapter } from "station-browser-use/bun";
@@ -196,7 +230,7 @@ const browsers = new BrowserSessionManager(
       <h3>Profiles, page tools and durable recordings</h3>
       <Code>{`const browsers = new BrowserSessionManager(
   new PlaywrightBrowserAdapter({ profileRootDir: "/data/profiles" }),
-  3, { recordingRootDir: "/data/recordings", idleTimeoutMs: 900_000 },
+  3, { recordingRootDir: "/data/recordings", stateRootDir: "/data/browser-state", idleTimeoutMs: 900_000 },
 );
 const session = await browsers.open({ profileId: "research" });
 await browsers.execute(session.id, { op: "newPage", url: "https://example.com" });
@@ -207,15 +241,122 @@ const recording = browsers.startRecording(session.id);`}</Code>
         history navigation, page management and bounded upload/download artifacts.
         Bun advertises only its supported basic capabilities; the dashboard hides unsupported
         tools. A profile can be open only once per owning manager, and storage roots must
-        have exactly one live owner. Browser artifacts and audit entries are bounded but
-        ephemeral; disk-backed recordings and saved profiles have separate persistence.</p>
+        have exactly one live owner. Download and trace artifacts are bounded and session-owned. Configure a separate
+        stateRootDir for durable action history/checkpoints; recordings and saved profiles
+        have their own storage roots.</p>
+      <h3>Semantic targets and page inspection</h3>
+      <Code>{`await browsers.execute(session.id, {
+  op: "click",
+  target: { by: "role", role: "button", name: "Continue", exact: true },
+});
+await browsers.execute(session.id, {
+  op: "fill",
+  target: { by: "label", value: "Code", frame: ["#payment-frame"] },
+  value: "1234",
+});
+const page = await browsers.execute(session.id, {
+  op: "inspect", maxElements: 100, maxTextLength: 256,
+});
+const accessible = await browsers.execute(session.id, {
+  op: "accessibility", depth: 10, boxes: true,
+});`}</Code>
+      <p>Targets support selector, role/name, text, label and testId, optional exact matching,
+        an iframe-selector chain of up to eight frames, and an explicit zero-based nth match.
+        Ambiguous matches fail. Existing form/upload/download operations accept exactly one
+        selector or target; click, focus and press are structured operations too.</p>
+      <p>Inspection returns bounded DOM metadata, truncation and coordinateSpace. Password
+        and file input values are omitted. Defaults are 100 elements and 256 characters per
+        field; maxima are 500 elements, 4096 characters and 4 MiB total output. Accessibility
+        returns an ARIA YAML snapshot, bounded to 1 MiB and depth 20. Frame-targeted DOM boxes
+        use that frame&apos;s viewport; main-page boxes use the main viewport. Re-resolve targets
+        after the page changes.</p>
+      <p>mouseClick and mouseMove use main-viewport CSS-pixel coordinates. drag takes source
+        and destination targets; dragCoordinates takes from/to points and bounded movement
+        steps. A one-shot dialog policy can accept or dismiss the next selected-page dialog,
+        optionally supplying prompt text. It expires after ten seconds by default (maximum
+        thirty seconds). Unexpected or expired dialogs dismiss immediately, so actions do not
+        wait for a later RPC to resolve a modal.</p>
+
+      <h3>Live viewing and human control</h3>
+      <Code>{`const lease = browsers.acquireControl(session.id); // Default 30 seconds.
+try {
+  await browsers.execute(session.id, {
+    op: "mouseClick", x: 200, y: 120,
+  }, lease.token);
+  const frame = await browsers.liveFrame(session.id);
+  // Renew before expiry when keeping manual control:
+  browsers.renewControl(session.id, lease.token);
+} finally {
+  browsers.releaseControl(session.id, lease.token);
+}`}</Code>
+      <p>Live view polls current PNG frames with timestamps; it is not a video stream.
+        Busy frames are skipped and viewing does not extend idle lifetime. acquireControl
+        grants an exclusive live lease for 1–120 seconds. While held, actions require its
+        token, so automation cannot interleave browser input. control reports mode/expiry
+        without exposing the token. Renew or release intentionally; expiry returns control
+        to automation. Leases do not survive worker restart. Remote close honors the lease;
+        direct lifecycle cleanup remains available to the worker.</p>
+
+      <h3>Diagnostics and trace artifacts</h3>
+      <Code>{`import type { BrowserArtifact } from "station-browser-use";
+const diagnostics = await browsers.execute(session.id, { op: "diagnostics" });
+// Console text is intentionally absent unless explicitly enabled for future events:
+await browsers.execute(session.id, { op: "diagnostics", consoleText: true });
+await browsers.execute(session.id, { op: "traceStart" });
+// Perform the browser actions to investigate, then export:
+const trace = await browsers.execute(session.id, { op: "traceStop" }) as BrowserArtifact;
+const zip = await browsers.execute(session.id, {
+  op: "downloadRead", artifactId: trace.id,
+});
+await browsers.execute(session.id, { op: "downloadDelete", artifactId: trace.id });`}</Code>
+      <p>Diagnostics retain at most 200 console, network and dialog events. Default events
+        omit console text, headers and bodies; URLs omit credentials, queries and fragments.
+        Opt-in console text is bounded to 2 KiB per event and can still contain arbitrary
+        application secrets. Turning it off purges retained console text; clear removes the
+        ring. Dialog events contain type/action, not prompt contents or answers.</p>
+      <p>Tracing is explicit and can contain sensitive screenshots, DOM and network/action
+        data. ZIP files share the session&apos;s download artifact count/byte budget and expire
+        on close. Traces abort and discard partial data at sixty seconds or their monitored
+        raw-file budget. A failed/limited trace does not export a partial archive. Disk growth
+        is sampled every fifty milliseconds; enforce a filesystem/container quota for a hard
+        transient limit. Bun advertises these richer capabilities as unsupported.</p>
+
+      <h3>Durable action history and explicit resume</h3>
+      <Code>{`const browsers = new BrowserSessionManager(adapter, 4, {
+  stateRootDir: "/data/browser-state",
+  recordingRootDir: "/data/browser-recordings",
+  auditLimit: 1000,
+  // tenantId: "customer-a", // Required for already tenant-bound roots.
+});
+const checkpoint = await browsers.checkpoint(session.id);
+await browsers.closeSession(session.id);
+const replacement = await browsers.resumeCheckpoint(checkpoint.id);
+const journal = browsers.audit();
+await browsers.deleteCheckpoint(checkpoint.id);`}</Code>
+      <p>stateRootDir enables an atomic single-owner journal separate from recordings and
+        profiles. Action starts are persisted before execution and finishes afterward, with
+        monotonic sequence numbers. Write failures stop action admission. A started entry
+        without a finish has an unknown outcome; do not automatically replay the mutation.
+        Default retention is the latest 1000 entries (maximum 10000), with an 8 MiB combined
+        state limit. This bounded operational history is not an immutable compliance archive.
+        Tenant identity is verified before recovery or retention can modify stored data.</p>
+      <p>Checkpoints record backend, validated open options, selected page and sanitized
+        HTTP(S) origin/path URLs; credentials, query strings and fragments are omitted.
+        about:blank is also supported, with at most 64 checkpoints. Resume explicitly opens
+        a new session on the same backend and navigates those URLs. It never runs automatically
+        on startup. Persistent profiles can restore saved cookies after old ownership ends;
+        they do not restore JavaScript memory, filled forms, pending requests or exact workflow
+        progress. Re-navigation can itself have effects. Keep roots distinct, preserve their
+        logical owner and use external fencing for failover.</p>
+
       <h3>Use the Headquarters dashboard</h3>
       <p>
         Sign in to Headquarters with its configured administrator account.
         <code> /sandboxes</code> provides worker selection, workspace creation,
         commands/output, cancellation, interactive terminals, supervised services, files and deletion. <code>/browser-use</code>
         provides separate browser session controls, navigation, interaction and
-        screenshots, profiles, pages, upload/download tools and recording playback. Both use Headquarters as their public entry point.
+        screenshots, profiles, pages, semantic/frame targeting, live human control, inspection,
+        diagnostics/traces, checkpoints and recording playback. Both use Headquarters as their public entry point.
       </p>
       <p>
         The admin-only <code>GET /api/v1/execution</code> endpoint discovers
@@ -284,6 +425,10 @@ execution: { token: process.env.STATION_EXECUTION_TOKEN!, sandbox: sandboxes }
 
 // Browser request bodies:
 { "method": "open" }
+{ "method": "execute", "id": "SESSION_ID", "command": { "op": "inspect" } }
+{ "method": "liveFrame", "id": "SESSION_ID" }
+{ "method": "controlAcquire", "id": "SESSION_ID", "ttlMs": 30000 }
+{ "method": "checkpoint", "id": "SESSION_ID" }
 { "method": "action", "id": "SESSION_ID", "action": "navigate", "value": "https://example.com" }
 { "method": "action", "id": "SESSION_ID", "action": "screenshot" }
 { "method": "close", "id": "SESSION_ID" }`}</Code>
@@ -325,6 +470,19 @@ execution: { token: serviceSecret, tenantId: "customer-a", sandbox }
         Profile volumes and recordings retain their tenant ownership. Default networking is
         disabled. An operator-enforced named egress network is required for permitted internet
         browsing; a configuration flag alone does not install that policy.</p>
+      <p>The included Linux deployment profile under <code>scripts/execution-container/enforced</code>
+        provisions a dedicated internal Docker network, an HTTPS CONNECT proxy that connects
+        to validated public IPv4 addresses, host firewall rules and XFS project quotas.
+        Configure its verified network and proxy on ContainerBrowserAdapter, and use
+        <code> profileStorageRoot</code> for quota-backed profiles. The immutable image includes
+        a syscall guard that prevents browser descendants from changing quota metadata.</p>
+      <p>This profile requires local rootful Linux Docker and XFS project-quota support.
+        Direct internet connections, ordinary HTTP, UDP/QUIC, IPv6 and private destinations
+        are denied. Both <code>stateRootDir</code> and <code>recordingRootDir</code> are required
+        for public browser workers; place them under the same tenant quota tree. Verify the
+        policy before starting workers and after host networking changes. Run
+        <code> pnpm test:execution:policy</code> for fast proxy/verifier regressions and the
+        supplied live harness for real network and disk-exhaustion checks.</p>
       <p>Read the <a href="https://github.com/porkytheblack/station/tree/main/scripts/execution-container">tenant deployment contract</a>
         for image builds, key provisioning, storage quotas, egress controls and rollout checks.
         These APIs supply execution boundaries; customer onboarding, billing, automatic
