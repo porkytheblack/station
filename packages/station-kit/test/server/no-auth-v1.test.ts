@@ -34,6 +34,7 @@ test("v1 routes remain usable when authentication is intentionally disabled", as
     host: "127.0.0.1",
     port,
     open: false,
+    execution: { token: "private-worker-service-token-for-test" },
     signalsDir,
     stationDir: "station",
     adapter: new MemoryAdapter(),
@@ -43,6 +44,11 @@ test("v1 routes remain usable when authentication is intentionally disabled", as
   try {
     await station.start();
     const apiBase = `http://127.0.0.1:${port}/api/v1`;
+
+    const executionResponse = await fetch(`${apiBase}/stations/station-${process.pid}/execution/sandbox`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ method: "create" }),
+    });
+    assert.equal(executionResponse.status, 401, "execution must stay authenticated even when legacy routes are open");
 
     const catalogResponse = await fetch(`${apiBase}/signals`);
     assert.equal(catalogResponse.status, 200);

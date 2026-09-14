@@ -7,6 +7,14 @@ import type { ApiKeyStorageAdapter } from "../server/auth/keys.js";
 import type { LogStorageAdapter } from "../server/log-store.js";
 import type { StationNetworkAdapter, StationRole } from "station-network";
 
+/** Trusted operator execution. Public RPC always requires an admin API key/session. */
+export interface ExecutionConfig {
+  /** Separate shared worker secret, at least 32 characters. Never expose to workload processes. */
+  token: string;
+  sandbox?: import("station-sandbox").SandboxAdapter;
+  browser?: import("station-browser-use").BrowserSessionManager;
+}
+
 export interface AuthConfig {
   username: string;
   password: string;
@@ -78,6 +86,8 @@ export interface StationConfig {
   port: number;
   host: string;
   adapter?: SignalQueueAdapter;
+  /** Child-process runtime for signals and beacons; defaults to Node. */
+  processRuntime?: import("station-signal").ProcessRuntime;
   broadcastAdapter?: BroadcastQueueAdapter;
   /**
    * Optional beacon supervision-state adapter. When provided (or when
@@ -131,6 +141,7 @@ export interface StationConfig {
   logLevel: "debug" | "info" | "warn" | "error";
   auth?: AuthConfig;
   deploy?: DeployConfig;
+  execution?: ExecutionConfig;
 }
 
 export type StationUserConfig = Partial<Omit<StationConfig, "runner" | "broadcastRunner" | "network">> & {
@@ -184,6 +195,10 @@ export function resolveConfig(input: StationUserConfig): StationConfig {
     auth = { username: envAuthUser, password: envAuthPass };
   }
 
+  if (input.execution && (typeof input.execution.token !== "string" || input.execution.token.length < 32)) {
+    throw new Error("execution.token must contain at least 32 characters.");
+  }
+
   const role = input.role ?? DEFAULTS.role;
   const stationId = input.network?.stationId ?? process.env.STATION_ID ?? `station-${process.pid}`;
 
@@ -205,6 +220,7 @@ export function resolveConfig(input: StationUserConfig): StationConfig {
     port: input.port ?? envPort ?? DEFAULTS.port,
     host: input.host ?? envHost ?? DEFAULTS.host,
     adapter: input.adapter,
+    processRuntime: input.processRuntime,
     broadcastAdapter: input.broadcastAdapter,
     beaconAdapter: input.beaconAdapter,
     beaconMaxInstances: input.beaconMaxInstances,
@@ -230,5 +246,6 @@ export function resolveConfig(input: StationUserConfig): StationConfig {
     logLevel: input.logLevel ?? DEFAULTS.logLevel,
     auth,
     deploy: input.deploy,
+    execution: input.execution,
   };
 }

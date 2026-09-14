@@ -80,6 +80,11 @@ await sendEmail.trigger({
 | [`station-beacon`](./packages/station-beacon) | Long-running supervised processes — servers, pollers, clients |
 | [`station-env`](./packages/station-env) | Runtime-managed environment variables injected into signal/beacon runs |
 | [`station-schedules`](./packages/station-schedules) | Runtime interval/cron schedules with atomic occurrence claims |
+| [`station-browser`](./packages/station-browser) | Experimental Station execution in Web Workers/service workers with IndexedDB |
+| [`station-sandbox`](./packages/station-sandbox) | Trusted native POSIX workspaces and supervised Bash commands |
+| [`station-browser-use`](./packages/station-browser-use) | Server browser sessions and screenshots through Bun WebView or Playwright |
+| [`station-expressions`](./packages/station-expressions) | Pure expression AST, validation and workflow mappings |
+| [`station-tauri`](./packages/station-tauri) | Local Station sidecar integration for Tauri applications |
 | [`station-network`](./packages/station-network) | Fleet membership, capacity reporting, draining, and distributed controller leases |
 | [`station-adapter-sqlite`](./packages/station-adapter-sqlite) | SQLite adapter (better-sqlite3) |
 | [`station-adapter-postgres`](./packages/station-adapter-postgres) | PostgreSQL adapter (pg) |
@@ -101,6 +106,19 @@ and [the agent reference](.claude/skills/station/browser.md) provides worker
 patterns and the supported API. The docs build includes both browser guides in
 `llms.txt` and `llms-full.txt`.
 
+### Server execution primitives
+
+`station-sandbox` provides trusted shell workspaces; `station-browser-use` owns
+independent browser sessions through Bun WebView or Playwright. Headquarters can
+route admin requests to their exact private worker. See the
+[execution guide](https://station.dterminal.net/docs/execution),
+[three-service example](./examples/18-execution-network) and
+[agent reference](.claude/skills/station/execution.md). These are initial primitives:
+no automatic environment placement, tenant isolation or restoration of live
+processes/browser sessions. Linux/Railway deployment validation remains outstanding.
+Node stays the default signal/beacon runtime; `BunProcessRuntime` is an opt-in
+child-runtime adapter, independent of browser control.
+
 [station-docs](https://github.com/porkytheblack/station) — Getting started, API reference, examples.
 
 ## Claude Code skill
@@ -113,8 +131,9 @@ Teaches Claude how to build with every Station package. Covers signals, broadcas
 
 ## Releasing to npm
 
-All 14 public packages, including experimental `station-browser`, share version
-2.3.0. Use Node.js 22 or later with the pinned pnpm version. With dependencies
+All 16 public packages, including experimental `station-browser`,
+`station-sandbox` and `station-browser-use`, share version
+2.4.0. Use Node.js 22 or later with the pinned pnpm version. With dependencies
 installed, a clean committed checkout, and npm publish access, run:
 
 ```bash

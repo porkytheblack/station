@@ -1,6 +1,6 @@
 {
   "name": "station-expressions",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "Pure, deterministic expression AST + evaluator + validator for Station dynamic broadcasts",
   "license": "MIT",
   "main": "dist/index.js",

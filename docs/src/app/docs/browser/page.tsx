@@ -26,11 +26,17 @@ export default function BrowserPage() {
         closing the app or browser.
       </p>
 
+      <p>
+        For server-owned browsers, screenshots or native shell workspaces, use
+        {" "}<Link href="/docs/execution">Sandbox and Browser Use</Link>. Those are
+        separate server primitives with their own lifecycles.
+      </p>
+
       <h3>Try the implementation</h3>
       <p>
-        The experimental package is included in the Station 2.3.0 release.
-        After that release is published, install it in your application with
-        <code> pnpm add station-browser@^2.3.0</code>. To try the release checkout,
+        The experimental package has been available since Station 2.3.0.
+        This checkout targets 2.4.0. After that release is published, install it with
+        <code> pnpm add station-browser@^2.4.0</code>. To try the release checkout,
         start with the repository workspace:
       </p>
       <Code>{`# From the Station repository checkout containing station-browser

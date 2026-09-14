@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { internalExecutionRoutes, publicExecutionRoutes } from "./routes/execution.js";
 import { createMiddleware } from "hono/factory";
 import { bodyLimit } from "hono/body-limit";
 import { serve } from "@hono/node-server";
@@ -212,6 +213,7 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
       : undefined;
 
     signalRunner = new SignalRunner({
+      processRuntime: config.processRuntime,
       signalsDir,
       adapter: signalAdapter,
       pollIntervalMs: config.runner.pollIntervalMs,
@@ -255,6 +257,7 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
 
     if (runsExecutionPlane && (beaconsDir || beaconAdapter)) {
       beaconRunner = new BeaconRunner({
+        processRuntime: config.processRuntime,
         beaconsDir,
         adapter: beaconAdapter ?? new BeaconMemoryAdapter(),
         signalRunner, // beacons can trigger signals into the shared queue
@@ -476,6 +479,15 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
   adminRoutes.route("/", v1BeaconAdminRoutes(beaconDeps));
   v1.route("/", guarded("admin", adminRoutes));
 
+  if (config.execution) {
+    const executionDeps = {
+      execution: config.execution, adapter: networkAdapter,
+      networkId: config.network.id, stationId: config.network.stationId, role: config.role,
+    };
+    // Execution remains admin-only even when the legacy APIs intentionally omit auth.
+    v1.route("/", publicExecutionRoutes(executionDeps));
+    app.route("/internal", internalExecutionRoutes(executionDeps));
+  }
   app.route("/api/v1", v1);
 
   // ── Proxy to Next.js standalone server ──────────────────────────
@@ -653,6 +665,9 @@ export async function createStation(config: StationConfig, cwd: string, nextPort
         clearInterval(heartbeatTimer);
         heartbeatTimer = null;
       }
+      // Close execution first: browser actions may hold HTTP connections open.
+      // Adapter close interrupts those operations before server.close waits on them.
+      await Promise.allSettled([config.execution?.sandbox?.close(), config.execution?.browser?.close()]);
       // Stop accepting work before tearing down runners and their adapters.
       if (httpServer) {
         const server = httpServer;

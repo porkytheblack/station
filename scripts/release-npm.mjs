@@ -23,6 +23,8 @@ const releaseOrder = [
   "station-adapter-postgres",
   "station-adapter-mysql",
   "station-adapter-redis",
+  "station-sandbox",
+  "station-browser-use",
   "station-kit",
   "station-tauri",
 ];

@@ -6,8 +6,8 @@ The browser runtime is not a Station Network member and needs no companion app.
 
 ## Start from the workspace
 
-`station-browser` is included in the Station 2.3.0 release. After it is published,
-install it with `pnpm add station-browser@^2.3.0`. To work from this release's
+`station-browser` is available since Station 2.3.0. This checkout targets 2.4.0;
+after that release is published, install it with `pnpm add station-browser@^2.4.0`. To work from this release's
 checkout, run `pnpm install` and `pnpm dev:browser` at the repo root, then open
 http://127.0.0.1:4317. For another app in this monorepo, declare
 `station-browser: workspace:*` in dependencies.

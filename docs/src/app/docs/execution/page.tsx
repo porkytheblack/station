@@ -1,0 +1,228 @@
+import { Metadata } from "next";
+import Link from "next/link";
+import { Code } from "../../components/Code";
+
+export const metadata: Metadata = {
+  title: "Sandbox and Browser Use — Station",
+  description: "Run trusted shell workspaces and server browser sessions on specialized Station workers, with owner routing through Headquarters and optional Bun process children.",
+};
+
+export default function ExecutionPage() {
+  return (
+    <>
+      <div className="eyebrow">Experimental guide</div>
+      <h2 style={{ marginTop: 0 }}>Sandbox and Browser Use</h2>
+      <p>
+        Station supplies two separate server execution primitives: native shell
+        workspaces and live browser sessions. A Headquarters service can expose
+        their authenticated API while private, specialized workers own the resources.
+        This first implementation targets trusted operator-controlled workloads;
+        it is not a production multi-tenant execution platform.
+      </p>
+      <table className="api-table">
+        <thead><tr><th>Primitive</th><th>Runs where</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td>station-sandbox</td><td>POSIX worker</td><td>Persistent files, native Bash and bounded commands through a SandboxAdapter.</td></tr>
+          <tr><td>station-browser-use</td><td>Server browser worker</td><td>Navigation, interaction, evaluation and screenshots through Bun WebView or Playwright.</td></tr>
+          <tr><td>station-browser</td><td>Web Worker/service worker</td><td>Browser-local Station signals, DAGs and beacons with IndexedDB.</td></tr>
+        </tbody>
+      </table>
+      <p>
+        Browser Use does not require a Sandbox workspace. The separate
+        <Link href="/docs/browser"> browser runtime</Link> executes Station inside
+        the browser; it does not run Bash or control server browser sessions.
+        For this checkout, use workspace dependencies and the
+        <a href="https://github.com/porkytheblack/station/tree/main/examples/18-execution-network"> execution-network example</a>.
+        These additions are prepared for Station 2.4.0 and still require release
+        and target deployment validation.
+      </p>
+
+      <h3>Native trusted workspaces</h3>
+      <Code>{`import { HostSandboxAdapter } from "station-sandbox";
+
+const sandboxes = new HostSandboxAdapter({
+  rootDir: "/data/workspaces",
+  maxEnvironments: 8,
+  maxConcurrent: 3,
+  maxOutputBytes: 256 * 1024,
+  maxTimeoutMs: 300_000,
+  maxHistoryPerSandbox: 100,
+  env: { PATH: "/opt/tools/bin:/usr/local/bin:/usr/bin:/bin" },
+});
+const workspace = await sandboxes.create();
+const started = await sandboxes.exec(workspace.id, {
+  command: "node --version && git --version && printf hello > greeting.txt",
+  timeoutMs: 30_000,
+});
+// Poll this until finishedAt before treating the result as final.
+const result = await sandboxes.command(workspace.id, started.id);
+console.log(result.status, result.stdout, result.stderr);
+// Graceful shutdown interrupts commands and preserves saved files.
+await sandboxes.close();`}</Code>
+      <p>
+        Install Bash, Node, Git and other native tools in the worker image or host.
+        Commands use those real programs; Unix is not emulated. Each command starts
+        a fresh noninteractive shell with a separate workspace home. Files persist;
+        shell bindings do not. File operations currently use commands. An optional
+        relative <code>cwd</code> must resolve inside the workspace.
+      </p>
+      <p>
+        The host-process adapter advertises <code>isolated: false</code> and
+        <code> pty: false</code>. Commands can access everything permitted to the
+        worker&apos;s OS user, including other workspaces. Directory validation and
+        explicit environment variables organize trusted work; they are not a security
+        boundary. Provision OS/container CPU, memory, disk and process limits separately.
+      </p>
+      <p>
+        Defaults are 20 workspaces, four concurrent commands, 256 KiB of combined
+        captured output, a 30-second timeout with a configurable five-minute maximum,
+        and 100 retained completed commands per workspace. Output is byte-bounded
+        and UTF-8 aware; older completed command IDs expire. Ordinary descendants
+        are cleaned up on shell exit, cancellation, timeout and shutdown. Deliberately
+        escaped process groups are outside this backend&apos;s guarantees.
+      </p>
+
+      <h3>Independent browser sessions</h3>
+      <Code>{`import { BrowserSessionManager } from "station-browser-use";
+import { BunBrowserAdapter } from "station-browser-use/bun";
+
+const browsers = new BrowserSessionManager(new BunBrowserAdapter({
+  bunPath: "bun", backend: "chrome", operationTimeoutMs: 30_000,
+}), 3);
+try {
+  const session = await browsers.open();
+  await browsers.perform(session.id, "navigate", "https://example.com");
+  const title = await browsers.perform(session.id, "evaluate", "document.title");
+  const image = await browsers.perform(session.id, "screenshot");
+  // image: { mimeType: "image/png", base64: string }
+  console.log(title, image);
+  await browsers.closeSession(session.id);
+} finally {
+  await browsers.close();
+}`}</Code>
+      <p>
+        Bun uses a dedicated subprocess per session with an ephemeral profile.
+        Install a Bun version providing WebView and a compatible Chromium binary;
+        <code> chromePath</code> can select its executable. The default backend is
+        Chrome; WebKit is an explicit macOS-only option. A Node Station controller
+        can manage these Bun children without migrating its own runtime.
+      </p>
+      <Code>{`// Alternatively use the optional Playwright peer and installed Chromium:
+import { PlaywrightBrowserAdapter } from "station-browser-use/playwright";
+const browsers = new BrowserSessionManager(
+  new PlaywrightBrowserAdapter({ timeoutMs: 30_000 }), 3,
+);`}</Code>
+      <p>
+        Both adapters support navigate, evaluate, click, type, press and screenshot.
+        Use CSS selectors; focus an element before typing. Evaluation returns
+        JSON-compatible values; wrap multiple statements in an IIFE for Bun.
+        Screenshots capture the current viewport as PNG. The manager rejects
+        concurrent actions on the same handle with <code>busy</code>.
+      </p>
+      <p>
+        Browser sessions have independent lifecycles and are not tenant isolation
+        boundaries. Profiles are ephemeral: closing or restarting loses cookies,
+        tabs and browser memory. Persistent profiles, uploads/downloads, multi-page
+        APIs, proxy settings and idle eviction are deferred. Bun WebView is
+        experimental; local macOS verification does not establish headless Linux
+        or Railway deployment support, or a throughput/memory advantage.
+      </p>
+
+      <h3>Route through the exact owner</h3>
+      <p>
+        Configure three services: public Headquarters, private Sandbox worker and
+        private Browser Use worker. All share Station&apos;s network ID and durable
+        coordination adapters. Workers configure <code>execution.sandbox</code> or
+        <code> execution.browser</code>; Headquarters needs the shared
+        <code> execution.token</code>. This service token must contain at least
+        32 characters and stays between trusted services. Public clients use a
+        separate admin API key or authenticated admin session.
+      </p>
+      <Code>{`// Worker configuration fragment, merged with normal network/storage config:
+execution: { token: process.env.STATION_EXECUTION_TOKEN!, sandbox: sandboxes }
+// Browser worker: execution: { token, browser: browsers }
+// Headquarters: execution: { token }
+
+// All public calls are JSON POST requests:
+/api/v1/stations/:stationId/execution/sandbox
+/api/v1/stations/:stationId/execution/browser`}</Code>
+      <Code>{`// Sandbox request bodies:
+{ "method": "create" }
+{ "method": "exec", "id": "WORKSPACE_ID", "command": "node --version", "timeoutMs": 30000 }
+{ "method": "command", "id": "WORKSPACE_ID", "runId": "COMMAND_ID" }
+{ "method": "cancel", "id": "WORKSPACE_ID", "runId": "COMMAND_ID" }
+{ "method": "destroy", "id": "WORKSPACE_ID" }
+
+// Browser request bodies:
+{ "method": "open" }
+{ "method": "action", "id": "SESSION_ID", "action": "navigate", "value": "https://example.com" }
+{ "method": "action", "id": "SESSION_ID", "action": "screenshot" }
+{ "method": "close", "id": "SESSION_ID" }`}</Code>
+      <p>
+        Successful responses wrap results in <code>data</code>. Both primitives also
+        support <code>list</code>; Sandbox supports <code>get</code>. Keep the selected
+        owner station ID with every resource ID. This API does not automatically place
+        environments or persist distributed session ownership. Existing signal queue
+        placement remains separate.
+      </p>
+      <p>
+        Headquarters rejects offline, expired-lease and wrong-network owners,
+        follows no redirects and never forwards the public API key to a worker.
+        Draining blocks new work and browser actions while preserving Sandbox
+        inspection/cancellation/deletion and browser list/close operations. It does not reroute a live resource to another station. Requests are
+        capped at 128 KiB and successful proxied responses at 33 MiB including JSON/base64 overhead. A timeout can
+        leave the operation&apos;s outcome unknown: inspect the owner before repeating
+        create, open, exec or any other mutation.
+      </p>
+
+      <h3>Persistence and service deployment</h3>
+      <p>
+        Use one process/replica per stable worker ID and one manager per Sandbox
+        root. Mount persistent storage for workspace files and Station data; persist
+        Headquarters&apos; data directory for API keys and session secrets. Shared
+        Postgres coordinates Station membership, jobs and schedules; it does not
+        store browser memory or workspace files. A service volume is not a shared
+        multi-worker filesystem.
+      </p>
+      <p>
+        On restart, leftover running command records become interrupted and are
+        never automatically replayed. Saved files can survive; processes, shells
+        and browser sessions do not. Supervisors must reap the old process tree
+        before a replacement takes ownership. Workers need private reachable HTTP
+        endpoints, packaged tools and browser libraries, and required outbound
+        access. Disable sleeping when retaining live sessions.
+      </p>
+      <p>
+        The example describes an ordinary service deployment contract. Real Linux
+        and Railway deployment is not yet validated. Automatic placement,
+        distributed ownership, migration, streaming PTYs, tenant authorization,
+        stronger isolation, high availability and billing remain future work.
+      </p>
+
+      <h3>Opt in to Bun signal and beacon children</h3>
+      <Code>{`import { defineConfig } from "station-kit";
+import { BunProcessRuntime } from "station-signal";
+
+export default defineConfig({
+  signalsDir: "./src/signals",
+  beaconsDir: "./src/beacons",
+  processRuntime: new BunProcessRuntime("bun"),
+});`}</Code>
+      <p>
+        Node remains the default. <code>ProcessRuntime</code> selects signal/beacon
+        bootstrap children and preserves JSON IPC; Bun loads TypeScript natively.
+        The same option is available on <code>SignalRunner</code> and
+        <code> BeaconRunner</code>. It does not switch the controller, Sandbox shell
+        or browser adapter, and provides no isolation. Validate dependencies and
+        representative workload behavior before rollout; benchmark actual Station
+        jobs before claiming faster throughput or lower resource use.
+      </p>
+      <p>
+        Read the <a href="https://github.com/porkytheblack/station/tree/main/packages/station-sandbox">Sandbox reference</a>,
+        {" "}<a href="https://github.com/porkytheblack/station/tree/main/packages/station-browser-use">Browser Use reference</a>,
+        {" "}<a href="https://github.com/porkytheblack/station/tree/main/examples/18-execution-network">three-service example</a>
+        {" "}and <Link href="/docs/network">Station Network guide</Link> for the complete setup.
+      </p>
+    </>
+  );
+}

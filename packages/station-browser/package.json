@@ -1,6 +1,6 @@
 {
   "name": "station-browser",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "Experimental browser runtime for Station signals, broadcasts, and supervised beacons",
   "type": "module",
   "license": "MIT",

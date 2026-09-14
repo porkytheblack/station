@@ -1,4 +1,5 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import { NodeProcessRuntime, type ProcessRuntime } from "./process-runtime.js";
+import type { ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -99,6 +100,8 @@ export interface SignalNetworkCoordinator {
 }
 
 export interface SignalRunnerOptions {
+  /** Child execution runtime. Defaults to Node; does not change controller runtime. */
+  processRuntime?: ProcessRuntime;
   signalsDir?: string;
   adapter?: SignalQueueAdapter;
   pollIntervalMs?: number;
@@ -174,6 +177,7 @@ export class SignalRunner {
   private subscribers: SignalSubscriber[];
   private maxConcurrent: number;
   private scheduleReconciler?: SignalScheduleReconciler;
+  private processRuntime: ProcessRuntime;
   private envProvider?: EnvProvider;
   private stationId: string;
   private leaseDurationMs: number;
@@ -210,6 +214,7 @@ export class SignalRunner {
   private static readonly ORPHAN_SWEEP_INTERVAL_MS = 30_000;
 
   constructor(options: SignalRunnerOptions = {}) {
+    this.processRuntime = options.processRuntime ?? new NodeProcessRuntime();
     const adapter = options.adapter ?? new MemoryAdapter();
     configure({ adapter });
     this.adapter = adapter;
@@ -1078,12 +1083,37 @@ export class SignalRunner {
       STATION_SIGNAL_TIMEOUT: String(run.timeout ?? DEFAULT_TIMEOUT_MS),
     };
 
-    const tsxImport = getTsxImport();
-    const nodeArgs = tsxImport ? ["--import", tsxImport, BOOTSTRAP] : [BOOTSTRAP];
-    const child = spawn("node", nodeArgs, {
-      env,
-      stdio: ["ignore", "pipe", "pipe", "ipc"],
-    });
+    const failRun = async (error: string) => {
+      const currentRun = await this.adapter.getRun(run.id);
+      if (!currentRun || currentRun.status !== "running") return;
+      const attempts = currentRun.attempts;
+      const maxAttempts = run.maxAttempts ?? this.defaultMaxAttempts;
+      if (attempts < maxAttempts) {
+        const updated = await this.updateOwnedRun(run, {
+          status: "pending", startedAt: undefined, lastRunAt: new Date(), error,
+          stationId: undefined, leaseToken: undefined, leaseExpiresAt: undefined, claimedAt: undefined,
+        });
+        if (updated) this.emit("onRunRetry", { run: currentRun, attempt: attempts, maxAttempts });
+      } else {
+        const updated = await this.updateOwnedRun(run, {
+          status: "failed", completedAt: new Date(), error,
+          leaseToken: undefined, leaseExpiresAt: undefined,
+        });
+        if (updated) this.emit("onRunFailed", { run: currentRun, error });
+      }
+    };
+    let child: ChildProcess;
+    try {
+      child = this.processRuntime.spawn({ entrypoint: BOOTSTRAP, env, tsxImport: getTsxImport() });
+    } catch (error) {
+      this.activeCount = Math.max(0, this.activeCount - 1);
+      this.decrementPerSignal(run.signalName);
+      void Promise.all([
+        this.releaseNetworkSlot(run.id),
+        failRun(`Child process error: ${error instanceof Error ? error.message : String(error)}`),
+      ]).catch((err) => console.error("[station-signal] Failed to record launch failure:", err));
+      return;
+    }
 
     const init: JobInitMessage = {
       type: "job:init",
@@ -1098,11 +1128,6 @@ export class SignalRunner {
         env: injectedEnv && Object.keys(injectedEnv).length > 0 ? injectedEnv : undefined,
       },
     };
-    try {
-      child.send(init);
-    } catch (err) {
-      console.error(`[station-signal] Failed to send job to child for "${sig.name}":`, err);
-    }
 
     // A retry reuses the same run id. If a previous attempt's child is somehow
     // still tracked, reap it rather than letting this `set` drop the reference.
@@ -1119,7 +1144,7 @@ export class SignalRunner {
       // not. Without this a handler that leaks a handle leaves a permanent
       // zero-CPU process behind, and the container eventually cannot fork
       // (`spawn node EAGAIN`).
-      this.ensureExit(child, run.signalName, this.reapGraceMs);
+      if (child.pid) this.ensureExit(child, run.signalName, this.reapGraceMs);
       void this.releaseNetworkSlot(run.id).catch((err) => {
         console.error(`[station-signal] Failed to release network slot for "${run.signalName}":`, err);
       });
@@ -1231,17 +1256,17 @@ export class SignalRunner {
       this.emit("onLogOutput", { run, level: "stderr", message: chunk.toString() });
     });
 
-    child.on("error", (err) => {
+    const onChildError = (err: Error) => {
+      if (resolved) return;
       resolved = true;
       this.activeCount = Math.max(0, this.activeCount - 1);
       this.decrementPerSignal(run.signalName);
-      this.untrack(run.id, child);
-      this.clearReap(child);
-      void this.releaseNetworkSlot(run.id).catch((slotErr) => {
-        console.error(`[station-signal] Failed to release network slot for "${run.signalName}":`, slotErr);
+      cleanup();
+      void failRun(`Child process error: ${err.message}`).catch((error) => {
+        console.error(`[station-signal] Failed to record process failure for "${sig.name}":`, error);
       });
-      console.error(`[station-signal] Failed to spawn process for "${sig.name}":`, err);
-    });
+    };
+    child.on("error", onChildError);
 
     child.on("exit", async () => {
       this.clearReap(child);
@@ -1265,40 +1290,14 @@ export class SignalRunner {
 
       if (resolved) return;
 
-      // Check if the run was already handled (cancelled/timed out/completed/retried)
-      const currentRun = await this.adapter.getRun(run.id);
-      if (!currentRun || currentRun.status !== "running") {
-        return;
-      }
-
-      const error = "Child process exited unexpectedly";
-      const attempts = currentRun.attempts;
-      const maxAttempts = run.maxAttempts ?? this.defaultMaxAttempts;
-
-      if (attempts < maxAttempts) {
-        const updated = await this.updateOwnedRun(run, {
-          status: "pending",
-          startedAt: undefined,
-          lastRunAt: new Date(),
-          error,
-          stationId: undefined,
-          leaseToken: undefined,
-          leaseExpiresAt: undefined,
-          claimedAt: undefined,
-        });
-        if (!updated) return;
-        this.emit("onRunRetry", { run: currentRun, attempt: attempts, maxAttempts });
-      } else {
-        const updated = await this.updateOwnedRun(run, {
-          status: "failed",
-          completedAt: new Date(),
-          error,
-          leaseToken: undefined,
-          leaseExpiresAt: undefined,
-        });
-        if (!updated) return;
-        this.emit("onRunFailed", { run: currentRun, error });
-      }
+      resolved = true;
+      await failRun("Child process exited unexpectedly");
+    });
+    // Wait for a successful spawn and install all listeners before sending IPC.
+    // Missing executables emit error without ever emitting spawn.
+    child.once("spawn", () => {
+      try { child.send(init, (error) => { if (error) onChildError(error); }); }
+      catch (error) { onChildError(error instanceof Error ? error : new Error(String(error))); }
     });
   }
 }

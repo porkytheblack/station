@@ -1,9 +1,11 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  NodeProcessRuntime,
+  type ProcessRuntime,
   type EnvProvider,
   type SignalQueueAdapter,
   type SignalRunner,
@@ -114,6 +116,8 @@ export interface UpdateInstanceOptions {
 }
 
 export interface BeaconRunnerOptions {
+  /** Child execution runtime. Defaults to Node; does not change controller runtime. */
+  processRuntime?: ProcessRuntime;
   beaconsDir?: string;
   adapter?: BeaconStateAdapter;
   /** Supervisor reconcile cadence. @default 1000 */
@@ -178,6 +182,7 @@ export class BeaconRunner {
   private signalAdapterName?: string;
   private signalAdapterOptions?: Record<string, unknown>;
   private signalAdapterImport?: string;
+  private processRuntime: ProcessRuntime;
   private envProvider?: EnvProvider;
   private networkCoordinator?: BeaconRunnerOptions["networkCoordinator"];
   private networkId: string;
@@ -197,6 +202,7 @@ export class BeaconRunner {
   private markReady!: () => void;
 
   constructor(options: BeaconRunnerOptions = {}) {
+    this.processRuntime = options.processRuntime ?? new NodeProcessRuntime();
     this.adapter = options.adapter ?? new BeaconMemoryAdapter();
     this.beaconsDir = options.beaconsDir;
     this.pollIntervalMs = options.pollIntervalMs ?? 1000;
@@ -1107,12 +1113,17 @@ export class BeaconRunner {
       return;
     }
 
-    const tsxImport = getTsxImport();
-    const nodeArgs = tsxImport ? ["--import", tsxImport, BOOTSTRAP] : [BOOTSTRAP];
-    const child = spawn("node", nodeArgs, {
-      env,
-      stdio: ["ignore", "pipe", "pipe", "ipc"],
-    });
+    let child: ChildProcess;
+    try {
+      child = this.processRuntime.spawn({ entrypoint: BOOTSTRAP, env, tsxImport: getTsxImport() });
+    } catch (error) {
+      this.supervised.set(instanceId, {
+        stopRequested: false, stalled: false, forceRestart: false,
+        exitHandled: false, startedAtMs: Date.now(),
+      });
+      await this.handleExit(beacon, instanceId, null, error instanceof Error ? error.message : String(error));
+      return;
+    }
 
     const jobInit: BeaconJobInitMessage = {
       type: "job:init",
@@ -1124,11 +1135,7 @@ export class BeaconRunner {
         env: injectedEnv && Object.keys(injectedEnv).length > 0 ? injectedEnv : undefined,
       },
     };
-    try {
-      child.send(jobInit);
-    } catch (err) {
-      console.error(`[station-beacon] Failed to send job:init to "${instanceId}":`, err);
-    }
+
     // The supervisor's own poll loop keeps this process alive; a child must not.
     // Otherwise a lingering beacon would prevent the supervisor from exiting.
     // (stdout/stderr are sockets at runtime, but typed as Readable without unref.)
@@ -1145,7 +1152,6 @@ export class BeaconRunner {
       startedAtMs: Date.now(),
     };
     this.supervised.set(instanceId, sup);
-    await this.patch(instanceId, { pid: child.pid });
 
     child.on("message", (msg: BeaconIPCMessage) => {
       this.handleMessage(instanceId, msg).catch((err) =>
@@ -1158,13 +1164,28 @@ export class BeaconRunner {
     child.stderr?.on("data", (chunk: Buffer) => {
       this.emitLog(instanceId, "stderr", chunk.toString());
     });
+    let initError: string | undefined;
+    const failInit = (error: Error) => {
+      if (sup.exitHandled || initError) return;
+      initError = error.message;
+      // A send failure is not proof of process exit. Retain supervision until
+      // exit and escalate termination so a disconnected handler cannot leak.
+      child.kill("SIGTERM");
+      sup.killTimer = setTimeout(() => child.kill("SIGKILL"), 1_000);
+      sup.killTimer.unref?.();
+    };
     child.on("error", (err) => {
-      console.error(`[station-beacon] Failed to spawn "${instanceId}":`, err);
-      void this.handleExit(beacon, instanceId, null, err.message);
+      if (child.pid) failInit(err);
+      else void this.handleExit(beacon, instanceId, null, err.message);
     });
     child.on("exit", (code) => {
-      void this.handleExit(beacon, instanceId, code);
+      void this.handleExit(beacon, instanceId, code, initError);
     });
+    child.once("spawn", () => {
+      try { child.send(jobInit, (error) => { if (error) failInit(error); }); }
+      catch (error) { failInit(error instanceof Error ? error : new Error(String(error))); }
+    });
+    await this.patch(instanceId, { pid: child.pid });
   }
 
   private async handleMessage(instanceId: string, msg: BeaconIPCMessage): Promise<void> {

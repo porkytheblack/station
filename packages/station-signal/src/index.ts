@@ -36,3 +36,5 @@ export { HttpTriggerAdapter, type HttpTriggerOptions } from "./adapters/http-tri
 export { isSignal, isReservedEnvKey, SIGNAL_BRAND } from "./util.js";
 
 export { z } from "zod";
+
+export { NodeProcessRuntime, BunProcessRuntime, type ProcessRuntime, type ProcessSpawnOptions } from "./process-runtime.js";

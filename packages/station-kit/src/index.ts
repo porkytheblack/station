@@ -8,6 +8,7 @@ export type {
   StationConfig,
   StationUserConfig,
   AuthConfig,
+  ExecutionConfig,
   DeployConfig,
   SubscribersConfig,
   StationNetworkConfig,

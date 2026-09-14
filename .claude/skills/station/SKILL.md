@@ -1,15 +1,20 @@
 ---
 name: station
-description: Build, scale, test, or operate TypeScript background work with Station. Use for station-kit configuration, signals, broadcasts, beacons, runtime schedules, Station Networks and Headquarters, fleet concurrency and placement, SQLite/PostgreSQL/MySQL/Redis adapters, the dashboard and v1 API, browser-local signals/workflows/beacons in Web Workers or service workers, environment variables, subscribers, deployment, or Station troubleshooting.
+description: Build, scale, test, or operate TypeScript background work with Station. Use for station-kit configuration, signals, broadcasts, beacons, runtime schedules, Station Networks and Headquarters, fleet concurrency and placement, SQLite/PostgreSQL/MySQL/Redis adapters, the dashboard and v1 API, browser-local signals/workflows/beacons in Web Workers or service workers, trusted shell workspaces and server browser automation, Bun process runtimes, environment variables, subscribers, deployment, or Station troubleshooting.
 ---
 
 # Build with Station
 
 Choose the runtime first. For browser-local execution, read [browser.md](browser.md)
 and use `BrowserStation` from `station-browser` with explicit registries and
-IndexedDB. It is experimental and included in the Station 2.3.0 release. Do not
+IndexedDB. It is experimental and available since Station 2.3.0. Do not
 create a Node server, native companion, or Station Network for browser-only work.
 Do not promise continuous polling after a PWA closes.
+
+For server shell workspaces, browser automation, owner-routed execution APIs, or
+optional Bun signal/beacon children, read [execution.md](execution.md). Sandbox and
+Browser Use are separate primitives; neither is the browser-local service-worker
+runtime. This first slice is for trusted workloads and does not restore live sessions.
 
 For Node applications, use `station-kit` as the application entry point. Create a `station.config.ts`
 with `defineConfig`, export definitions from the configured directories, and run
@@ -281,6 +286,8 @@ Measure the intended production adapter and workload before sizing a fleet.
 - Read [browser.md](browser.md) first for browser-local applications: shared
   registries, Web Worker/service-worker hosts, cooperative execution, API usage,
   versioning, and beacon configuration and start modes.
+- Read [execution.md](execution.md) for Sandbox and Browser Use adapters,
+  exact-owner Headquarters routing, persistence limits and opt-in Bun children.
 - Read [api-reference.md](api-reference.md) for exact types, methods, adapters,
   v1 endpoints, and package exports. Station Networks are in §15.
 - Read [examples.md](examples.md) for complete applications and deployment

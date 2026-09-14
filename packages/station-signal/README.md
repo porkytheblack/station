@@ -303,3 +303,17 @@ type QueueEntryKind = "trigger" | "recurring";
 const DEFAULT_TIMEOUT_MS = 300_000;   // 5 minutes
 const DEFAULT_MAX_ATTEMPTS = 1;       // no retry by default
 ```
+
+## Selecting the child runtime
+
+Node remains the default. Set `processRuntime` on `SignalRunner` (or StationKit's `defineConfig`) to execute signal children with Bun while keeping the controller on Node:
+
+```ts
+import { SignalRunner, BunProcessRuntime } from "station-signal";
+
+const runner = new SignalRunner({ processRuntime: new BunProcessRuntime() });
+```
+
+`NodeProcessRuntime` uses Node with an available tsx hook; `BunProcessRuntime` uses Bun's native TypeScript support. Both accept an optional executable path string. Bun must be installed on the worker; a missing executable fails the run and does not fall back silently. StationKit passes the selected runtime to its signal and beacon runners. Broadcast signal steps use that same signal runner.
+
+Custom `ProcessRuntime` adapters implement `name` and `spawn({ entrypoint, env, tsxImport })`, returning a Node-compatible `ChildProcess` with piped output, JSON IPC, and lifecycle methods. This is a process launcher contract, not an isolation boundary. Verify application dependencies and native modules with your chosen runtime. Bun is opt-in; no fleet throughput or memory improvement is guaranteed.

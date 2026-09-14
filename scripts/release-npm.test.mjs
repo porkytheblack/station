@@ -82,14 +82,14 @@ test("all builds, checks, archives and publish dry runs precede any upload", () 
   assert.equal(result.status, 0, result.output);
   const commands = result.commands;
   const uploads = commands.filter((c) => c.command === "npm" && c.args[0] === "publish" && !c.args.includes("--dry-run"));
-  assert.equal(uploads.length, 14);
+  assert.equal(uploads.length, 16);
   const firstUpload = commands.indexOf(uploads[0]);
   for (const action of ["build", "typecheck", "test:browser:install", "test"]) {
     const index = commands.findIndex((c) => c.command === "pnpm" && c.args[0] === action);
     assert.ok(index >= 0 && index < firstUpload, action);
   }
-  assert.equal(commands.slice(0, firstUpload).filter((c) => c.args.includes("pack")).length, 14);
-  assert.equal(commands.slice(0, firstUpload).filter((c) => c.command === "npm" && c.args.includes("--dry-run")).length, 14);
+  assert.equal(commands.slice(0, firstUpload).filter((c) => c.args.includes("pack")).length, 16);
+  assert.equal(commands.slice(0, firstUpload).filter((c) => c.command === "npm" && c.args.includes("--dry-run")).length, 16);
   assert.ok(uploads.findIndex((c) => c.args[1].includes("station-browser-")) > uploads.findIndex((c) => c.args[1].includes("station-beacon-")));
 });
 
@@ -110,7 +110,7 @@ test("dry-run never uploads and resume still rebuilds dependencies", () => {
   assert.equal(result.status, 0, result.output);
   assert.ok(result.commands.some((c) => c.command === "pnpm" && c.args[0] === "build"));
   const publishes = result.commands.filter((c) => c.command === "npm" && c.args[0] === "publish");
-  assert.equal(publishes.length, 13);
+  assert.equal(publishes.length, 15);
   assert.ok(publishes.every((c) => c.args.includes("--dry-run") && !c.args[1].includes("station-signal-")));
 });
 

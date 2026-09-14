@@ -34,6 +34,13 @@ export default function NetworkPage() {
         completing the recovered attempt.
       </p>
 
+      <p>
+        Specialized stations can also own <Link href="/docs/execution">Sandbox
+        workspaces and Browser Use sessions</Link>. Their initial execution API
+        routes requests to an explicitly selected owner through Headquarters;
+        it does not use signal queue placement or migrate live sessions.
+      </p>
+
       <h3>Configure Headquarters</h3>
       <Code>{`import { defineConfig } from "station-kit";
 import { PostgresAdapter } from "station-adapter-postgres";

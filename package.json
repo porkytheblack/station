@@ -12,7 +12,9 @@
     "release": "node scripts/release-npm.mjs",
     "release:dry-run": "node scripts/release-npm.mjs --dry-run",
     "release:npm": "node scripts/release-npm.mjs",
-    "release:npm:dry-run": "node scripts/release-npm.mjs --dry-run"
+    "release:npm:dry-run": "node scripts/release-npm.mjs --dry-run",
+    "benchmark:runtimes": "pnpm --filter station-signal build && node scripts/benchmark-runtimes.mjs",
+    "test:browser-use": "pnpm --filter station-browser-use test:browsers"
   },
   "devDependencies": {
     "@types/node": "^25.3.0",

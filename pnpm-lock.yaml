@@ -321,6 +321,34 @@ importers:
         specifier: ^1.63.0
         version: 1.63.0
 
+  examples/18-execution-network:
+    dependencies:
+      playwright:
+        specifier: ^1.63.0
+        version: 1.63.0
+      station-adapter-postgres:
+        specifier: workspace:*
+        version: link:../../packages/station-adapter-postgres
+      station-browser-use:
+        specifier: workspace:*
+        version: link:../../packages/station-browser-use
+      station-kit:
+        specifier: workspace:*
+        version: link:../../packages/station-kit
+      station-sandbox:
+        specifier: workspace:*
+        version: link:../../packages/station-sandbox
+      station-signal:
+        specifier: workspace:*
+        version: link:../../packages/station-signal
+    devDependencies:
+      '@types/node':
+        specifier: ^25.3.0
+        version: 25.3.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
   packages/station-adapter-mysql:
     dependencies:
       mysql2:
@@ -468,6 +496,12 @@ importers:
         specifier: workspace:*
         version: link:../station-signal
 
+  packages/station-browser-use:
+    devDependencies:
+      playwright:
+        specifier: ^1.63.0
+        version: 1.63.0
+
   packages/station-env:
     devDependencies:
       '@types/node':
@@ -506,6 +540,9 @@ importers:
       react-dom:
         specifier: 19.2.4
         version: 19.2.4(react@19.2.4)
+      station-browser-use:
+        specifier: workspace:*
+        version: link:../station-browser-use
       station-env:
         specifier: workspace:*
         version: link:../station-env
@@ -515,6 +552,9 @@ importers:
       station-network:
         specifier: workspace:*
         version: link:../station-network
+      station-sandbox:
+        specifier: workspace:*
+        version: link:../station-sandbox
       station-schedules:
         specifier: workspace:*
         version: link:../station-schedules
@@ -564,6 +604,8 @@ importers:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+
+  packages/station-sandbox: {}
 
   packages/station-schedules:
     devDependencies:
