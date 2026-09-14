@@ -1,0 +1,18 @@
+{
+  "testedCodeCommit": "8a4047a5849f922288b61822ed98eae22a588add",
+  "verifiedAt": "2026-09-14T13:43:01.785872+00:00",
+  "command": "pnpm release:dry-run",
+  "cleanTreeRequired": true,
+  "packages": 16,
+  "version": "2.4.0",
+  "tapPassed": 400,
+  "tapFailed": 0,
+  "tapSkipped": 2,
+  "browserRuntimeChecks": "26/26",
+  "builds": "passed",
+  "typechecks": "passed",
+  "archiveValidation": "passed",
+  "npmPublishDryRuns": "passed",
+  "uploaded": false,
+  "realModelVerification": "pending explicit approval for paid OpenRouter test"
+}

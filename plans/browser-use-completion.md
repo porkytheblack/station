@@ -4,6 +4,13 @@ Browser Use now has separate session pages for Control, Live, Pages, Tools, Insp
 
 ## Agent integration — release candidate
 
+The final clean-tree `pnpm release:dry-run` passed for Station 2.4.0, all 16
+packages: builds, typechecks, **400 passing tests**, two existing skips,
+26/26 browser-runtime checks, archive validation and npm publish dry runs.
+[Release validation record](artifacts/browser-use-completion/release-validation.json).
+Nothing was uploaded. The code is committed locally; the real-model test below
+is the remaining verification awaiting approval.
+
 The published Browser Use package now exports `station-browser-use/agent` and
 `station-browser-use/client`. Nine framework-neutral tools provide workflow-scoped
 sessions, structured browser commands, bounded DOM/ARIA observations, screenshots,
