@@ -25,4 +25,4 @@ The smoke suite mirrors the existing browser integration scenarios while supplyi
 
 The container and test workspaces are removed on exit; the built image remains in the local engine cache. To remove it afterward, run `podman image rm station-execution-linux:local` (or the Docker equivalent).
 
-Validated September 14, 2026 on Debian ARM64: Node 22.23.2, Bun 1.3.14 and Chromium 152.0.7977.82. All 23 Node tests, 23 Bun tests and both real browser smoke tests passed without skips.
+Validated September 14, 2026 on Debian ARM64: Node 22.23.2, Bun 1.3.14 and Chromium 152.0.7977.82. At that checkpoint all 23 Node tests, 23 Bun tests and both real browser smoke tests passed without skips. The subsequent recording suite is included for future Linux runs; its first validation was on macOS Node and Bun.

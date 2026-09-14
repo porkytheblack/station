@@ -59,11 +59,11 @@ function validate(primitive: string, input: unknown): RequestBody {
   const b = input as RequestBody;
   const layouts: Record<string, string[]> = primitive === "sandbox"
     ? { create: [], list: [], get: ["id"], destroy: ["id"], exec: ["id", "command", "cwd", "timeoutMs"], command: ["id", "runId"], cancel: ["id", "runId"] }
-    : primitive === "browser" ? { open: [], list: [], action: ["id", "action", "value"], close: ["id"] } : {};
+    : primitive === "browser" ? { open: [], list: [], action: ["id", "action", "value"], close: ["id"], recordingStart: ["id"], recordingStop: ["id"], recordings: [], recording: ["id"], recordingFrame: ["id", "frameId"], recordingDelete: ["id"] } : {};
   if (typeof b.method !== "string" || !Object.hasOwn(layouts, b.method)) return invalid();
   const keys = layouts[b.method];
   if (Object.keys(b).some((key) => key !== "method" && !keys.includes(key))) return invalid();
-  for (const key of ["id", "runId"]) {
+  for (const key of ["id", "runId", "frameId"]) {
     if (keys.includes(key) && (typeof b[key] !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(b[key] as string))) return invalid();
   }
   if (b.method === "exec") {
@@ -83,7 +83,7 @@ function assertAvailable(node: StationNode | null, networkId: string, primitive:
   if (node.status === "offline" || node.leaseExpiresAt.getTime() <= Date.now()) throw new SandboxError("unavailable", messages.unavailable);
   const cleanup = primitive === "sandbox"
     ? ["list", "get", "command", "cancel", "destroy"].includes(body.method)
-    : ["list", "close"].includes(body.method);
+    : ["list", "close", "recordings", "recording", "recordingFrame", "recordingStop", "recordingDelete"].includes(body.method);
   if (node.status !== "online" && !(node.status === "draining" && cleanup)) throw new SandboxError("unavailable", messages.unavailable);
 }
 async function dispatch(config: ExecutionConfig, primitive: string, b: RequestBody): Promise<unknown> {
@@ -106,6 +106,12 @@ async function dispatch(config: ExecutionConfig, primitive: string, b: RequestBo
       case "list": return a.list();
       case "action": return a.perform(b.id as string, b.action as BrowserAction, b.value as string | undefined);
       case "close": await a.closeSession(b.id as string); return null;
+      case "recordingStart": return a.startRecording(b.id as string);
+      case "recordingStop": return a.stopRecording(b.id as string);
+      case "recordings": return a.listRecordings();
+      case "recording": return a.getRecording(b.id as string);
+      case "recordingFrame": return a.recordingFrame(b.id as string, b.frameId as string);
+      case "recordingDelete": await a.deleteRecording(b.id as string); return null;
     }
   }
   throw new SandboxError("unsupported", messages.unsupported);

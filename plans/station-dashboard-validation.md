@@ -2,6 +2,8 @@
 
 September 14, 2026 · prepared release 2.4.0
 
+Follow-up: [Browser Use recording and playback](./station-browser-recording.md) adds five-second screenshots and retained-session playback.
+
 StationKit now exposes **Sandboxes** and **Browser Use** as separate dashboard pages. Administrators can select a capable worker and manage its resources through Headquarters. A real custom CLI installation was verified through the dashboard, including a fresh command and a complete restart of the owning worker.
 
 ## What changed

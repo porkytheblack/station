@@ -220,3 +220,60 @@ test("proxy preserves browser output above 16 MiB with a bounded envelope", asyn
   bytes = 34 * 1024 * 1024;
   assert.equal((await app.request("/stations/browser/execution/browser", request(body, admin))).status, 503);
 });
+
+test("browser recordings stay owner-routed and admin-only, with retained frames and draining cleanup", async (t) => {
+  const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+  const browser = new BrowserSessionManager({ name: "fixture", capabilities: { screenshots: true, independentSessions: true }, async open() {
+    return { async navigate() {}, async evaluate() {}, async click() {}, async type() {}, async press() {}, async screenshot() { return png; }, async close() {} };
+  } });
+  const network = new StationNetworkMemoryAdapter();
+  const deps: ExecutionDeps = { execution: { token, browser }, adapter: network, networkId: "test", stationId: "worker", role: "station" };
+  const worker = new Hono();
+  worker.route("/internal", internalExecutionRoutes(deps));
+  const server = serve({ fetch: worker.fetch, hostname: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve) => server.listening ? resolve() : server.once("listening", resolve));
+  t.after(async () => { await browser.close(); await new Promise<void>((resolve) => server.close(() => resolve())); });
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const endpoint = `http://127.0.0.1:${address.port}`;
+  await network.upsertStation(node("worker", endpoint));
+  const keys = new KeyStore(new MemoryKeyStorage());
+  const admin = (await keys.create("operator", ["admin"])).key;
+  const read = (await keys.create("observer", ["read"])).key;
+  const hq = new Hono();
+  hq.use("/*", authResolver({ keyStore: keys }));
+  hq.route("/", publicExecutionRoutes({ ...deps, execution: { token }, stationId: "hq", role: "headquarters" }));
+  const path = "/stations/worker/execution/browser";
+  const call = (body: unknown, auth = admin) => hq.request(path, request(body, auth));
+  assert.equal((await hq.request(path, request({ method: "recordings" }))).status, 401);
+  assert.equal((await call({ method: "recordings" }, read)).status, 403);
+  assert.equal((await fetch(`${endpoint}/internal/execution/browser`, request({ method: "recordings" }, admin))).status, 401);
+  const { data: session } = await (await call({ method: "open" })).json();
+  const started = await call({ method: "recordingStart", id: session.id });
+  assert.equal(started.status, 200);
+  let recording = (await started.json()).data;
+  assert.equal(recording.intervalMs, 5000);
+  for (let attempts = 0; recording.frames.length === 0 && attempts < 100; attempts++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    recording = (await (await call({ method: "recording", id: recording.id })).json()).data;
+  }
+  assert.equal(recording.frames.length, 1);
+  const frame = recording.frames[0];
+  assert.ok(!JSON.stringify(recording).includes("base64"), "metadata does not transfer image payloads");
+  for (const invalid of [
+    { method: "recordingFrame", id: recording.id, frameId: "../outside" },
+    { method: "recordingFrame", id: recording.id },
+    { method: "recordingStart", id: session.id, intervalMs: 1 },
+  ]) assert.equal((await call(invalid)).status, 400);
+  await network.upsertStation(node("worker", endpoint, { status: "draining" }));
+  assert.equal((await call({ method: "recordingStart", id: session.id })).status, 503);
+  assert.equal((await call({ method: "recordingStop", id: recording.id })).status, 200);
+  assert.equal((await call({ method: "close", id: session.id })).status, 200);
+  assert.equal((await call({ method: "recordings" })).status, 200);
+  const retained = await call({ method: "recordingFrame", id: recording.id, frameId: frame.id });
+  assert.equal(retained.status, 200);
+  assert.deepEqual((await retained.json()).data, { mimeType: "image/png", base64: Buffer.from(png).toString("base64") });
+  assert.equal((await call({ method: "recordingFrame", id: recording.id, frameId: "missing" })).status, 404);
+  assert.equal((await call({ method: "recordingDelete", id: recording.id })).status, 200);
+  assert.equal((await call({ method: "recording", id: recording.id })).status, 404);
+});

@@ -124,6 +124,9 @@ The administrator dashboard provides `/sandboxes` and `/browser-use`, discoverin
 advertised workers through `GET /api/v1/execution`. Workspace-local and home-global
 npm tools are available by command name and persist with the worker's workspace
 volume across new shells/restarts; this does not provide filesystem isolation.
+Browser Use can record a screenshot every five seconds for timestamped playback
+and scrubbing. Recording continues without the dashboard; bounded frame history
+is retained in worker memory after session close and cleared on worker restart.
 The `pnpm test:execution:dashboard` harness exercises the built
 Headquarters/private-worker topology, browser control and a custom offline CLI
 installation. See the [validation report](./plans/station-dashboard-validation.md)

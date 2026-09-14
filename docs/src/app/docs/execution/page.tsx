@@ -167,6 +167,36 @@ const browsers = new BrowserSessionManager(
         or migrate resources. The internal worker token stays between services.
       </p>
 
+      <h3>Record screenshots and play them back</h3>
+      <p>
+        Select a live browser and choose Start recording. The worker captures a
+        viewport PNG immediately and then every five seconds, even when the
+        dashboard is closed. Busy browser operations skip a capture rather than
+        queueing screenshots. This is a sequence of still frames, not a video or
+        a complete audit of every action.
+      </p>
+      <p>
+        Select a recording to play, pause or scrub through timestamped frames.
+        Closing a browser stops its recording and keeps captured frames available.
+        Defaults are 120 frames per recording, 16 retained recordings, and 64 MiB
+        of PNG data across the worker manager. Reaching a limit stops capture and
+        preserves existing frames. Delete recordings to release space. Recordings
+        live in worker memory and are lost when it restarts.
+      </p>
+      <Code>{`const recording = browsers.startRecording(session.id);
+// Later, stop capture without closing the browser:
+await browsers.stopRecording(recording.id);
+const metadata = browsers.getRecording(recording.id);
+const image = browsers.recordingFrame(recording.id, metadata.frames[0].id);
+// image: { mimeType: "image/png", base64: string }
+await browsers.deleteRecording(recording.id);`}</Code>
+      <p>
+        The same owner-routed admin endpoint supports recordingStart (session id),
+        recordingStop, recording, recordingDelete (recording id), recordings (list),
+        and recordingFrame (recording id and frameId). Metadata omits PNG payloads;
+        playback fetches individual frames on demand.
+      </p>
+
       <h3>Route through the exact owner</h3>
       <p>
         Configure three services: public Headquarters, private Sandbox worker and

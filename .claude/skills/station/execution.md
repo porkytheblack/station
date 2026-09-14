@@ -125,7 +125,22 @@ Browser request bodies:
 { "method": "close", "id": "SESSION_ID" }
 ```
 
-`list` is also supported. Successful responses wrap the result in `data`. The gateway checks owner membership, state and lease, rejects offline/expired or wrong-network owners, follows no redirects, and forwards its internal token rather than the public key. Draining blocks new work and browser actions while retaining Sandbox inspection/cancellation/deletion and browser list/close operations. It does not fall back to another worker if the owner is unavailable. Requests are capped at 128 KiB and successful proxied responses at 33 MiB, including JSON/base64 overhead.
+Recording request bodies use the same browser endpoint:
+
+```json
+{ "method": "recordingStart", "id": "SESSION_ID" }
+{ "method": "recordings" }
+{ "method": "recording", "id": "RECORDING_ID" }
+{ "method": "recordingFrame", "id": "RECORDING_ID", "frameId": "FRAME_ID" }
+{ "method": "recordingStop", "id": "RECORDING_ID" }
+{ "method": "recordingDelete", "id": "RECORDING_ID" }
+```
+
+Recording is opt-in. The worker takes a viewport PNG immediately and every 5 seconds, independently of dashboard presence; busy ticks are skipped. Dashboard playback supports play/pause and a timestamped scrubber. This is a still-frame sequence, not continuous video or a complete action audit. Start is idempotent while that session is already recording. Browser close stops capture, retaining history until deletion or worker restart. Metadata contains frame IDs/timestamps/byte counts; request each PNG separately. Default limits: 120 frames per recording, 16 retained recordings, 64 MiB total PNG bytes per manager. Limits stop capture without evicting earlier frames. In-memory history is not durable. Avoid enabling capture when page contents should not be retained.
+
+Direct manager equivalents are `startRecording(sessionId)`, `stopRecording(recordingId)`, `listRecordings()`, `getRecording(recordingId)`, `recordingFrame(recordingId, frameId)`, and `deleteRecording(recordingId)`.
+
+`list` is also supported. Successful responses wrap the result in `data`. The gateway checks owner membership, state and lease, rejects offline/expired or wrong-network owners, follows no redirects, and forwards its internal token rather than the public key. Draining blocks new work and browser actions while retaining Sandbox inspection/cancellation/deletion and browser list/close plus recording reads/stop/deletion. It does not fall back to another worker if the owner is unavailable. Requests are capped at 128 KiB and successful proxied responses at 33 MiB, including JSON/base64 overhead.
 
 A timeout can leave an operation's outcome unknown. Do not automatically replay mutations such as open, create or exec: inspect the owner and application state first.
 

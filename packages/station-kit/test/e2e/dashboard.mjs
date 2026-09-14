@@ -238,6 +238,41 @@ test('real dashboard controls private sandbox and Bun/Playwright workers; custom
     await download.saveAs(downloadedPng);
     assert.deepEqual([...readFileSync(downloadedPng).subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10], 'download contains real PNG bytes');
     await page.screenshot({ path: join(artifacts, `${owner}-screenshot.png`), fullPage: true });
+    const sessionId = await page.getByRole('combobox', { name: 'Browser session', exact: true }).inputValue();
+    const browserRpc = async (body) => {
+      const response = await context.request.post(`${base}/api/v1/stations/${owner}/execution/browser`, { data: body });
+      assert.equal(response.status(), 200, await response.text());
+      return (await response.json()).data;
+    };
+    await page.getByRole('button', { name: 'Start recording', exact: true }).click();
+    let trace;
+    await until(async () => {
+      trace = (await browserRpc({ method: 'recordings' })).find((entry) => entry.sessionId === sessionId);
+      return trace?.frames.length >= 1;
+    }, `${owner} initial recording frame`);
+    assert.equal(trace.intervalMs, 5000);
+    const initialFrame = await browserRpc({ method: 'recordingFrame', id: trace.id, frameId: trace.frames[0].id });
+    await page.goto(`${base}/sandboxes`);
+    await browserRpc({ method: 'action', id: sessionId, action: 'evaluate', value: "(() => { document.body.style.background='rgb(30, 90, 160)'; document.querySelector('#result').textContent='RECORDED_LATER'; })()" });
+    await until(async () => {
+      trace = await browserRpc({ method: 'recording', id: trace.id });
+      return trace.frames.length >= 2;
+    }, `${owner} worker captures with dashboard away`, 15_000);
+    const laterFrame = await browserRpc({ method: 'recordingFrame', id: trace.id, frameId: trace.frames[1].id });
+    assert.notEqual(initialFrame.base64, laterFrame.base64, 'recording captures changed page content');
+    assert.ok(Date.parse(trace.frames[1].capturedAt) - Date.parse(trace.frames[0].capturedAt) >= 4000, 'default cadence is approximately five seconds');
+    await page.goto(`${base}/browser-use`);
+    await selectOption(page, 'Browser station', owner);
+    await selectOption(page, 'Recording selector', trace.id);
+    await page.getByRole('button', { name: 'Stop recording', exact: true }).click();
+    await until(async () => (await browserRpc({ method: 'recording', id: trace.id })).status === 'stopped', `${owner} stops recording`);
+    // A second recording is left active: closing the session must stop it too.
+    await page.getByRole('button', { name: 'Start recording', exact: true }).click();
+    let activeTrace;
+    await until(async () => {
+      activeTrace = (await browserRpc({ method: 'recordings' })).find((entry) => entry.status === 'recording');
+      return activeTrace?.frames.length >= 1;
+    }, `${owner} second recording`);
     await page.getByRole('combobox', { name: 'Browser action', exact: true }).selectOption('evaluate');
     await page.getByRole('textbox', { name: 'Action value', exact: true }).fill('new Promise(() => {})');
     const pendingAction = page.waitForResponse((response) => response.url().endsWith('/execution/browser') && response.request().method() === 'POST' && response.request().postDataJSON()?.method === 'action');
@@ -246,7 +281,24 @@ test('real dashboard controls private sandbox and Bun/Playwright workers; custom
     await page.getByRole('button', { name: 'Close browser', exact: true }).click();
     assert.equal((await pendingAction).status(), 503, 'closing cancels the pending browser operation');
     await page.getByText('No live browser sessions on this station. Open a browser to begin.', { exact: true }).waitFor();
-    record(`${owner} UI navigation/input/keypress/evaluation/PNG download and close during pending evaluation passed`);
+    assert.equal((await browserRpc({ method: 'recording', id: activeTrace.id })).status, 'stopped', 'browser close stops automatic recording');
+    await selectOption(page, 'Recording selector', trace.id);
+    const recordedImage = page.getByRole('img', { name: 'Recorded browser frame', exact: true });
+    await until(() => recordedImage.evaluate((element) => element.complete && element.naturalWidth > 0), `${owner} recording frame displayed after close`);
+    const scrubber = page.getByRole('slider', { name: 'Recording frame', exact: true });
+    await scrubber.fill('0');
+    await until(async () => (await recordedImage.getAttribute('src')) === `data:image/png;base64,${initialFrame.base64}`, `${owner} scrub first frame`);
+    await page.getByRole('button', { name: 'Play recording', exact: true }).click();
+    await until(async () => (await recordedImage.getAttribute('src')) === `data:image/png;base64,${laterFrame.base64}`, `${owner} playback advances`, 15_000);
+    const pause = page.getByRole('button', { name: 'Pause recording', exact: true });
+    if (await pause.isVisible()) await pause.click();
+    await page.screenshot({ path: join(artifacts, `${owner}-recording-playback.png`), fullPage: true });
+    await page.getByRole('button', { name: 'Delete recording', exact: true }).click();
+    await until(async () => !(await browserRpc({ method: 'recordings' })).some((entry) => entry.id === trace.id), `${owner} recording deletion`);
+    await selectOption(page, 'Recording selector', activeTrace.id);
+    await page.getByRole('button', { name: 'Delete recording', exact: true }).click();
+    await until(async () => (await browserRpc({ method: 'recordings' })).length === 0, `${owner} all recording frames deleted`);
+    record(`${owner} UI actions, screenshots, five-second recording away from dashboard, playback after close and trace deletion passed`);
   }
   assert.deepEqual(pageErrors, [], `Unexpected dashboard JavaScript errors: ${pageErrors.join('; ')}`);
   failed = false;

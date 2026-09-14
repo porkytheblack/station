@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useBreadcrumb } from "../hooks/use-breadcrumb";
 import { executionError, executionRequest, useExecutionStations, type ExecutionStation } from "../hooks/use-execution";
+import { BrowserRecordings } from "../components/browser-recordings";
 import { ExecutionAlert, ExecutionOwner, OwnerNotice } from "../components/execution-common";
 import type { BrowserHandle, BrowserAction } from "station-browser-use";
 
@@ -31,9 +32,10 @@ function BrowserWorkspace({ owner, station, onBusy }: { owner: string; station?:
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [closing, setClosing] = useState(false);
+  const [recordingBusy, setRecordingBusy] = useState(false);
   const [actionPending, setActionPending] = useState(false);
   const closeRequested = useRef(new Set<string>());
-  const locked = busy || closing;
+  const locked = busy || closing || recordingBusy;
   const [error, setError] = useState("");
   const [result, setResult] = useState("");
   const [screenshot, setScreenshot] = useState("");
@@ -61,7 +63,7 @@ function BrowserWorkspace({ owner, station, onBusy }: { owner: string; station?:
   };
   const closeBrowser = async () => {
     const id = selected;
-    if (closing || !id || (busy && !actionPending)) return;
+    if (closing || recordingBusy || !id || (busy && !actionPending)) return;
     closeRequested.current.add(id);
     setClosing(true); setError("");
     try {
@@ -101,7 +103,7 @@ function BrowserWorkspace({ owner, station, onBusy }: { owner: string; station?:
         <label className="execution-field execution-grow"><span>Browser session</span><select className="input-text" aria-label="Browser session" value={selected} disabled={locked} onChange={(event) => setSelected(event.target.value)}>
           {sessions.map((session) => <option key={session.id} value={session.id}>{session.id} · {session.backend}</option>)}
         </select></label>
-        <button className="btn btn--danger" disabled={!reachable || !selected || closing || (busy && !actionPending)} onClick={() => void closeBrowser()}>Close browser</button>
+        <button className="btn btn--danger" disabled={!reachable || !selected || closing || recordingBusy || (busy && !actionPending)} onClick={() => void closeBrowser()}>Close browser</button>
       </div>
       <form onSubmit={(event) => { event.preventDefault(); if (!admit || locked || !selected || (action !== "screenshot" && !value.trim())) return; void act(perform, true); }}>
         <label className="execution-field"><span>Browser action</span><select className="input-text" aria-label="Browser action" value={action} disabled={locked} onChange={(event) => { setAction(event.target.value as BrowserAction); setValue(""); }}>
@@ -113,5 +115,6 @@ function BrowserWorkspace({ owner, station, onBusy }: { owner: string; station?:
       {result && <div className="execution-result"><h2>Result</h2><pre className="execution-output" aria-label="Browser result">{result}</pre></div>}
       {screenshot && <figure className="execution-screenshot"><img src={screenshot} alt="Browser screenshot" /><figcaption className="execution-note">Captured from the selected browser session.</figcaption><a className="btn btn--sm" href={screenshot} download={`station-browser-${selected}.png`}>Download screenshot</a></figure>}
     </div> : <div className="empty-state"><p className="empty-state-text">{loading && reachable ? "Loading browser sessions…" : "No live browser sessions on this station. Open a browser to begin."}</p></div>}
+    <BrowserRecordings owner={owner} sessionId={selected} reachable={reachable} admit={admit} browserBusy={busy || closing} onBusy={setRecordingBusy} />
   </section>;
 }

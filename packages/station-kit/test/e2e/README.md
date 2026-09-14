@@ -19,6 +19,7 @@ Coverage:
 - Full owner Station process stop/start on the same filesystem; the original workspace and CLI remain usable.
 - Nonzero command exit/stderr, cancellation, a configured timeout and workspace deletion removing installed files.
 - Real Bun WebView and Playwright navigation, clicks, typing, keypresses, evaluation, PNG rendering and download, and closing a session during a never-settling evaluation.
+- Five-second worker recording while away from the dashboard, different PNGs after page changes, explicit stop, automatic stop on browser close, playback/scrubbing after close, and trace deletion for both backends.
 - Dashboard JavaScript error collection and graceful fixture cleanup.
 
 Screenshots and a machine-readable summary remain in a temporary artifact directory printed at the end. Set `STATION_E2E_ARTIFACTS` to select another directory. Failed-run workspace data is retained for diagnosis; successful-run workspace data is removed.
