@@ -4,9 +4,50 @@ Persistent POSIX workspaces and supervised shell commands for Station workers. T
 
 `HostSandboxAdapter` runs real Bash and native programs installed on the worker. It does not emulate Unix, install Node or Git, or require Docker. Package the tools into your worker image, or install them on the host and expose them through `PATH`. Multiple workspaces can use those shared tools while keeping separate working directories and home directories.
 
-This is a **trusted-code backend**. Commands run as the worker's operating-system user and can access anything that user can access. Workspace paths and separate `HOME` directories organize work; they do not provide tenant isolation. The adapter advertises `isolated: false`; PTY support is opt-in through `enablePty: true` with the optional native `node-pty` peer installed. File APIs and supervised services are available without that peer. Use a future container or VM adapter for stronger isolation, and do not give untrusted public clients direct command access.
+This is a **trusted-code backend**. Commands run as the worker's operating-system user and can access anything that user can access. Workspace paths and separate `HOME` directories organize work; they do not provide tenant isolation. The adapter advertises `isolated: false`; PTY support is opt-in through `enablePty: true` with the optional native `node-pty` peer installed. File APIs and supervised services are available without that peer. Use `ContainerSandboxAdapter` from `station-sandbox/container` for container isolation, and route public customers through the tenant execution API on dedicated private workers.
 
-## Usage
+## Container-backed workspaces
+
+`ContainerSandboxAdapter` implements the same workspace API on an operator-managed
+Linux Docker or Podman engine. Each workspace owns a container and persistent
+named volume. It runs as a non-root user with a read-only root filesystem, dropped
+capabilities, no-new-privileges and bounded CPU, memory and process counts.
+
+```ts
+import { ContainerSandboxAdapter } from "station-sandbox/container";
+
+const sandboxes = new ContainerSandboxAdapter({
+  rootDir: "/data/station-sandbox-metadata",
+  image: "station-execution:2.4.0", // Build/pull the operator's tools image first.
+  network: "none",
+  memoryMb: 512,
+  cpus: 1,
+  pidsLimit: 128,
+  maxEnvironments: 8,
+});
+await sandboxes.ready();
+const workspace = await sandboxes.create();
+// Use exec, files, terminals and services through the same workspace interface.
+// During worker shutdown:
+await sandboxes.close();
+```
+
+The image needs Node, Bash, `setsid` and a writable home for its configured non-root
+user. Package Git and custom tools into that image or install them into the retained
+workspace. Network access defaults to none; online clones/package installs need an
+operator-enforced network policy. A `networkRestricted` assertion does not install
+a firewall. Apply storage quotas to Sandbox volumes separately from browser storage;
+bounded command output does not limit disk writes.
+
+Tenant workers also require an immutable tenant identity and authenticated
+Headquarters routing. Keep the container engine and private worker endpoints
+inaccessible to workload code and customers. Read the
+[execution deployment contract](../../scripts/execution-container/README.md) and
+[network example](../../examples/18-execution-network/README.md) before deployment.
+The adapter does not silently fall back to host processes or restore a live shell
+after worker replacement. VM execution is not an implemented backend.
+
+## Host usage
 
 ```ts
 import { HostSandboxAdapter } from "station-sandbox";

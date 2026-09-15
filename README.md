@@ -175,6 +175,13 @@ Chromium; the preflight installs Playwright's matching browser if it is missing
 use `pnpm --filter example-17-browser exec playwright install --with-deps chromium`
 on a fresh CI machine.
 
+Release preflight includes local browser-agent tool and image-bridge checks and
+does not require a model-provider key. The optional `pnpm test:browser-use:agent`
+test exercises a real Foundry agent through OpenRouter using the
+[Foundry example setup](examples/19-foundry-browser/README.md). It incurs provider
+usage and is separate from package publication. Passing local browser/protocol
+tests does not by itself verify a model completing a browser task.
+
 Preview the same release without uploads:
 
 ```bash

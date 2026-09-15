@@ -17,6 +17,12 @@ Browser Use are separate primitives; neither is the browser-local service-worker
 runtime. Host backends require trusted workloads. Public tenants require scoped credentials,
 dedicated workers and isolated, network-restricted adapters. Live sessions are not restored.
 
+For an agent controlling a browser, mount `createBrowserAgentTools` from
+`station-browser-use/agent` and deliver its screenshot images through the model's
+native image channel. The execution reference covers workflow resource grants,
+human takeover and uncertain outcomes; `examples/19-foundry-browser` shows the
+Foundry bridge. The dashboard is the operator observation/control surface.
+
 For Node applications, use `station-kit` as the application entry point. Create a `station.config.ts`
 with `defineConfig`, export definitions from the configured directories, and run
 the application with `npx station`. Construct runners directly only for an

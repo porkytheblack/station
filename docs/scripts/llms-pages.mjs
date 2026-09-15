@@ -2,7 +2,7 @@ export const site = {
   name: "Station",
   origin: "https://station.dterminal.net",
   summary:
-    "Type-safe background jobs, recurring schedules, distributed Station Networks, long-running beacons, DAG workflows, experimental browser-local execution, trusted shell workspaces, and server browser automation for TypeScript.",
+    "Type-safe background jobs, schedules, Station Networks, beacons, DAG workflows, browser-local execution, persistent sandbox workspaces and agent-controlled browser sessions for TypeScript.",
 };
 
 export const pageGroups = [
@@ -11,7 +11,7 @@ export const pageGroups = [
     pages: [
       { route: "/docs/getting-started", title: "Getting started", description: "Install Station, define and run a signal, add persistence, and prepare a production configuration." },
       { route: "/docs/browser", title: "Browser runtime (experimental)", description: "Build signals, DAGs, and beacons in Web Workers or service workers with IndexedDB, explicit wake handling, recovery, and browser execution limits. Includes beacon configuration and start-mode behavior." },
-      { route: "/docs/execution", title: "Sandbox and Browser Use (experimental)", description: "Build separate native shell workspaces and server browser sessions, route through exact owners via Headquarters, and opt into Bun signal/beacon children. Covers trusted-code limits, persistence, deployment gaps and adapters." },
+      { route: "/docs/execution", title: "Sandbox and Browser Use (experimental)", description: "Build persistent shell workspaces and agent-controlled browser sessions through Headquarters. Covers host/container adapters, tenant authorization, enforced network/storage controls, agent tools and image observations, dashboard subpages, recordings, recovery and optional Bun children." },
       { route: "/docs/dashboard", title: "Dashboard guide", description: "Operate the StationKit dashboard, inspect runs, and understand Headquarters fleet views." },
       { route: "/docs/network", title: "Station Networks", description: "Scale execution across Headquarters and worker stations with placement, capacity, leases, and draining." },
       { route: "/docs/agent-skill", title: "Agent skill", description: "Install and use the Station coding-agent skill and its bundled API references." },

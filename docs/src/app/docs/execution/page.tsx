@@ -4,7 +4,7 @@ import { Code } from "../../components/Code";
 
 export const metadata: Metadata = {
   title: "Sandbox and Browser Use — Station",
-  description: "Run trusted shell workspaces and server browser sessions on specialized Station workers, with owner routing through Headquarters and optional Bun process children.",
+  description: "Run persistent sandboxes and agent-controlled browser sessions with host/container adapters, tenant-scoped Headquarters routing, recording playback and optional Bun children.",
 };
 
 export default function ExecutionPage() {
@@ -178,6 +178,15 @@ finally { await tools.close(); }`}</Code>
         and never retry mutations; an unknown transport outcome requires checking
         worker state. Cleanup respects human control and surfaces failures for retry
         after the lease releases.</p>
+      <p>An uncertain open or resume blocks further admission in that toolset.
+        <code> uncertainOpenings()</code> reports the count and cleanup reports
+        unresolved sessions. The host must reconcile before creating another toolset;
+        definitive missing-session responses during close release local capacity.</p>
+      <p>The <a href="https://github.com/porkytheblack/station/tree/main/examples/19-foundry-browser">Foundry browser-agent example</a>
+        {" "}shows the complete tool and image bridge. Its sample budget is 14 turns,
+        600 output tokens per call and one live session, with no agent-level retries.
+        Replace its in-memory conversation store with your application&apos;s durable
+        storage when retaining history across runs.</p>
       <h3>Independent browser sessions</h3>
       <Code>{`import { BrowserSessionManager } from "station-browser-use";
 import { BunBrowserAdapter } from "station-browser-use/bun";
@@ -525,6 +534,20 @@ execution: { token: serviceSecret, tenantId: "customer-a", sandbox }
         Passing this local test does not establish cloud deployment readiness.
       </p>
 
+      <h3>Verify browser-agent integrations</h3>
+      <Code>{`# Real authenticated browser control, without model inference
+pnpm test:browser-use:tools
+# Native image delivery and error handling
+pnpm test:browser-use:bridge
+# Optional paid real-model test; configure the Foundry example first
+pnpm test:browser-use:agent`}</Code>
+      <p>Normal tests and release preflight include the local tool and bridge checks
+        and do not require a model-provider key. The real-model test needs a built
+        Glove checkout and a configured OpenRouter key. It asks an agent to read an
+        image, complete a generated form, verify confirmation and close its browser.
+        Its explicit protocol-only mode verifies Foundry assembly without inference.
+        Local browser and protocol checks are separate from successful model-driven
+        execution; a rejected credential leaves that external test unverified.</p>
       <h3>Opt in to Bun signal and beacon children</h3>
       <Code>{`import { defineConfig } from "station-kit";
 import { BunProcessRuntime } from "station-signal";

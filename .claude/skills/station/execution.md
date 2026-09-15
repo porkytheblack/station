@@ -2,9 +2,7 @@
 
 Station 2.4.0 provides separate server execution primitives. `station-browser` instead runs Station signals/DAGs/beacons inside a browser worker; it does not supply Bash or control server browsers.
 
-## Choose the execution boundary
-
-### Agent browser integration
+## Agent browser integration
 
 Use `createBrowserAgentTools({ client: new BrowserUseClient({baseUrl, stationId,
 apiKey}), maxSessions: 2 })` from `station-browser-use/agent`. Mount each descriptor's
@@ -22,6 +20,10 @@ authoritative runtime validators. `allowedCommands` restricts structured command
 omit descriptors to restrict other operations. Unsupported backend capabilities
 fail explicitly. Human takeover returns busy; never acquire a control token to
 override the human. Unknown transport outcomes must be reconciled, not retried blindly.
+An uncertain open/resume fences further admission in that toolset;
+`uncertainOpenings()` reports its count and `close()` reports unresolved cleanup.
+The host must reconcile before assigning resources to a fresh toolset. Definitive
+404 responses during close mean the session is already closed, including idle expiry.
 
 Screenshot results carry `images` separately from `data`; connect these to the model's
 native image channel. Base64 inside JSON tool text is not vision. The Foundry example
@@ -29,6 +31,8 @@ in `examples/19-foundry-browser` shows structural ToolConfig mounting and an ima
 ModelAdapter bridge. Page text, screenshots and downloaded content are untrusted input.
 Bounded text results carry an explicit truncation marker; use narrower observations
 and application-owned artifact storage for large transfers.
+
+## Choose the execution boundary
 
 - `HostSandboxAdapter` from `station-sandbox`: trusted POSIX commands, files, supervised services and optional Node PTYs. `isolated: false`; directories and HOME are organizational, not security boundaries.
 - `ContainerSandboxAdapter` from `station-sandbox/container`: one Linux Docker/Podman container and persistent named volume per workspace. Nonroot, read-only root, dropped capabilities, no-new-privileges, bounded CPU/memory/PIDs, no host socket/mounts exposed to code. Requires an operator-managed engine and pre-pulled tools image. Call `ready()` before admission.
@@ -143,3 +147,14 @@ For browser internet access, `scripts/execution-container/enforced/README.md` su
 Shared Postgres coordinates Station membership/jobs; it does not store workspace/profile/recording data. Use one active replica per worker/root and preserve stable tenant ownership of its volumes. This supplies execution primitives, not automatic fleet placement, distributed fencing, live migration, customer onboarding or billing. Validate the exact cloud/OS/image combination before public rollout.
 
 Verification commands: `pnpm test:execution:dashboard`, `pnpm test:execution:containers`, `pnpm test:browser-use`, and the fresh Linux harness under `scripts/execution-linux`. Final release preflight: `pnpm release:dry-run --allow-dirty` during local QA; never publish without the requested release authorization.
+
+`pnpm test:browser-use:tools` checks the real authenticated Headquarters/Playwright
+tool path without model inference; `pnpm test:browser-use:bridge` checks native
+image delivery. Both are in normal `pnpm test` and release preflight.
+`pnpm test:browser-use:agent` is a separate paid real-model test requiring the
+Foundry example's configured provider key and built Glove checkout. Its example
+limits are 14 turns and 600 output tokens per call, with no agent-level retries.
+The explicit `--protocol-only` mode checks Foundry assembly without inference.
+Report local browser/protocol success separately from real-model task success;
+missing or rejected credentials do not establish either a browser regression or
+a successful agent test.

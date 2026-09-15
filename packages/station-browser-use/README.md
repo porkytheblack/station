@@ -70,6 +70,14 @@ The default client access is `tenant`, using execution-only keys and isolated
 private workers. Use explicit `access: "operator"` for an operator development
 integration. HTTPS is required except HTTP loopback for local development.
 
+From the repository, `pnpm test:browser-use:tools` exercises an authenticated
+Headquarters and real Playwright worker without a model key;
+`pnpm test:browser-use:bridge` checks native image delivery. Both run in release
+preflight. The separate `pnpm test:browser-use:agent` requires the Foundry example
+setup and incurs provider usage. Its sample limits are 14 turns, 600 output tokens
+per call and one session, with no agent-level retries. A protocol-only check is
+available for framework assembly, but does not establish model-driven task success.
+
 ## Configure a worker
 
 ```ts
