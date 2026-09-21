@@ -1,0 +1,30 @@
+{
+  "name": "station-runtime-cli",
+  "version": "3.0.0",
+  "type": "module",
+  "license": "MIT",
+  "description": "Station command line client, interactive console and local service manager",
+  "bin": {
+    "station": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "pnpm run build && node --import tsx --test test/*.test.ts",
+    "test:packed": "node scripts/packed-smoke.mjs"
+  },
+  "dependencies": {
+    "station-client": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.0",
+    "typescript": "^5.9.3"
+  }
+}

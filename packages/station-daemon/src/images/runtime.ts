@@ -1,0 +1,124 @@
+import { mkdir, lstat, chmod, readFile, writeFile, rename, rm } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { randomUUID, createHash } from "node:crypto";
+import { pathToFileURL, fileURLToPath } from "node:url";
+import { type SignalRunner, type AnySignal, isReservedEnvKey } from "station-signal";
+import { FileImageRegistry, ImageError, selectArtifact, type Digest, type ImageRecord } from "station-images";
+import { createImageBackend, createImageSignal, type ImageBackendConfig, type ImageSignalConfig } from "./shim.js";
+export { createImageBackend, createImageSignal, type ImageBackendConfig, type ImageSignalConfig } from "./shim.js";
+export interface ImageRuntimeOptions {
+  registry: FileImageRegistry;
+  signalRunner: SignalRunner;
+  stateDir: string;
+  /** No implicit host backend: trusted-local must explicitly acknowledge its trust boundary. */
+  backend: ImageBackendConfig;
+  /** Application environment grants. Only injected env-store values with these names reach artifacts. */
+  allowedEnv?: string[];
+}
+export interface InstalledImage {
+  image: ImageRecord;
+  images: ImageRecord[];
+  /** Immutable, digest-qualified definitions available to broadcasts/schedules/beacons. */
+  signals: Record<string, AnySignal>;
+}
+interface RuntimeState { format: "station.image-runtime/v1"; configuration: string; roots: Digest[] }
+export function imageSignalName(digest: Digest, exportName: string): string {
+  if (!/^sha256:[a-f0-9]{64}$/.test(digest) || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(exportName)) throw new ImageError("invalid_reference", "Invalid image export identity");
+  return `img_${digest.slice(7)}_${Buffer.from(exportName).toString("base64url")}`;
+}
+/** Serialized install/restore; immutable wrappers preserve queued work across activation of later versions. */
+export class ImageRuntime {
+  private readonly root: string;
+  private readonly configuration: string;
+  private readonly allowedEnv: string[];
+  private readonly backend: ImageBackendConfig;
+  private readonly installed = new Map<Digest, InstalledImage>();
+  private readonly registered = new Set<string>();
+  private queue: Promise<unknown> = Promise.resolve();
+  constructor(private readonly options: ImageRuntimeOptions) {
+    this.root = resolve(options.stateDir);
+    this.backend = structuredClone(options.backend);
+    createImageBackend(this.backend); // reject malformed policy before registering any definitions
+    this.allowedEnv = [...new Set(options.allowedEnv ?? [])].sort();
+    for (const key of this.allowedEnv) if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || isReservedEnvKey(key)) throw new ImageError("invalid_environment", "Image environment grant contains a reserved or invalid key");
+    this.configuration = createHash("sha256").update(JSON.stringify({ backend: this.backend, allowedEnv: this.allowedEnv, registryRoot: options.registry.root })).digest("hex");
+  }
+  private serialized<T>(operation: () => Promise<T>): Promise<T> {
+    const current = this.queue.then(operation); this.queue = current.catch(() => {}); return current;
+  }
+  private async initialize() {
+    await mkdir(this.root, { recursive: true, mode: 0o700 });
+    const stat = await lstat(this.root);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new ImageError("invalid_state", "Image runtime state must be a private real directory");
+    await chmod(this.root, 0o700);
+  }
+  private async readState(): Promise<RuntimeState> {
+    await this.initialize();
+    try {
+      const path = join(this.root, "active.json"), stat = await lstat(path);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) throw new ImageError("invalid_state", "Invalid image activation state");
+      const state = JSON.parse(await readFile(path, "utf8")) as RuntimeState;
+      if (state.format !== "station.image-runtime/v1" || state.configuration !== this.configuration || !Array.isArray(state.roots) || state.roots.length > 1024 || state.roots.some(d => !/^sha256:[a-f0-9]{64}$/.test(d))) throw new ImageError("incompatible_state", "Image runtime configuration changed or saved state is incompatible; reconcile existing activations explicitly");
+      return state;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { format: "station.image-runtime/v1", configuration: this.configuration, roots: [] };
+      throw error;
+    }
+  }
+  private async saveState(state: RuntimeState) {
+    const temp = join(this.root, `${randomUUID()}.tmp`);
+    try { await writeFile(temp, JSON.stringify(state), { mode: 0o600, flag: "wx" }); await rename(temp, join(this.root, "active.json")); }
+    finally { await rm(temp, { force: true }); }
+  }
+  install(reference: string): Promise<InstalledImage> {
+    return this.serialized(async () => {
+      const state = await this.readState(), installation = await this.prepare(reference);
+      if (!state.roots.includes(installation.image.digest)) {
+        if (state.roots.length >= 1024) throw new ImageError("activation_limit", "Image runtime activation limit reached");
+        state.roots.push(installation.image.digest); await this.saveState(state);
+      }
+      this.register(installation); return installation;
+    });
+  }
+  restore(): Promise<InstalledImage[]> {
+    return this.serialized(async () => {
+      const state = await this.readState();
+      // Validate and stage every root before making any of them available to the runner.
+      const installations: InstalledImage[] = [];
+      for (const digest of state.roots) installations.push(await this.prepare(digest));
+      installations.forEach((installation) => this.register(installation)); return installations;
+    });
+  }
+  private async prepare(reference: string): Promise<InstalledImage> {
+    const image = await this.options.registry.resolve(reference), cached = this.installed.get(image.digest);
+    if (cached) return cached;
+    const images = [image, ...await this.options.registry.validateDependencies(image.manifest)];
+    const unique = [...new Map(images.map(record => [record.digest, record])).values()];
+    const target = createImageBackend(this.backend).target;
+    const signals: Record<string, AnySignal> = Object.create(null);
+    for (const record of unique) {
+      const artifact = selectArtifact(record.manifest, target);
+      if ((await this.options.registry.getBlob(artifact.digest)).byteLength !== artifact.size) throw new ImageError("size_mismatch", "Image artifact size mismatch");
+      for (const definition of record.manifest.exports) {
+        const requiredKeys = [...(definition.requiredEnv ?? []), ...Object.keys(record.manifest.env ?? {})];
+        if (requiredKeys.some(key => !this.allowedEnv.includes(key))) throw new ImageError("environment_denied", "Image requires an environment key outside its operator grant");
+        if (definition.kind === "beacon") continue;
+        const name = imageSignalName(record.digest, definition.name);
+        if (this.options.signalRunner.hasSignal(name) && !this.registered.has(name)) throw new ImageError("definition_conflict", "An existing definition conflicts with an immutable image export");
+        const config: ImageSignalConfig = { registryRoot: this.options.registry.root, digest: record.digest, name, definition, backend: this.backend, allowedEnv: this.allowedEnv };
+        signals[name] = createImageSignal(config);
+        // Generate from controlled data; never import an uploaded artifact into the daemon.
+        const helper = pathToFileURL(fileURLToPath(new URL(import.meta.url.endsWith(".ts") ? "./shim.ts" : "./shim.js", import.meta.url))).href;
+        const code = `import { createImageSignal } from ${JSON.stringify(helper)};\nexport default createImageSignal(${JSON.stringify(config)});\n`;
+        const path = join(this.root, `${name}.mjs`);
+        await writeFile(path, code, { mode: 0o600 });
+      }
+    }
+    const installation = { image, images: unique, signals }; this.installed.set(image.digest, installation); return installation;
+  }
+  private register(installation: InstalledImage) {
+    for (const [name, definition] of Object.entries(installation.signals)) {
+      this.options.signalRunner.registerSignal(definition, join(this.root, `${name}.mjs`)); this.registered.add(name);
+    }
+  }
+}

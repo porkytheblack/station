@@ -1,4 +1,4 @@
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 import { SqliteAdapter } from "station-adapter-sqlite";
 import { BroadcastSqliteAdapter } from "station-adapter-sqlite/broadcast";
 

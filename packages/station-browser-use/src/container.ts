@@ -1,3 +1,5 @@
+import { prepareContainerSeccomp, type ContainerSeccompPolicy } from "./container-seccomp.js";
+import { BrowserTrafficPolicy, type BrowserReliabilityOptions } from "./reliability.js";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID, createHash } from "node:crypto";
 import { existsSync, rmSync, lstatSync } from "node:fs";
@@ -15,11 +17,16 @@ export interface ContainerBrowserOptions {
   image: string;
   engine?: "docker" | "podman";
   executable?: string;
+  /** Operator-reviewed deny-default JSON profile; required when engine default is unconfined. */
+  seccompProfile?: string;
   workerPath?: string;
   /** Local Linux Docker only: operator-provisioned profile directory, e.g. under enforced XFS project quota. */
   profileStorageRoot?: string;
   /** Operator-selected egress proxy. Public deployment profile enforces this below the workload. */
   proxy?: { server: string };
+  reliability?: BrowserReliabilityOptions;
+  locale?: string;
+  timezoneId?: string;
   /** none by default. host/container networking is rejected. */
   network?: string;
   /** Operator assertion for an externally enforced named-network egress policy. */
@@ -53,6 +60,7 @@ export class ContainerBrowserAdapter implements BrowserAdapter {
   private readonly executable: string;
   private readonly owner: string;
   private image = "";
+  private seccomp!: ContainerSeccompPolicy;
   private readonly readyPromise: Promise<void>;
   private readonly sessions = new Set<BrowserSession>();
   private readonly opening = new Set<Promise<BrowserSession>>();
@@ -67,6 +75,7 @@ export class ContainerBrowserAdapter implements BrowserAdapter {
   private readonly pids: number;
   private readonly tmpfs: number;
   constructor(private readonly options: ContainerBrowserOptions) {
+    if (options.reliability) new BrowserTrafficPolicy(options.reliability);
     this.name = options.engine === "podman" ? "podman-playwright" : "docker-playwright";
     this.executable = options.executable ?? options.engine ?? "docker";
     if (!options.image || options.image.startsWith("-") || /[\0\r\n]/.test(options.image)) throw error("invalid_input", "A valid operator image is required.");
@@ -129,6 +138,8 @@ export class ContainerBrowserAdapter implements BrowserAdapter {
     if ((info.OSType ?? info.host?.os ?? info.Host?.OS) !== "linux") throw error("unsupported", "A Linux container engine is required.");
     if ([info.MemoryLimit, info.CpuCfsQuota, info.PidsLimit].some((supported) => supported === false)) throw error("unsupported", "Container resource limits are unavailable.");
     if (Array.isArray(info.host?.cgroupControllers) && ["cpu", "memory", "pids"].some((item) => !info.host.cgroupControllers.includes(item))) throw error("unsupported", "CPU, memory and PID controller delegation is required.");
+    try { this.seccomp = prepareContainerSeccomp(this.root, this.options.seccompProfile, info, this.options.engine === "podman" ? "podman" : "docker"); }
+    catch { throw error("unsupported", "An enforced seccomp policy is required; use a reviewed deny-default seccompProfile when engine defaults are unconfined."); }
     if (this.profileStorageRoot) {
       if ((process.env.DOCKER_HOST && !process.env.DOCKER_HOST.startsWith("unix://")) || info.SecurityOptions?.some((value: string) => value.includes("rootless"))) throw error("unsupported", "Profile storage requires local rootful Docker.");
       const endpoint = JSON.parse(await this.call(["context", "inspect", "--format", "{{json .Endpoints.docker.Host}}"]));
@@ -221,7 +232,7 @@ export class ContainerBrowserAdapter implements BrowserAdapter {
       } else mounts.push("--tmpfs", `/home/node:rw,nosuid,nodev,size=${this.tmpfs}m,mode=1777`);
       atomicWrite(journal, JSON.stringify({ name }));
       await this.call(["create", "-i", "--name", name, "--label", `${OWNER}=${this.owner}`, "--label", `${SESSION}=${id}`,
-        "--log-driver", "none", "--user", this.user, "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--read-only", "--init",
+        "--log-driver", "none", "--user", this.user, "--cap-drop", "ALL", "--security-opt", "no-new-privileges", ...(this.seccomp.path ? ["--security-opt", `seccomp=${this.seccomp.path}`] : []), "--read-only", "--init",
         "--memory", `${this.memory}m`, "--cpus", String(this.cpus), "--pids-limit", String(this.pids), "--network", this.options.network ?? "none",
         ...(this.options.proxy ? ["--dns", "127.0.0.1", "--sysctl", "net.ipv6.conf.all.disable_ipv6=1", "--sysctl", "net.ipv6.conf.default.disable_ipv6=1"] : []),
         "--tmpfs", `/tmp:rw,nosuid,nodev,size=${this.tmpfs}m,mode=1777`, "--shm-size", "128m", ...mounts,
@@ -243,16 +254,17 @@ export class ContainerBrowserAdapter implements BrowserAdapter {
       });
       child.stderr.on("data", () => { /* Drain diagnostics without exposing page/proxy secrets. */ });
       child.stdin.on("error", () => rejectAll()); child.once("error", () => { rejectAll(); void cleanup().catch(() => undefined); }); child.once("close", () => { rejectAll(); void cleanup().catch(() => undefined); });
+      let humanControl = false;
       const rpc = (op: string, value?: unknown, extra = {}): Promise<any> => {
         if (closed) return Promise.reject(error("unavailable", "Container browser session closed."));
-        const id = ++sequence; const message = JSON.stringify({ id, op, value, ...extra }) + "\n";
+        const id = ++sequence; const message = JSON.stringify({ id, op, value, humanControl, ...extra }) + "\n";
         if (Buffer.byteLength(message) > 8 * 1024 * 1024) return Promise.reject(error("invalid_input", "Browser request exceeds transport limits."));
         return new Promise((resolve, reject) => { pending.set(id, { resolve, reject }); child!.stdin.write(message, (reason) => { if (reason) { pending.delete(id); reject(error("unavailable", "Container browser transport failed.")); } }); });
       };
       let timer: ReturnType<typeof setTimeout> | undefined;
-      try { await Promise.race([rpc("open", undefined, { options, settings: { proxy: this.options.proxy, timeoutMs: this.timeout, maxPages: this.options.maxPages, maxArtifactBytes: this.options.maxArtifactBytes, maxArtifacts: this.options.maxArtifacts } }), new Promise((_, reject) => { timer = setTimeout(() => reject(error("timeout", "Container browser startup timed out.")), this.timeout); })]); }
+      try { await Promise.race([rpc("open", undefined, { options, settings: { proxy: this.options.proxy, reliability: this.options.reliability, locale: this.options.locale, timezoneId: this.options.timezoneId, timeoutMs: this.timeout, maxPages: this.options.maxPages, maxArtifactBytes: this.options.maxArtifactBytes, maxArtifacts: this.options.maxArtifacts } }), new Promise((_, reject) => { timer = setTimeout(() => reject(error("timeout", "Container browser startup timed out.")), this.timeout); })]); }
       finally { clearTimeout(timer); }
-      session = managedSession({ navigate: (value) => rpc("navigate", value), click: (value) => rpc("click", value), type: (value) => rpc("type", value), press: (value) => rpc("press", value), evaluate: (value) => rpc("evaluate", value), screenshot: async () => Buffer.from(await rpc("screenshot"), "base64"), execute: (value) => rpc("execute", value), close: async () => {
+      session = managedSession({ setHumanControl: active => { humanControl = active; }, navigate: (value) => rpc("navigate", value), click: (value) => rpc("click", value), type: (value) => rpc("type", value), press: (value) => rpc("press", value), evaluate: (value) => rpc("evaluate", value), screenshot: async () => Buffer.from(await rpc("screenshot"), "base64"), execute: (value) => rpc("execute", value), close: async () => {
         if (!closed) { let timer: ReturnType<typeof setTimeout> | undefined; try { await Promise.race([rpc("close"), new Promise((resolve) => { timer = setTimeout(resolve, 2000); })]); } catch { /* Engine removal is authoritative. */ } finally { clearTimeout(timer); } }
         await cleanup();
       } }, this.timeout);

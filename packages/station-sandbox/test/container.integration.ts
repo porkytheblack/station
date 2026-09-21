@@ -22,7 +22,7 @@ async function completed(adapter: ContainerSandboxAdapter, id: string, command: 
 
 test("real Linux container: isolation, npm persistence, files, quotas, services and PTY", { skip: !executable, timeout: 240_000 }, async (t) => {
   const root = mkdtempSync(join(tmpdir(), "station-container-"));
-  const options = { rootDir: root, image, engine: (executable!.includes("podman") ? "podman" : "docker") as "podman" | "docker", executable, network: "bridge" as const, maxEnvironments: 2, maxConcurrent: 3, maxOutputBytes: 4096, memoryMb: 384, cpus: 0.5, pidsLimit: 64 };
+  const options = { rootDir: root, image, seccompProfile: process.env.STATION_CONTAINER_SECCOMP, engine: (executable!.includes("podman") ? "podman" : "docker") as "podman" | "docker", executable, network: "bridge" as const, maxEnvironments: 2, maxConcurrent: 3, maxOutputBytes: 4096, memoryMb: 384, cpus: 0.5, pidsLimit: 64 };
   let adapter = new ContainerSandboxAdapter(options);
   const ids: string[] = [];
   t.after(async () => {
@@ -33,9 +33,9 @@ test("real Linux container: isolation, npm persistence, files, quotas, services 
   const one = await adapter.create(); ids.push(one.id);
   const two = await adapter.create(); ids.push(two.id);
   await assert.rejects(adapter.create(), /capacity/);
-  const security = await completed(adapter, one.id, "id -u; grep CapEff /proc/self/status; test ! -e /var/run/docker.sock && test ! -e /run/podman/podman.sock; test ! -w /etc; printf private > private.txt");
+  const security = await completed(adapter, one.id, "id -u; grep -E 'CapEff|Seccomp:' /proc/self/status; test ! -e /var/run/docker.sock && test ! -e /run/podman/podman.sock; test ! -w /etc; printf private > private.txt");
   assert.equal(security.status, "completed", security.stderr);
-  assert.match(security.stdout, /1000/); assert.match(security.stdout, /CapEff:\s+0+/);
+  assert.match(security.stdout, /Seccomp:\s+2/); assert.match(security.stdout, /1000/); assert.match(security.stdout, /CapEff:\s+0+/);
   assert.equal((await completed(adapter, two.id, "test ! -e private.txt")).status, "completed");
   const meta = JSON.parse(readFileSync(join(root, one.id, "workspace.json"), "utf8"));
   const details = JSON.parse(await engineCall(executable!, ["inspect", meta.container]))[0];
@@ -119,7 +119,7 @@ test("real Linux container: isolation, npm persistence, files, quotas, services 
 
 test("real Linux container: default network denied and concurrent admission bounded", { skip: !executable, timeout: 60_000 }, async (t) => {
   const root = mkdtempSync(join(tmpdir(), "station-container-offline-"));
-  const adapter = new ContainerSandboxAdapter({ rootDir: root, executable, image, engine: executable!.includes("podman") ? "podman" : "docker", maxEnvironments: 1, maxConcurrent: 1, tenantId: "customer-a" });
+  const adapter = new ContainerSandboxAdapter({ rootDir: root, executable, image, seccompProfile: process.env.STATION_CONTAINER_SECCOMP, engine: executable!.includes("podman") ? "podman" : "docker", maxEnvironments: 1, maxConcurrent: 1, tenantId: "customer-a" });
   await adapter.ready();
   await adapter.bindTenant("customer-a");
   await assert.rejects(adapter.bindTenant("customer-b"), /tenant/);
@@ -140,7 +140,7 @@ test("real Linux container: killed controller reconciles jobs and restores servi
   const { spawn } = await import("node:child_process");
   const { fileURLToPath } = await import("node:url");
   const root = mkdtempSync(join(tmpdir(), "station-container-recovery-"));
-  const options = { rootDir: root, executable, image, engine: executable!.includes("podman") ? "podman" as const : "docker" as const };
+  const options = { rootDir: root, executable, image, seccompProfile: process.env.STATION_CONTAINER_SECCOMP, engine: executable!.includes("podman") ? "podman" as const : "docker" as const };
   const child = spawn(process.execPath, ["--import", "tsx", fileURLToPath(new URL("./container-crash-worker.ts", import.meta.url)), JSON.stringify(options)], { stdio: ["ignore", "pipe", "pipe"] });
   let adapter: ContainerSandboxAdapter | undefined;
   t.after(async () => { child.kill("SIGKILL"); if (adapter) { for (const workspace of await adapter.list()) { for (const service of await adapter.services(workspace.id)) await adapter.removeService(workspace.id, service.id); await adapter.destroy(workspace.id); } await adapter.close(); } rmSync(root, { recursive: true, force: true }); });

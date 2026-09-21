@@ -1,4 +1,4 @@
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 import { SqliteAdapter } from "station-adapter-sqlite";
 import { BeaconSqliteAdapter } from "station-adapter-sqlite/beacon";
 import { EnvSqliteAdapter } from "station-adapter-sqlite/env";
@@ -12,7 +12,6 @@ export default defineConfig({
   role: "station",
   host: "127.0.0.1",
   port,
-  open: false,
   stationDir: `.station/${stationId}`,
   signalsDir: "./signals",
   beaconsDir: "./beacons",

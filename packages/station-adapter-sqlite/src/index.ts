@@ -16,6 +16,7 @@ const { toColumn, toField } = createColumnMapper({
   completedAt: "completed_at",
   createdAt: "created_at",
   stationId: "station_id",
+  requiredStationId: "required_station_id",
   leaseToken: "lease_token",
   leaseExpiresAt: "lease_expires_at",
   claimedAt: "claimed_at",
@@ -33,7 +34,9 @@ const { toColumn: toStepColumn, toField: toStepField } = createColumnMapper({
 const STEP_DATE_FIELDS = new Set(["startedAt", "completedAt"]);
 
 function rowToRun(row: Record<string, unknown>): Run {
-  return rowToObject<Run>(row, toField, DATE_FIELDS);
+  const run = rowToObject<Run>(row, toField, DATE_FIELDS);
+  run.requiredStationId = typeof row.required_station_id === "string" ? row.required_station_id : undefined;
+  return run;
 }
 function rowToStep(row: Record<string, unknown>): Step {
   return rowToObject<Step>(row, toStepField, STEP_DATE_FIELDS);
@@ -91,6 +94,7 @@ export class SqliteAdapter implements SerializableAdapter {
         output        TEXT,
         error         TEXT,
         station_id    TEXT,
+        required_station_id TEXT,
         lease_token   TEXT,
         lease_expires_at TEXT,
         claimed_at    TEXT,
@@ -104,6 +108,7 @@ export class SqliteAdapter implements SerializableAdapter {
     try { this.db.exec(`ALTER TABLE ${this.tableName} ADD COLUMN output TEXT`); } catch { /* already exists */ }
     try { this.db.exec(`ALTER TABLE ${this.tableName} ADD COLUMN error TEXT`); } catch { /* already exists */ }
     try { this.db.exec(`ALTER TABLE ${this.tableName} ADD COLUMN station_id TEXT`); } catch { /* already exists */ }
+    try { this.db.exec(`ALTER TABLE ${this.tableName} ADD COLUMN required_station_id TEXT`); } catch { /* already exists */ }
     try { this.db.exec(`ALTER TABLE ${this.tableName} ADD COLUMN lease_token TEXT`); } catch { /* already exists */ }
     try { this.db.exec(`ALTER TABLE ${this.tableName} ADD COLUMN lease_expires_at TEXT`); } catch { /* already exists */ }
     try { this.db.exec(`ALTER TABLE ${this.tableName} ADD COLUMN claimed_at TEXT`); } catch { /* already exists */ }
@@ -170,12 +175,12 @@ export class SqliteAdapter implements SerializableAdapter {
           (id, signal_name, kind, input, status, attempts, max_attempts,
            timeout, interval, next_run_at, last_run_at, started_at,
            completed_at, created_at, output, error, station_id, lease_token,
-           lease_expires_at, claimed_at, schedule_id, scheduled_for, idempotency_key)
+           lease_expires_at, claimed_at, schedule_id, scheduled_for, idempotency_key, required_station_id)
          VALUES
           (@id, @signal_name, @kind, @input, @status, @attempts, @max_attempts,
            @timeout, @interval, @next_run_at, @last_run_at, @started_at,
            @completed_at, @created_at, @output, @error, @station_id, @lease_token,
-           @lease_expires_at, @claimed_at, @schedule_id, @scheduled_for, @idempotency_key)`,
+           @lease_expires_at, @claimed_at, @schedule_id, @scheduled_for, @idempotency_key, @required_station_id)`,
       )
       .run({
         id: run.id,
@@ -201,6 +206,7 @@ export class SqliteAdapter implements SerializableAdapter {
         schedule_id: run.scheduleId ?? null,
         scheduled_for: dateToStr(run.scheduledFor),
         idempotency_key: run.idempotencyKey ?? null,
+        required_station_id: run.requiredStationId ?? null,
       });
   }
 
@@ -285,6 +291,7 @@ export class SqliteAdapter implements SerializableAdapter {
            lease_expires_at = @lease_expires_at, claimed_at = @claimed_at,
            started_at = @claimed_at, last_run_at = @claimed_at, attempts = attempts + 1
        WHERE id = @id AND status = 'pending'
+         AND (required_station_id IS NULL OR required_station_id = @station_id)
          AND (next_run_at IS NULL OR next_run_at <= @claimed_at)
        RETURNING *`,
     ).get({

@@ -11,7 +11,7 @@ export interface BrowserInspectionElement { index: number; tag: string; text: st
 export interface BrowserInspection { url: string; title: string; coordinateSpace: "main-viewport" | "frame-viewport"; elements: BrowserInspectionElement[]; truncated: boolean }
 export interface BrowserDiagnostic { at: string; kind: "console" | "request" | "response" | "requestfailed" | "dialog"; level?: string; message?: string; method?: string; url?: string; status?: number; action?: string }
 export interface BrowserTraceState { status: "idle" | "recording" | "stopped" | "limit" | "error"; startedAt?: string; stoppedAt?: string }
-export interface BrowserDiagnostics { events: BrowserDiagnostic[]; consoleText: boolean; trace: BrowserTraceState }
+export interface BrowserDiagnostics { provider?: { name: string; sessionId: string; connected?: boolean }; reliability?: import("./reliability.js").BrowserReliabilityState; events: BrowserDiagnostic[]; consoleText: boolean; trace: BrowserTraceState }
 export type BrowserCommand =
   | ({ op: "fill"; value: string } & BrowserTargetInput)
   | ({ op: "select"; values: string[] } & BrowserTargetInput)

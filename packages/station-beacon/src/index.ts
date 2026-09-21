@@ -9,6 +9,8 @@ export {
 export {
   BeaconRunner,
   type BeaconRunnerOptions,
+  type BeaconDependencyTriggerRequest,
+  type BeaconDependencyTrigger,
   type CreateInstanceOptions,
   type UpdateInstanceOptions,
 } from "./beacon-runner.js";

@@ -1,6 +1,6 @@
 {
   "name": "station-sandbox",
-  "version": "2.4.0",
+  "version": "3.0.0",
   "description": "Persistent Station workspaces, terminals and supervised services with host and container adapters",
   "license": "MIT",
   "type": "module",
@@ -21,7 +21,8 @@
   },
   "files": [
     "dist",
-    "src"
+    "src",
+    "GUIDE.md"
   ],
   "scripts": {
     "build": "tsc",

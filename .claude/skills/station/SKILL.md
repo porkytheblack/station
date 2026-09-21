@@ -1,6 +1,6 @@
 ---
 name: station
-description: Build, scale, test, or operate TypeScript background work with Station. Use for station-kit configuration, signals, broadcasts, beacons, runtime schedules, Station Networks and Headquarters, fleet concurrency and placement, SQLite/PostgreSQL/MySQL/Redis adapters, the dashboard and v1 API, browser-local signals/workflows/beacons in Web Workers or service workers, isolated container workspaces, terminals, services and server browser automation, Bun process runtimes, environment variables, subscribers, deployment, or Station troubleshooting.
+description: Build, scale, test, or operate TypeScript background work with Station. Use for station-daemon configuration, signals, broadcasts, beacons, runtime schedules, Station Networks and Headquarters, fleet concurrency and placement, SQLite/PostgreSQL/MySQL/Redis adapters, the dashboard and v1 API, browser-local signals/workflows/beacons in Web Workers or service workers, isolated container workspaces, terminals, services and server browser automation, Bun process runtimes, compiled Station Images and operator registries, environment variables, subscribers, deployment, or Station troubleshooting.
 ---
 
 # Build with Station
@@ -23,10 +23,23 @@ native image channel. The execution reference covers workflow resource grants,
 human takeover and uncertain outcomes; `examples/19-foundry-browser` shows the
 Foundry bridge. The dashboard is the operator observation/control surface.
 
-For Node applications, use `station-kit` as the application entry point. Create a `station.config.ts`
+For independently compiled native or bundled JavaScript signals, broadcast planners
+and beacons, read [images.md](images.md). Images implement `station.process/v1`;
+they are not OCI images or an isolation boundary. Registry APIs currently require
+operator admin access. Do not infer a complete public hosting platform from Docker support.
+
+For Node applications, use `station-daemon` as the application entry point. Create a `station.config.ts`
 with `defineConfig`, export definitions from the configured directories, and run
-the application with `npx station`. Construct runners directly only for an
-embedded/headless runtime or a focused test that cannot use `station-kit`.
+the application with `pnpm exec stationd`. Construct runners directly only for an
+embedded/headless runtime or a focused test that cannot use `station-daemon`.
+
+Station 3.0 retires `station-kit` outright. `station-runtime-cli` owns `station`; the
+daemon executable is `stationd`. Install and start `station-dashboard` separately
+with `STATION_DAEMON_URL` pointing to the local or remote daemon and `PORT` /
+`HOSTNAME` selecting the dashboard listener. Never add Next.js or dashboard
+startup to a headless worker. Closing clients must not stop the daemon.
+The removed `open`, `--no-open`, and `createStation` third `nextPort` argument
+have no compatibility mode. See [api-reference.md](api-reference.md#7-station-daemon).
 
 The workflow and Node runner examples below apply to server and desktop work.
 Browser builds follow the host setup and supported subset in [browser.md](browser.md).
@@ -62,7 +75,7 @@ Browser builds follow the host setup and supported subset in [browser.md](browse
 - Use subscribers for metrics, audit logs, alerts, and other cross-cutting
   effects. Pass them through `defineConfig({ subscribers: ... })`.
 - Stop beacons, then broadcasts, then signals during a hand-built shutdown.
-  `station-kit` already applies the safe order.
+  `station-daemon` already applies the safe order.
 - Instantiate MySQL adapters with their async `.create()` factories. Other
   official adapters use constructors.
 - Import broadcast, beacon, schedule, env, and network adapters from their
@@ -85,7 +98,7 @@ Browser builds follow the host setup and supported subset in [browser.md](browse
 
 ```ts
 // station.config.ts
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 import { SqliteAdapter } from "station-adapter-sqlite";
 import { BroadcastSqliteAdapter } from "station-adapter-sqlite/broadcast";
 import { BeaconSqliteAdapter } from "station-adapter-sqlite/beacon";
@@ -111,8 +124,8 @@ export default defineConfig({
 Run it with:
 
 ```bash
-npx station
-npx station deploy
+pnpm exec stationd
+pnpm exec stationd deploy
 ```
 
 For pnpm 10 and SQLite, allow the native build in the consumer package:
@@ -202,7 +215,7 @@ capacity, then atomically claim eligible work from the shared queue.
 
 ```ts
 // station.hq.config.ts
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 import { PostgresAdapter } from "station-adapter-postgres";
 import { StationNetworkPostgresAdapter } from "station-adapter-postgres/network";
 import { SchedulePostgresAdapter } from "station-adapter-postgres/schedules";

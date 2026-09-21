@@ -17,7 +17,7 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 test("container browsers enforce runtime flags, isolate sessions, persist profiles and recover recordings", { timeout: 120_000 }, async (t) => {
   t.diagnostic(profileStorageRoot ? "Profile mode: local Linux bind directory with quota guard" : "Profile mode: managed named volume");
   const root = mkdtempSync(join(tmpdir(), "station-container-browser-integration-"));
-  const options = { engine, executable: process.env.STATION_CONTAINER_EXECUTABLE, image, profileStorageRoot, tenantId: "tenant-a", rootDir: join(root, "owner"), workerPath: "/opt/station/container-fixture.mjs", timeoutMs: 30_000, maxProfiles: 1 } as const;
+  const options = { engine, executable: process.env.STATION_CONTAINER_EXECUTABLE, seccompProfile: process.env.STATION_CONTAINER_SECCOMP, image, profileStorageRoot, tenantId: "tenant-a", rootDir: join(root, "owner"), workerPath: "/opt/station/container-fixture.mjs", timeoutMs: 30_000, maxProfiles: 1 } as const;
   const first = new BrowserSessionManager(new ContainerBrowserAdapter(options), 3, { tenantId: "tenant-a", recordingRootDir: join(root, "recordings"), intervalMs: 100 });
   let second: BrowserSessionManager | undefined;
   try {
@@ -38,6 +38,8 @@ test("container browsers enforce runtime flags, isolate sessions, persist profil
       assert.ok(container.HostConfig.CpuQuota > 0 || container.HostConfig.NanoCpus > 0);
       const effectiveCaps = execFileSync(engine, ["exec", name, "node", "-e", "process.stdout.write(require(\"node:fs\").readFileSync(\"/proc/self/status\",\"utf8\").match(/^CapEff:\\s*(.*)$/m)[1])"], { encoding: "utf8" }).trim();
       assert.match(effectiveCaps, /^0+$/);
+      const seccomp = execFileSync(engine, ["exec", name, "node", "-e", "process.stdout.write(require(\"node:fs\").readFileSync(\"/proc/self/status\",\"utf8\").match(/^Seccomp:\\s*(.*)$/m)[1])"], { encoding: "utf8" }).trim();
+      assert.equal(seccomp, "2", "kernel seccomp filter must actually be active");
       const binds = container.Mounts.filter((mount: any) => mount.Type === "bind");
       if (profileStorageRoot) {
         assert.ok(binds.length <= 1);
@@ -108,7 +110,7 @@ test("container browsers enforce runtime flags, isolate sessions, persist profil
 
 if (proxy) test("real container browser uses the enforced HTTPS proxy and rejects metadata access", { timeout: 60_000 }, async () => {
   const root = mkdtempSync(join(tmpdir(), "station-browser-proxy-integration-"));
-  const manager = new BrowserSessionManager(new ContainerBrowserAdapter({ engine, image, executable: process.env.STATION_CONTAINER_EXECUTABLE, rootDir: root, profileStorageRoot, network, proxy: { server: proxy } }));
+  const manager = new BrowserSessionManager(new ContainerBrowserAdapter({ engine, image, executable: process.env.STATION_CONTAINER_EXECUTABLE, seccompProfile: process.env.STATION_CONTAINER_SECCOMP, rootDir: root, profileStorageRoot, network, proxy: { server: proxy } }));
   try {
     const session = await manager.open();
     await manager.perform(session.id, "navigate", "https://example.com/");

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Code } from "../../components/Code";
 
 export const metadata = { title: "Remote Triggers — Station" };
@@ -54,7 +55,7 @@ export default function RemoteTriggersPage() {
         connections.
       </p>
       <Code>{`// station.config.ts
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 import { SqliteAdapter } from "station-adapter-sqlite";
 
 export default defineConfig({
@@ -68,8 +69,9 @@ export default defineConfig({
   },
 });`}</Code>
       <p>
-        Start the server with <code>npx station</code>. The dashboard will be
-        available at <code>http://localhost:4400</code>.
+        Start the server with <code>pnpm exec stationd</code>. The API will be
+        available at <code>http://localhost:4400</code>. Start the independent
+        dashboard using the <Link href="/docs/dashboard">dashboard guide</Link>.
       </p>
 
       <hr className="divider" />
@@ -160,7 +162,7 @@ const runId = await orderPipeline.trigger({
         Station includes a <code>deploy</code> command that generates
         deployment files for your server:
       </p>
-      <Code>{`npx station deploy`}</Code>
+      <Code>{`pnpm exec stationd deploy`}</Code>
       <p>
         This writes a <code>Dockerfile</code> and <code>nixpacks.toml</code>{" "}
         to <code>.station/out/</code>. Copy the appropriate file to your
@@ -196,10 +198,6 @@ const runId = await orderPipeline.trigger({
           <tr>
             <td><code>--config &lt;path&gt;</code></td>
             <td>Path to config file (default: station.config.ts)</td>
-          </tr>
-          <tr>
-            <td><code>--no-open</code></td>
-            <td>Don't open browser on start</td>
           </tr>
           <tr>
             <td><code>--no-runners</code></td>

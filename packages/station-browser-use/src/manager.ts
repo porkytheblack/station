@@ -222,6 +222,7 @@ export class BrowserSessionManager {
     this.recordAudit(id, "action", action, undefined, "started");
     session.busy = true; session.activity = Date.now(); session.handle.lastActivityAt = new Date().toISOString();
     let outcome: "ok" | "error" = "error";
+    session.browser.setHumanControl?.(controlToken !== undefined);
     try {
       outcome = "ok";
       switch (action) {
@@ -233,7 +234,7 @@ export class BrowserSessionManager {
         case "screenshot": return { mimeType: "image/png", base64: Buffer.from(await session.browser.screenshot()).toString("base64") };
         default: throw new BrowserUseError("invalid_input", "Unknown browser action.");
       }
-    } catch (error) { outcome = "error"; throw error; } finally { session.busy = false; session.activity = Date.now(); this.recordAudit(id, "action", action, outcome, "finished"); }
+    } catch (error) { outcome = "error"; throw error; } finally { session.browser.setHumanControl?.(false); session.busy = false; session.activity = Date.now(); this.recordAudit(id, "action", action, outcome, "finished"); }
   }
   async execute(id: string, input: BrowserCommand, controlToken?: string): Promise<unknown> {
     const command = validateBrowserCommand(input);
@@ -243,8 +244,9 @@ export class BrowserSessionManager {
     this.recordAudit(id, "action", command.op, undefined, "started");
     session.busy = true; session.activity = Date.now(); session.handle.lastActivityAt = new Date().toISOString();
     let outcome: "ok" | "error" = "error";
+    session.browser.setHumanControl?.(controlToken !== undefined);
     try { const result = await session.browser.execute(command); outcome = "ok"; return result; }
-    finally { session.busy = false; session.activity = Date.now(); this.recordAudit(id, "action", command.op, outcome, "finished"); }
+    finally { session.browser.setHumanControl?.(false); session.busy = false; session.activity = Date.now(); this.recordAudit(id, "action", command.op, outcome, "finished"); }
   }
   startRecording(sessionId: string): BrowserRecording {
     this.checkState();

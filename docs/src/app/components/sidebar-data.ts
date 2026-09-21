@@ -5,6 +5,7 @@ export const sections = [
       { href: "/docs/getting-started", label: "Getting started" },
       { href: "/docs/browser", label: "Browser runtime" },
       { href: "/docs/execution", label: "Sandbox & Browser Use" },
+      { href: "/docs/images", label: "Images & registry" },
       { href: "/docs/dashboard", label: "Dashboard" },
       { href: "/docs/remote-triggers", label: "Remote triggers" },
       { href: "/docs/dynamic-broadcasts", label: "Dynamic broadcasts" },
@@ -23,7 +24,7 @@ export const sections = [
       { href: "/docs/beacons", label: "Beacons" },
       { href: "/docs/expressions", label: "Expressions" },
       { href: "/docs/adapters", label: "Adapters" },
-      { href: "/docs/station", label: "Station Kit" },
+      { href: "/docs/station", label: "Station Daemon" },
     ],
   },
   {

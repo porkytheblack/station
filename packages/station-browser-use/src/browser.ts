@@ -1,6 +1,8 @@
 import type { BrowserCommand, BrowserOpenOptions, BrowserProfile } from "./commands.js";
 /** Browser sessions are live resources owned by one worker, not durable agents. */
 export interface BrowserSession {
+  /** Trusted manager hook. Never expose as an agent command. */
+  setHumanControl?(active: boolean): void;
   navigate(url: string): Promise<void>;
   evaluate(expression: string): Promise<unknown>;
   click(selector: string): Promise<void>;

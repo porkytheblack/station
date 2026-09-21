@@ -7,6 +7,7 @@ import type { BeaconInstance, ExitReason } from "../types.js";
  */
 export interface BeaconIPCMessage {
   type:
+    | "beacon:trigger"
     | "beacon:started"
     | "beacon:ready"
     | "beacon:heartbeat"

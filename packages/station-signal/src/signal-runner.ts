@@ -33,7 +33,7 @@ function hasExited(child: ChildProcess): boolean {
 let _tsxImport: string | undefined;
 function getTsxImport(): string | undefined {
   if (_tsxImport !== undefined) return _tsxImport || undefined;
-  // Allow station-kit (or other launchers) to pass the tsx path
+  // Allow station-daemon (or other launchers) to pass the tsx path
   if (process.env.__STATION_TSX) {
     _tsxImport = process.env.__STATION_TSX;
     return _tsxImport;
@@ -317,7 +317,7 @@ export class SignalRunner {
    * global `configure()` singleton — important when multiple SignalRunner
    * instances coexist or when the global adapter differs from this runner's.
    */
-  async triggerSignal(name: string, input: unknown, schedule?: { id: string; scheduledFor: Date }): Promise<string> {
+  async triggerSignal(name: string, input: unknown, schedule?: { id: string; scheduledFor: Date }, options?: { idempotencyKey?: string; requiredStationId?: string }): Promise<string> {
     const sig = this.registry.get(name)?.signal;
     if (!sig) {
       throw new Error(`Signal "${name}" is not registered (no Signal object available)`);
@@ -328,8 +328,13 @@ export class SignalRunner {
     if (!result.success) {
       throw new Error(`Invalid input for signal "${name}": ${result.error.message}`);
     }
-    const idempotencyKey = schedule ? `schedule:${schedule.id}:${schedule.scheduledFor.toISOString()}` : undefined;
-    const id = idempotencyKey ? deterministicRunId(idempotencyKey) : this.adapter.generateId();
+    if (options?.idempotencyKey !== undefined && (typeof options.idempotencyKey !== "string" || options.idempotencyKey.length < 1 || options.idempotencyKey.length > 1024)) throw new Error("Invalid idempotency key");
+    if (options?.requiredStationId !== undefined) {
+      if (typeof options.requiredStationId !== "string" || options.requiredStationId.length < 1 || options.requiredStationId.length > 255 || options.requiredStationId.trim() !== options.requiredStationId || /[\r\n\0]/.test(options.requiredStationId)) throw new Error("Invalid required Station identity");
+      if (!this.adapter.claimRun) throw new Error("Explicit Station placement requires an adapter with atomic run claiming");
+    }
+    const idempotencyKey = schedule ? `schedule:${schedule.id}:${schedule.scheduledFor.toISOString()}` : options?.idempotencyKey;
+    const id = idempotencyKey ? signalRunIdForKey(idempotencyKey) : this.adapter.generateId();
     const run: Run = {
       id,
       signalName: name,
@@ -343,13 +348,21 @@ export class SignalRunner {
       scheduleId: schedule?.id,
       scheduledFor: schedule?.scheduledFor,
       idempotencyKey,
+      requiredStationId: options?.requiredStationId,
     };
+    const existing = idempotencyKey ? await this.adapter.getRun(id) : null;
+    if (existing) {
+      if (existing.signalName !== name || existing.input !== run.input || existing.requiredStationId !== run.requiredStationId) throw new Error("Idempotency key conflicts with an existing run");
+      return id;
+    }
     try {
       await this.adapter.addRun(run);
     } catch (err) {
       // Deterministic schedule IDs make enqueue idempotent across controller
       // retries and ambiguous database/network failures.
-      if (!idempotencyKey || !(await this.adapter.getRun(id))) throw err;
+      const duplicate = idempotencyKey ? await this.adapter.getRun(id) : null;
+      if (!duplicate) throw err;
+      if (duplicate.signalName !== name || duplicate.input !== run.input || duplicate.requiredStationId !== run.requiredStationId) throw new Error("Idempotency key conflicts with an existing run");
     }
     this.wakeUp();
     return id;
@@ -761,6 +774,8 @@ export class SignalRunner {
     for (const run of due) {
       if (this.activeCount >= this.maxConcurrent) break;
 
+      // A requested owner remains authoritative before discovery/env checks and after recovery.
+      if (run.requiredStationId != null && run.requiredStationId !== this.stationId) continue;
       const sig = this.registry.get(run.signalName);
       if (!sig) {
         if (!this.failUnknownSignals) continue;
@@ -860,6 +875,13 @@ export class SignalRunner {
           continue;
         }
       } else {
+        if (run.requiredStationId !== undefined) {
+          if (networkSlot) await this.releaseNetworkSlotValue(networkSlot);
+          const error = "Explicit Station placement requires atomic run claiming";
+          await this.adapter.updateRun(run.id, { status: "failed", completedAt: new Date(), error });
+          this.emit("onRunFailed", { run, error });
+          continue;
+        }
         await this.adapter.updateRun(run.id, {
           status: "running",
           startedAt: claimedAt,
@@ -1119,6 +1141,7 @@ export class SignalRunner {
       type: "job:init",
       data: {
         runId: run.id,
+        attempt: Math.max(1, run.attempts),
         signalName: run.signalName,
         signalFile: sig.filePath,
         input: run.input,
@@ -1302,7 +1325,8 @@ export class SignalRunner {
   }
 }
 
-function deterministicRunId(key: string): string {
+/** Stable run identity for an idempotent trigger; callers must scope keys to their operation. */
+export function signalRunIdForKey(key: string): string {
   const hex = createHash("sha256").update(key).digest("hex").slice(0, 32);
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }

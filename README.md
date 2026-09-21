@@ -11,14 +11,16 @@ Type-safe background jobs, recurring tasks, and DAG workflows for TypeScript.
 - **Station Networks** — Scale stateless work across a fleet with atomic leases, per-station and fleet-wide concurrency, placement labels, draining, and a Headquarters control plane
 - **Calendar schedules** — Five-field cron expressions with IANA timezones, overlap policy, and explicit misfire handling
 - **Four adapter backends** — SQLite, PostgreSQL, MySQL, Redis (or bring your own)
-- **`station-kit`** — The entry point: one config file and `npx station` wire the runners, a real-time dashboard with auth and WebSocket updates, and an authenticated REST API
+- **Separate daemon and clients** — `station-daemon` runs jobs and the API; `station-runtime-cli` and `station-dashboard` independently connect to local or remote daemons
+- **Compiled Station Images** — Publish native or bundled JavaScript signals, broadcast planners and beacons to an operator registry; distribute compatible images across Headquarters workers with explicit environment grants and optional worker pins. See the [complete guide](docs/STATION-IMAGES.md) and [site reference](https://station.dterminal.net/docs/images).
 - **Remote triggers** — `configure({ endpoint, apiKey })` to trigger jobs from any service over HTTP
 - **Claude Code skill** — AI assistant that knows the full API
 
 ## Quick start
 
 ```bash
-pnpm add station-signal station-kit
+pnpm add station-signal station-daemon station-adapter-sqlite
+pnpm add -D station-runtime-cli station-dashboard
 ```
 
 Define a signal:
@@ -40,7 +42,7 @@ Configure and run it:
 
 ```ts
 // station.config.ts
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 import { SqliteAdapter } from "station-adapter-sqlite";
 
 export default defineConfig({
@@ -50,11 +52,23 @@ export default defineConfig({
 ```
 
 ```bash
-npx station
+pnpm exec stationd
 ```
 
-`station-kit` is the entry point: one config file and one command wire the
-runners, the dashboard, and the authenticated v1 API. The `SignalRunner` /
+`stationd` runs the configured runners and authenticated v1 API in the foreground.
+Start the dashboard separately in another terminal:
+
+```bash
+STATION_DAEMON_URL=http://127.0.0.1:4400 PORT=4401 HOSTNAME=127.0.0.1 pnpm exec station-dashboard
+```
+
+Open `http://127.0.0.1:4401`. Closing the dashboard does not stop the daemon or
+jobs. For a remote daemon, set its URL instead. Station 3.0 retires `station-kit`
+without compatibility exports; configuration imports now come from
+`station-daemon`. The `station` executable belongs to `station-runtime-cli`. See the
+[Station 3.0 breaking changes](docs/STATION-3.md) for the complete startup split.
+
+The `SignalRunner` /
 `BroadcastRunner` / `BeaconRunner` classes are exported too, but constructing
 them by hand is an escape hatch — for embedding Station in a process you already
 own, headless workers, or tests.
@@ -90,7 +104,10 @@ await sendEmail.trigger({
 | [`station-adapter-postgres`](./packages/station-adapter-postgres) | PostgreSQL adapter (pg) |
 | [`station-adapter-mysql`](./packages/station-adapter-mysql) | MySQL adapter (mysql2) |
 | [`station-adapter-redis`](./packages/station-adapter-redis) | Redis adapter (ioredis) |
-| [`station-kit`](./packages/station-kit) | **The entry point** — `defineConfig` + `npx station`: runners, dashboard, v1 API, deploy |
+| [`station-daemon`](./packages/station-daemon) | Headless runtime, configuration, authenticated API and `stationd` |
+| [`station-client`](./packages/station-client) | Shared authenticated client transport |
+| [`station-runtime-cli`](./packages/station-cli) | `station` command, local process management and remote operations |
+| [`station-dashboard`](./packages/station-dashboard) | Independently started dashboard for a local or remote daemon |
 
 ## Documentation
 

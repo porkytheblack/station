@@ -9,6 +9,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import type { BrowserContext, Page } from "playwright";
+import { BrowserTrafficPolicy, type BrowserReliabilityOptions } from "./reliability.js";
+export interface PlaywrightConnection { context: BrowserContext; provider?: { name: string; sessionId: string }; isConnected?(): boolean; close(): Promise<void> }
 export interface PlaywrightBrowserOptions {
   executablePath?: string;
   timeoutMs?: number;
@@ -20,12 +22,18 @@ export interface PlaywrightBrowserOptions {
   /** Aggregate bytes retained by downloads in one session; default 4 MiB. */
   maxArtifactBytes?: number;
   maxArtifacts?: number;
+  /** Opt-in pacing and challenge detection; shared across this adapter's sessions. */
+  reliability?: BrowserReliabilityOptions;
+  locale?: string;
+  timezoneId?: string;
 }
 export class PlaywrightBrowserAdapter implements BrowserAdapter {
-  readonly name = "playwright";
+  readonly name: string = "playwright";
   readonly capabilities: BrowserAdapter["capabilities"];
   private readonly profileRoot?: string;
+  private readonly traffic: BrowserTrafficPolicy;
   constructor(private readonly options: PlaywrightBrowserOptions = {}) {
+    this.traffic = new BrowserTrafficPolicy(options.reliability);
     this.capabilities = { screenshots: true, independentSessions: true, isolated: false, networkRestricted: false, profiles: Boolean(options.profileRootDir), pages: true, commands: true, uploads: true, downloads: true, pointer: true, inspection: true, locators: true, dialogs: true, diagnostics: true, tracing: true };
     validateTimeout(options.timeoutMs ?? 30_000);
     validateBrowserOpenOptions({ viewport: options.viewport });
@@ -34,6 +42,8 @@ export class PlaywrightBrowserAdapter implements BrowserAdapter {
     }
     if (options.profileRootDir) { this.profileRoot = directory(options.profileRootDir); namespaceRoot(this.profileRoot, "profiles"); }
   }
+  /** Remote adapters reuse all page/agent machinery while owning their provider lifecycle. */
+  protected async connectRemote(_options: BrowserOpenOptions, _artifactsDir: string): Promise<PlaywrightConnection | undefined> { return undefined; }
   async listProfiles(): Promise<BrowserProfile[]> {
     if (!this.profileRoot) return [];
     return entries(this.profileRoot).map((id) => ({ id: safeId(id), inUse: existsSync(join(ownedPath(this.profileRoot!, id), ".station-owner.json")) }));
@@ -59,21 +69,27 @@ export class PlaywrightBrowserAdapter implements BrowserAdapter {
       const traceRoot = join(downloadsPath, "traces");
       const settings = { tracesDir: traceRoot, headless: true, executablePath: this.options.executablePath, timeout: timeoutMs, proxy: this.options.proxy, downloadsPath };
       const viewport = options.viewport ?? this.options.viewport ?? { width: 1280, height: 720 };
-      if (options.profileId) {
+      const remote = await this.connectRemote(options, downloadsPath);
+      if (remote) {
+        context = remote.context; closeProcess = () => remote.close();
+      } else if (options.profileId) {
         if (!this.profileRoot) throw new BrowserUseError("unsupported", "Persistent profiles are not configured.");
         const path = directory(ownedPath(this.profileRoot, options.profileId));
         release = lockDirectory(path);
-        context = await chromium.launchPersistentContext(path, { ...settings, viewport, acceptDownloads: true });
+        context = await chromium.launchPersistentContext(path, { ...settings, viewport, acceptDownloads: true, locale: this.options.locale, timezoneId: this.options.timezoneId });
         closeProcess = () => context!.close();
       } else {
         const browser = await chromium.launch(settings);
         closeProcess = () => browser.close();
-        context = await browser.newContext({ viewport, acceptDownloads: true });
+        context = await browser.newContext({ viewport, acceptDownloads: true, locale: this.options.locale, timezoneId: this.options.timezoneId });
       }
-      context.setDefaultTimeout(timeoutMs);
+      // Let Playwright reject an ordinary missing/blocked target before the outer
+      // watchdog treats the operation as a hung browser and closes the session.
+      context.setDefaultTimeout(Math.max(1, Math.floor(timeoutMs * 0.75)));
       const pages = new Map<string, Page>();
       const maxPages = this.options.maxPages ?? 8;
       let selected = "";
+      let humanControl = false;
       let downloadPage: Page | undefined;
       let acceptedDownload: import("playwright").Download | undefined;
       const maxBytes = this.options.maxArtifactBytes ?? 4 * 1024 * 1024;
@@ -89,7 +105,7 @@ export class PlaywrightBrowserAdapter implements BrowserAdapter {
       const register = (page: Page) => {
         if ([...pages.values()].includes(page)) return;
         if (pages.size >= maxPages) { void page.close().catch(() => undefined); return; }
-        const id = randomUUID(); pages.set(id, page); selected ||= id; tools.register(page);
+        const id = randomUUID(); pages.set(id, page); selected ||= id; tools.register(page); this.traffic.watch(page);
         page.on("close", () => { pages.delete(id); if (selected === id) selected = pages.keys().next().value ?? ""; });
         page.on("download", (download) => {
           if (downloadPage === page && !acceptedDownload) acceptedDownload = download;
@@ -99,7 +115,7 @@ export class PlaywrightBrowserAdapter implements BrowserAdapter {
       context.on("page", register);
       for (const page of context.pages()) register(page);
       if (!pages.size) register(await context.newPage());
-      const current = () => { const page = pages.get(selected); if (!page) throw new BrowserUseError("not_found", "Selected page is closed."); return page; };
+      const current = () => { if (remote?.isConnected?.() === false) throw new BrowserUseError("provider_disconnected", "Remote browser disconnected. Check provider session expiry and reconcile before creating a replacement."); const page = pages.get(selected); if (!page) throw new BrowserUseError("not_found", "Selected page is closed."); return page; };
       const listPages = async (): Promise<BrowserPage[]> => Promise.all([...pages].map(async ([id, page]) => ({ id, url: page.url(), title: await page.title(), selected: id === selected })));
       const execute = async (input: BrowserCommand): Promise<unknown> => {
         const command = validateBrowserCommand(input);
@@ -120,9 +136,9 @@ export class PlaywrightBrowserAdapter implements BrowserAdapter {
           case "inspect": return inspect(page, command.target, command.maxElements, command.maxTextLength);
           case "accessibility": return boundedResult({ format: "aria-yaml", snapshot: await locatorFor(page, command.target ?? { by: "selector", value: "body" }).ariaSnapshot({ depth: command.depth ?? 10, boxes: command.boxes ?? false }) });
           case "dialog": return tools.dialog(page, command.action, command.promptText, command.expiresInMs);
-          case "diagnostics": return tools.diagnostics(command);
-          case "traceStart": return tools.traceStart();
-          case "traceStop": return tools.traceStop();
+          case "diagnostics": return { ...tools.diagnostics(command), reliability: await this.traffic.inspect(page), ...(remote?.provider ? { provider: { ...remote.provider, connected: remote.isConnected?.() ?? true } } : {}) };
+          case "traceStart": if (remote) throw new BrowserUseError("unsupported", "Remote tracing requires provider artifact integration."); return tools.traceStart();
+          case "traceStop": if (remote) throw new BrowserUseError("unsupported", "Remote tracing requires provider artifact integration."); return tools.traceStop();
           case "scroll": await page.mouse.wheel(command.x, command.y); return null;
           case "waitFor": await commandLocator(page, command).waitFor({ state: command.state ?? "visible" }); return null;
           case "content": { const html = await page.content(); if (Buffer.byteLength(html) > 4 * 1024 * 1024) throw new BrowserUseError("output_limit", "Page content exceeds 4 MiB."); return html; }
@@ -146,6 +162,7 @@ export class PlaywrightBrowserAdapter implements BrowserAdapter {
           }
           case "upload": await commandLocator(page, command).setInputFiles(command.files.map((file) => ({ name: file.name, mimeType: file.mimeType, buffer: Buffer.from(file.base64, "base64") }))); return null;
           case "download": {
+            if (remote) throw new BrowserUseError("unsupported", "Remote downloads require provider artifact integration.");
             capacity();
             downloadPage = page; acceptedDownload = undefined;
             const pending = page.waitForEvent("download"); void pending.catch(() => undefined);
@@ -175,9 +192,13 @@ export class PlaywrightBrowserAdapter implements BrowserAdapter {
         }
       };
       let closing: Promise<void> | undefined;
+      const guarded = <T>(operation: () => Promise<T>, url?: string) => this.traffic.run(current(), operation, humanControl, url, current);
+      const readonly = new Set(["pages", "selectPage", "closePage", "inspect", "accessibility", "content", "diagnostics", "downloadRead", "downloadDelete", "traceStart", "traceStop"]);
       return managedSession({
-        navigate: async (url) => { await current().goto(url); }, evaluate: (expression) => current().evaluate(expression), click: (selector) => current().locator(selector).click(),
-        type: (text) => current().keyboard.insertText(text), press: (key) => current().keyboard.press(key), screenshot: () => current().screenshot({ type: "png" }), execute,
+        setHumanControl: (active) => { humanControl = active; },
+        navigate: (url) => guarded(async () => { await current().goto(url); }, url), evaluate: (expression) => guarded(() => current().evaluate(expression)), click: (selector) => guarded(() => current().locator(selector).click()),
+        type: (text) => guarded(() => current().keyboard.insertText(text)), press: (key) => guarded(() => current().keyboard.press(key)), screenshot: () => current().screenshot({ type: "png" }),
+        execute: (input) => { const command = validateBrowserCommand(input); return readonly.has(command.op) ? execute(command) : guarded(() => execute(command), command.op === "newPage" ? command.url : undefined); },
         close: () => closing ??= (async () => { try { await closeProcess!(); } finally { try { await tools.close(); } finally { release?.(); artifacts.clear(); rmSync(downloadsPath, { recursive: true, force: true }); } } })(),
       }, timeoutMs);
     } catch (error) {

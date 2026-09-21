@@ -1,6 +1,6 @@
 {
   "name": "station-schedules",
-  "version": "2.4.0",
+  "version": "3.0.0",
   "description": "Runtime-editable schedule store and reconciler for station-signal and station-broadcast",
   "license": "MIT",
   "main": "dist/index.js",
@@ -12,14 +12,19 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist", "src"],
+  "files": [
+    "dist",
+    "src"
+  ],
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/*.test.ts"
   },
   "type": "module",
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "devDependencies": {
     "typescript": "^5.9.3",
     "@types/node": "^25.3.0"

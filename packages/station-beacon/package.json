@@ -1,11 +1,14 @@
 {
   "name": "station-beacon",
-  "version": "2.4.0",
-  "description": "Long-running, supervised process primitive for station-signal — servers, pollers, and clients",
+  "version": "3.0.0",
+  "description": "Long-running, supervised process primitive for station-signal \u2014 servers, pollers, and clients",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
-    "./browser": { "types": "./dist/browser.d.ts", "default": "./dist/browser.js" },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "default": "./dist/browser.js"
+    },
     ".": {
       "types": "./dist/index.d.ts",
       "browser": "./dist/browser.js",
@@ -13,7 +16,10 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist", "src"],
+  "files": [
+    "dist",
+    "src"
+  ],
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
@@ -31,7 +37,9 @@
   "author": "",
   "license": "MIT",
   "type": "module",
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "peerDependencies": {
     "station-signal": "workspace:*"
   },

@@ -85,7 +85,7 @@ export function createBrowserAgentTools(options: BrowserAgentToolsOptions): Brow
   const run = async (body: Record<string, unknown>, signal?: AbortSignal) => client.request(body, { signal });
   const tools = [] as unknown as BrowserAgentTools;
   const add = (name: string, description: string, properties: Record<string, unknown>, required: string[], execute: (input: Record<string, unknown>, signal?: AbortSignal) => Promise<BrowserAgentResult>) => {
-    tools.push({ name: `station_browser_${name}`, description, inputSchema: schema(properties, required), execute(input, control) {
+    tools.push({ name: `station_browser_${name}`, description: `${description} If challenge_required is returned, pause for human takeover; do not acquire control yourself. On rate_limited, inspect diagnostics and wait. Never blindly repeat a failed mutation.`, inputSchema: schema(properties, required), execute(input, control) {
       const call = (async (): Promise<BrowserAgentResult> => {
         try {
           if (closed) throw new BrowserUseError("closed", "Browser toolset is closed.");

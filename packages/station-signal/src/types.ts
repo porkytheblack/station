@@ -21,6 +21,8 @@ export interface Run {
   startedAt?: Date;
   completedAt?: Date;
   createdAt: Date;
+  /** Immutable requested execution owner. Other Stations must never claim this run, including retries. */
+  requiredStationId?: string;
   /** Station currently responsible for this run. Set atomically when claimed. */
   stationId?: string;
   /** Opaque fencing token. Only the holder may renew or complete this attempt. */
@@ -38,7 +40,7 @@ export interface Run {
 }
 
 /** Patchable fields on a Run — identity fields (id, signalName, kind, createdAt) are immutable. */
-export type RunPatch = Partial<Omit<Run, "id" | "signalName" | "kind" | "createdAt">>;
+export type RunPatch = Partial<Omit<Run, "id" | "signalName" | "kind" | "createdAt" | "requiredStationId">>;
 
 /** Ownership written during an atomic pending -> running transition. */
 export interface RunClaim {

@@ -19,6 +19,12 @@ export default function ExecutionPage() {
         Use the host backend for trusted work. Customer execution requires tenant-scoped
         authorization and isolated, network-restricted container backends.
       </p>
+      <p>
+        For a step-by-step sandbox walkthrough, read the
+        <a href="https://github.com/porkytheblack/station/blob/main/packages/station-sandbox/GUIDE.md"> detailed Sandbox guide</a>.
+        It covers custom tool installation, Git credentials, dashboard pages,
+        tenant API payloads and the different recovery behavior of host and container backends.
+      </p>
       <table className="api-table">
         <thead><tr><th>Primitive</th><th>Runs where</th><th>Purpose</th></tr></thead>
         <tbody>
@@ -33,10 +39,43 @@ export default function ExecutionPage() {
         the browser; it does not run Bash or control server browser sessions.
         For this checkout, use workspace dependencies and the
         <a href="https://github.com/porkytheblack/station/tree/main/examples/18-execution-network"> execution-network example</a>.
-        These additions are prepared for Station 2.4.0 and still require release
+        These additions are prepared for Station 3.0.0 and still require release
         and target deployment validation.
       </p>
 
+      <h3>Hosted browsers and access reliability</h3>
+      <p>
+        Browser Use supports Browserbase and Steel through provider-managed sessions
+        and Playwright CDP. The existing agent tools, screenshots and timed recordings
+        use the selected worker. Provider credentials and profile grants stay in worker
+        configuration. Read the
+        <a href="https://github.com/porkytheblack/station/blob/main/packages/station-browser-use/REMOTE.md"> remote browser guide</a>
+        for proxy settings, tenant deployment requirements and session cleanup.
+      </p>
+      <p>
+        Remote adapters enable action pacing and challenge checks; local and container
+        Playwright can opt in. Diagnostics reports challenges, blocked pages and throttling.
+        Pause the agent for human Live takeover when needed. These checks do not guarantee
+        CAPTCHA-free access. Remote downloads and trace exports remain disabled pending
+        provider-specific artifact handling; uncertain session creation requires reconciliation.
+      </p>
+      <h3>Persistent accounts and media</h3>
+      <p>
+        For WhatsApp, TikTok and Instagram workflows, retain a separate profile grant
+        per tenant and account, then open short-lived sessions with that profile.
+        A browser closing is not an account logout. Steel saves profile changes on
+        release; the operator must wait until the profile is READY before reuse.
+        Authentication can still require human renewal.
+      </p>
+      <p>
+        WhatsApp QR linking was tested through Steel and Station dashboard Live view.
+        Authenticated profile reuse and TikTok/Instagram workflows remain unverified.
+        Browser uploads currently accept at most 16 files and 4 MiB of decoded data
+        per command. Large-video staging and remote provider downloads still need
+        artifact integrations; uploading a file and publishing it are separate actions.
+        Read the <a href="https://github.com/porkytheblack/station/blob/main/packages/station-browser-use/REMOTE.md#account-workflows-whatsapp-tiktok-and-instagram">account and media workflow guide</a>
+        {" "}for lifecycle, transfer limits and acceptance checks.
+      </p>
       <h3>Native trusted workspaces</h3>
       <Code>{`import { HostSandboxAdapter } from "station-sandbox";
 
@@ -132,6 +171,7 @@ const sandbox = new ContainerSandboxAdapter({
   engine: "docker", // Podman is also supported.
   network: "none", memoryMb: 512, cpus: 1, pidsLimit: 128,
   enablePty: true,
+  seccompProfile: "/etc/station/seccomp.json", // Reviewed deny-default policy.
 });
 await sandbox.ready();`}</Code>
       <p>Provision a Linux engine and pre-pull an operator-controlled image containing
@@ -139,6 +179,11 @@ await sandbox.ready();`}</Code>
         volume. The adapter drops capabilities, uses a read-only root, bounds CPU/memory/PIDs
         and exposes no engine socket or arbitrary host mounts to workload code. Engine
         access belongs exclusively to the controller. It never falls back to host execution.</p>
+      <p>Both ContainerSandboxAdapter and ContainerBrowserAdapter require enforced seccomp.
+        If the engine default is unconfined, supply an absolute <code>seccompProfile</code>
+        pointing to an operator-reviewed deny-default JSON policy. Station validates and stages
+        a private copy. Missing or unsafe policy fails admission; it does not change global
+        engine settings. This policy is independent of the network and disk controls below.</p>
       <p>Network access defaults to none. Public customers must not receive unrestricted
         bridge networking: protect cloud metadata, private networks and other tenants with
         an operator-enforced egress policy. Named volumes need storage-level disk quotas;
@@ -549,7 +594,7 @@ pnpm test:browser-use:agent`}</Code>
         Local browser and protocol checks are separate from successful model-driven
         execution; a rejected credential leaves that external test unverified.</p>
       <h3>Opt in to Bun signal and beacon children</h3>
-      <Code>{`import { defineConfig } from "station-kit";
+      <Code>{`import { defineConfig } from "station-daemon";
 import { BunProcessRuntime } from "station-signal";
 
 export default defineConfig({

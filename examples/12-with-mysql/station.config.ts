@@ -1,4 +1,4 @@
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 import { MysqlAdapter } from "station-adapter-mysql";
 
 const connectionString = process.env.DATABASE_URL ?? "mysql://root@localhost:3306/station";

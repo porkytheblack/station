@@ -755,3 +755,16 @@ test("stopAllInstances stops the definition instance and every runtime one", asy
     await runner.stop({ graceful: true, timeoutMs: 3_000 });
   }
 });
+
+test("station pins are validated and cannot be changed through instance patches", async () => {
+  const adapter = new BeaconMemoryAdapter();
+  const runner = new BeaconRunner({ adapter, stationId: "owner" });
+  runner.register(workerBeacon, fx("worker-beacon"));
+  for (const requiredStationId of ["", " owner", "owner\n", "x".repeat(256)]) {
+    await assert.rejects(runner.createInstance("worker-b", { config: { queue: "jobs" }, requiredStationId }), /requiredStationId/);
+  }
+  const instance = await runner.createInstance("worker-b", { config: { queue: "jobs" }, requiredStationId: "owner" });
+  await adapter.updateInstance(instance.id, { requiredStationId: "other" } as any);
+  assert.equal((await adapter.getInstance(instance.id))?.requiredStationId, "owner");
+  await runner.stop();
+});

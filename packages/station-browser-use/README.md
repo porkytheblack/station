@@ -4,6 +4,8 @@ Browser sessions, structured browser commands, file artifacts and bounded screen
 
 A manager owns live sessions on one worker. Applications provide authentication, authorization, routing to that owner, worker supervision and deployment isolation. This package does not make a browser process a tenant security boundary.
 
+For hosted browsers, use `BrowserbaseBrowserAdapter` from `station-browser-use/browserbase` or `SteelBrowserAdapter` from `station-browser-use/steel`. Read the [remote browser and reliability guide](REMOTE.md) for provider/proxy configuration, granted profiles, challenge handling, human takeover, lifecycle reconciliation and validation limits. Local and container Playwright can opt into the same pacing and challenge checks. The guide also covers [persistent social-account workflows and media transfer limits](REMOTE.md#account-workflows-whatsapp-tiktok-and-instagram), including the WhatsApp test evidence and unverified TikTok/Instagram flows.
+
 ## Give an agent browser tools
 
 `station-browser-use/agent` exports an authenticated client and framework-neutral
@@ -263,6 +265,8 @@ Container defaults are nonroot UID/GID `1000:1000`, all Linux capabilities dropp
 
 The repository's [enforced Linux deployment](../../scripts/execution-container/enforced/README.md) supplies a rootful Docker/XFS profile with a dedicated HTTPS proxy, kernel-enforced egress rules and a shared tenant block/inode quota. Set the operator-only `profileStorageRoot` to its provisioned profile directory and `proxy: { server: "http://PROXY_IPV4:8080" }` to its fixed proxy. Directory-backed profiles require a local Linux Docker engine, matching controller/workload UID, and the repository-built image containing `/usr/local/bin/station-quota-guard`; there is no fallback to an unguarded image. The guard prevents descendants from changing project IDs/inheritance. Workload DNS and IPv6 are disabled when proxy mode is selected. Put `rootDir`, manager `recordingRootDir`, `stateRootDir` and Station metadata beneath the same provisioned tenant quota. These options do not themselves install a firewall or quota; run the deployment verifier before admission. The ordinary named-volume mode remains available for separately enforced storage.
 
+`ready()` also requires an enforced seccomp default. If the engine default is unconfined or unverifiable, provide an operator-reviewed `seccompProfile: "/etc/station/seccomp.json"` with a deny-default policy. It is copied by content hash and applied to each session. Missing support and permissive profiles fail closed; profile paths are never tenant input.
+
 `ready()` verifies the Linux engine, resource-controller support, immutable image, and previously journaled containers. Container names and profile volumes carry controller ownership labels. Restart reconciles old session containers before allowing profiles to be reused. A live controller root has an exclusive ownership lock. `bindTenant(id)` permanently binds controller storage and recording storage to one tenant; a later different or omitted identity is rejected. Pass the same `tenantId` in both the container adapter options and the manager recording options when reopening a bound recording root, so ownership is checked before recovery or retention cleanup. Existing unbound profiles/recordings cannot be adopted by a tenant. These locks are single-host controls, not distributed leases. Station must still authenticate callers and route each tenant only to its assigned worker.
 
 Engine logging is disabled for these containers so screenshot/RPC payloads do not accumulate in daemon log files. Browser commands use bounded JSONL over the attached container's standard streams, with 8 MiB requests and 34 MiB responses. Commands and screenshots retain the same manager/adapter limits. Close interrupts active work, closes Chromium for profile flushing, removes the owned session container, and keeps its profile volume until explicit deletion. If cleanup fails, the adapter fails closed and retains its journal for recovery. `BrowserSessionManager.close()` also closes adapters that implement their optional lifecycle method.
@@ -276,6 +280,8 @@ STATION_CONTAINER_ENGINE=podman \
 STATION_BROWSER_CONTAINER_IMAGE=localhost/station-browser-integration:test \
 pnpm --filter station-browser-use test:containers
 ```
+
+The integration has also passed against Docker Desktop 27.5.1 Linux arm64 with the repository-built Chromium image and an explicit official Moby deny-default seccomp profile (`STATION_CONTAINER_SECCOMP=/absolute/profile.json`). The test verifies that kernel seccomp mode is actually 2; the adapter rejects this engine’s globally unconfined default without that profile. This run used named volumes and does not establish production filesystem quota or egress enforcement.
 
 The local Podman Linux integration verifies zero effective Linux capabilities, configured CPU/memory/PID limits, nonroot/read-only/no-network containers, no host bind mounts, separate cookies, profile exclusivity and quota, profile reuse after controller replacement, page controls, uploads/downloads, PNG capture, pending-action cancellation and durable recording recovery. It uses a test-only HTTP fixture inside each network-disabled container. It does not validate an external egress-policy deployment or a hostile-tenant penetration test.
 

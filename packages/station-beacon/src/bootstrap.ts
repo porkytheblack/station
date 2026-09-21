@@ -66,7 +66,8 @@ function sendIPC(
     | "beacon:exposed"
     | "beacon:log"
     | "beacon:stopping"
-    | "beacon:error",
+    | "beacon:error"
+    | "beacon:trigger",
   data?: Record<string, unknown>,
 ): void {
   if (typeof process.send === "function") {
@@ -163,11 +164,28 @@ process.on("SIGINT", () => {
 });
 
 // ─── Build context ────────────────────────────────────────────────────
-function buildContext<TConfig>(config: TConfig): BeaconContext<TConfig> {
+function buildContext<TConfig>(config: TConfig, environment: Record<string, string> = {}): BeaconContext<TConfig> {
   return {
     name: beaconName!,
     instanceId,
     config,
+    environment: Object.freeze({ ...environment }),
+    triggerDependency(alias, input, requestId) {
+      if (abortController.signal.aborted) return Promise.reject(new Error("Beacon is stopping"));
+      return new Promise((resolve, reject) => {
+        const cleanup = () => { clearTimeout(timer); process.off("message", receive); abortController.signal.removeEventListener("abort", cancel); };
+        const cancel = () => { cleanup(); reject(new Error("Beacon trigger cancelled")); };
+        const receive = (raw: unknown) => {
+          const response = raw as { type?: string; requestId?: string; runId?: string; error?: string };
+          if (response?.type !== "beacon:trigger-result" || response.requestId !== requestId) return;
+          cleanup();
+          if (response.error || !response.runId) reject(new Error("Beacon dependency trigger failed")); else resolve(response.runId);
+        };
+        const timer = setTimeout(() => { cleanup(); reject(new Error("Beacon dependency trigger timed out")); }, 10000);
+        process.on("message", receive); abortController.signal.addEventListener("abort", cancel, { once: true });
+        sendIPC("beacon:trigger", { alias, input, requestId });
+      });
+    },
     incarnation,
     signal: abortController.signal,
     ready(): void {
@@ -260,7 +278,7 @@ try {
       // Config errors are fatal — restarting with the same config won't help.
       sendThenExit("beacon:error", { error: msg, fatal: true }, FATAL_EXIT_CODE);
     } else {
-      const ctx = buildContext(result.data);
+      const ctx = buildContext(result.data, job.env);
       sendIPC("beacon:started");
 
       await target.handler(ctx);

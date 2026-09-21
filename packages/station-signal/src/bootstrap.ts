@@ -7,6 +7,7 @@
  * Step records to the adapter. It does NOT write run status.
  */
 
+import { setRunContext } from "./run-context.js";
 import { configure, getAdapter } from "./config.js";
 import { createAdapter } from "./adapters/registry.js";
 // Ensure built-in adapters are registered
@@ -68,6 +69,11 @@ if (job.env) {
     process.env[key] = value;
   }
 }
+
+setRunContext({
+  runId, signalName, attempt: job.attempt ?? 1,
+  environment: Object.fromEntries(Object.entries(job.env ?? {}).filter(([key]) => !isReservedEnvKey(key))),
+});
 
 /**
  * Send a lifecycle event to the parent runner via IPC (if available).

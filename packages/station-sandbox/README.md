@@ -2,6 +2,8 @@
 
 Persistent POSIX workspaces and supervised shell commands for Station workers. This is a separate primitive from `station-browser-use`: a workspace does not implicitly own a browser session.
 
+Read the [detailed Sandbox guide](GUIDE.md) for a complete walkthrough, custom CLI installation, Git credentials, dashboard usage, tenant APIs, persistence and deployment responsibilities.
+
 `HostSandboxAdapter` runs real Bash and native programs installed on the worker. It does not emulate Unix, install Node or Git, or require Docker. Package the tools into your worker image, or install them on the host and expose them through `PATH`. Multiple workspaces can use those shared tools while keeping separate working directories and home directories.
 
 This is a **trusted-code backend**. Commands run as the worker's operating-system user and can access anything that user can access. Workspace paths and separate `HOME` directories organize work; they do not provide tenant isolation. The adapter advertises `isolated: false`; PTY support is opt-in through `enablePty: true` with the optional native `node-pty` peer installed. File APIs and supervised services are available without that peer. Use `ContainerSandboxAdapter` from `station-sandbox/container` for container isolation, and route public customers through the tenant execution API on dedicated private workers.
@@ -31,6 +33,12 @@ const workspace = await sandboxes.create();
 // During worker shutdown:
 await sandboxes.close();
 ```
+
+`ready()` requires a verified built-in seccomp default or an operator-reviewed
+`seccompProfile: "/etc/station/seccomp.json"` with a deny-default policy. An
+unconfined engine default fails closed. The profile is copied by content hash;
+existing workspaces remain bound to that policy and need explicit recreation or
+migration when it changes. Never accept a seccomp path from a tenant request.
 
 The image needs Node, Bash, `setsid` and a writable home for its configured non-root
 user. Package Git and custom tools into that image or install them into the retained

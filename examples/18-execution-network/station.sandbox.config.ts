@@ -1,4 +1,4 @@
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 import { HostSandboxAdapter } from "station-sandbox";
 import { shared, required } from "./shared.js";
 

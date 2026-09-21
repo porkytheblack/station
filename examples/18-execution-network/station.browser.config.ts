@@ -1,4 +1,4 @@
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 import { BrowserSessionManager } from "station-browser-use";
 import { BunBrowserAdapter } from "station-browser-use/bun";
 import { PlaywrightBrowserAdapter } from "station-browser-use/playwright";

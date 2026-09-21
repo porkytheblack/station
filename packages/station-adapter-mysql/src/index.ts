@@ -20,6 +20,7 @@ const { toColumn, toField } = createColumnMapper({
   completedAt: "completed_at",
   createdAt: "created_at",
   stationId: "station_id",
+  requiredStationId: "required_station_id",
   leaseToken: "lease_token",
   leaseExpiresAt: "lease_expires_at",
   claimedAt: "claimed_at",
@@ -44,7 +45,9 @@ const { toColumn: toStepColumn, toField: toStepField } = createColumnMapper({
 const STEP_DATE_FIELDS = new Set(["startedAt", "completedAt"]);
 
 function rowToRun(row: Record<string, unknown>): Run {
-  return rowToObject<Run>(row, toField, DATE_FIELDS);
+  const run = rowToObject<Run>(row, toField, DATE_FIELDS);
+  run.requiredStationId = typeof row.required_station_id === "string" ? row.required_station_id : undefined;
+  return run;
 }
 
 /**
@@ -79,6 +82,7 @@ function rowToStep(row: Record<string, unknown>): Step {
 async function ensureRunLeaseColumns(pool: Pool, tableName: string): Promise<void> {
   const columns = [
     "station_id VARCHAR(255)",
+    "required_station_id VARCHAR(255)",
     "lease_token VARCHAR(64)",
     "lease_expires_at DATETIME(3)",
     "claimed_at DATETIME(3)",
@@ -106,9 +110,10 @@ async function claimMysqlRun(
      SET status = 'running', station_id = ?, lease_token = ?, lease_expires_at = ?,
          claimed_at = ?, started_at = ?, last_run_at = ?, attempts = attempts + 1
      WHERE id = ? AND status = 'pending'
+       AND (required_station_id IS NULL OR BINARY required_station_id = BINARY ?)
        AND (next_run_at IS NULL OR next_run_at <= ?)`,
     [claim.stationId, claim.leaseToken, dateToStr(claim.leaseExpiresAt), claimedAt,
-      claimedAt, claimedAt, id, claimedAt],
+      claimedAt, claimedAt, id, claim.stationId, claimedAt],
   );
   if (result.affectedRows !== 1) return null;
   const [rows] = await pool.execute<RowDataPacket[]>(`SELECT * FROM ${tableName} WHERE id = ?`, [id]);
@@ -264,6 +269,7 @@ export class MysqlAdapter implements SerializableAdapter {
         output          TEXT,
         error           TEXT,
         station_id      VARCHAR(255),
+      required_station_id VARCHAR(255),
         lease_token     VARCHAR(64),
         lease_expires_at DATETIME(3),
         claimed_at      DATETIME(3),
@@ -340,8 +346,8 @@ export class MysqlAdapter implements SerializableAdapter {
         (id, signal_name, kind, input, status, attempts, max_attempts,
          timeout, \`interval\`, next_run_at, last_run_at, started_at,
          completed_at, created_at, output, error, station_id, lease_token,
-         lease_expires_at, claimed_at, schedule_id, scheduled_for, idempotency_key)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         lease_expires_at, claimed_at, schedule_id, scheduled_for, idempotency_key, required_station_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         run.id,
         run.signalName,
@@ -366,6 +372,7 @@ export class MysqlAdapter implements SerializableAdapter {
         run.scheduleId ?? null,
         dateToStr(run.scheduledFor),
         run.idempotencyKey ?? null,
+        run.requiredStationId ?? null,
       ],
     );
   }
@@ -685,6 +692,7 @@ async function initializeTables(pool: Pool, tableName: string, stepsTable: strin
       output          TEXT,
       error           TEXT,
       station_id      VARCHAR(255),
+      required_station_id VARCHAR(255),
       lease_token     VARCHAR(64),
       lease_expires_at DATETIME(3),
       claimed_at      DATETIME(3),
@@ -778,8 +786,8 @@ class LazyMysqlAdapter implements SerializableAdapter {
         (id, signal_name, kind, input, status, attempts, max_attempts,
          timeout, \`interval\`, next_run_at, last_run_at, started_at,
          completed_at, created_at, output, error, station_id, lease_token,
-         lease_expires_at, claimed_at, schedule_id, scheduled_for, idempotency_key)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         lease_expires_at, claimed_at, schedule_id, scheduled_for, idempotency_key, required_station_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         run.id, run.signalName, run.kind, run.input, run.status, run.attempts,
         run.maxAttempts, run.timeout, run.interval ?? null,
@@ -788,7 +796,7 @@ class LazyMysqlAdapter implements SerializableAdapter {
         dateToStr(run.createdAt), run.output ?? null, run.error ?? null,
         run.stationId ?? null, run.leaseToken ?? null,
         dateToStr(run.leaseExpiresAt), dateToStr(run.claimedAt),
-        run.scheduleId ?? null, dateToStr(run.scheduledFor), run.idempotencyKey ?? null,
+        run.scheduleId ?? null, dateToStr(run.scheduledFor), run.idempotencyKey ?? null, run.requiredStationId ?? null,
       ],
     );
   }

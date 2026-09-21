@@ -12,7 +12,8 @@ export default function DashboardPage() {
       <div className="eyebrow">Guide</div>
       <h2 style={{ marginTop: 0 }}>Station dashboard</h2>
       <p>
-        The dashboard is the control surface included with <code>station-kit</code>.
+        The dashboard is the separate <code>station-dashboard</code> application.
+        It connects to the API of a local or remote <code>station-daemon</code>.
         In standalone mode it shows one process. In a Station Network it gives
         Headquarters one fleet-wide view of queued work, workers, schedules,
         beacons, broadcasts, and environment configuration.
@@ -27,9 +28,10 @@ export default function DashboardPage() {
 
       <hr className="divider" />
       <h3>Quick start</h3>
-      <Code>{`pnpm add station-kit station-adapter-sqlite`}</Code>
+      <Code>{`pnpm add station-daemon station-adapter-sqlite
+pnpm add -D station-runtime-cli station-dashboard`}</Code>
       <Code>{`// station.config.ts
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 import { SqliteAdapter } from "station-adapter-sqlite";
 import { BroadcastSqliteAdapter } from "station-adapter-sqlite/broadcast";
 import { BeaconSqliteAdapter } from "station-adapter-sqlite/beacon";
@@ -50,12 +52,14 @@ export default defineConfig({
   envStorage: new EnvSqliteAdapter({ dbPath }),
   auth: { username: "admin", password: process.env.STATION_PASSWORD! },
 });`}</Code>
-      <Code>{`STATION_PASSWORD=change-me npx station`}</Code>
+      <Code>{`STATION_PASSWORD=change-me pnpm exec stationd`}</Code>
       <p>
-        Open <code>http://localhost:4400</code>. The configured Station port is
-        the single public address for both UI and API; Station handles the
-        dashboard process internally.
+        In another terminal, start the dashboard with the daemon URL. Open
+        <code>http://127.0.0.1:4401</code>. The daemon stays on port 4400;
+        dashboard shutdown does not stop its runners.
       </p>
+      <Code>{`STATION_DAEMON_URL=http://127.0.0.1:4400 PORT=4401 HOSTNAME=127.0.0.1 pnpm exec station-dashboard`}</Code>
+      <p>For a remote daemon, set <code>STATION_DAEMON_URL</code> to its trusted HTTPS address. The dashboard server forwards requests to that configured daemon; keep worker services private behind Headquarters. Use <code>PORT</code> and <code>HOSTNAME</code> for the dashboard listener.</p>
       <div className="warn-box"><p>
         Authentication is optional for localhost, but do not expose an
         unauthenticated dashboard. In production, use environment-backed
@@ -172,7 +176,7 @@ export default defineConfig({
       <p>
         Next: <Link href="/docs/network">design a Station Network</Link>, run the
         <Link href="/docs/examples/station-network"> local three-process example</Link>,
-        or use the <Link href="/docs/station">complete StationKit API reference</Link>.
+        or use the <Link href="/docs/station">complete Station Daemon API reference</Link>.
       </p>
     </>
   );

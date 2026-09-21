@@ -1,7 +1,8 @@
+import { createHash } from "node:crypto";
 import { readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { AnySignal, SignalRunner, SignalQueueAdapter } from "station-signal";
-import { parseInterval } from "station-signal";
+import { parseInterval, signalRunIdForKey } from "station-signal";
 import type { BroadcastDefinition } from "./broadcast.js";
 import { configureBroadcast } from "./config.js";
 import type { BroadcastQueueAdapter } from "./adapters/index.js";
@@ -14,7 +15,16 @@ import type {
   FailurePolicy,
 } from "./types.js";
 import { isBroadcast, topologicalSort } from "./util.js";
-import { materializeDynamic, type MaterializedDynamicBroadcast } from "./dynamic.js";
+import { materializeDynamic, validateDynamicSpec, type MaterializedDynamicBroadcast } from "./dynamic.js";
+
+export interface BroadcastPlanner {
+  /** An immutable, registered signal which returns a validated DAG. */
+  signalName: string;
+  /** The planner may use only these dependency aliases. Values are immutable signal names. */
+  dependencies: Record<string, string>;
+}
+interface PlannerSnapshot extends BroadcastPlanner { kind: "station.planner/v1"; requiredStationId?: string }
+const plannerRunId = (id: string) => createHash("sha256").update(`station-planner:${id}`).digest("hex").slice(0, 32);
 
 interface RecurringBroadcastSchedule {
   broadcastName: string;
@@ -56,6 +66,9 @@ export class BroadcastRunner {
   private pollIntervalMs: number;
   private subscribers: BroadcastSubscriber[];
   /** File-defined broadcasts (immutable, discovered at startup). */
+  private planners = new Map<string, BroadcastPlanner>();
+  private runOperations = new Map<string, Promise<unknown>>();
+  private wakePoll?: () => void;
   private fileRegistry = new Map<string, BroadcastDefinition>();
   /**
    * Dynamic broadcasts (loaded from the adapter, refreshed on a cadence).
@@ -102,7 +115,7 @@ export class BroadcastRunner {
    */
   listRegistered(): Array<{
     name: string;
-    kind: "file" | "dynamic";
+    kind: "file" | "dynamic" | "planned";
     nodeCount: number;
     failurePolicy: FailurePolicy;
     timeout?: number;
@@ -111,7 +124,7 @@ export class BroadcastRunner {
   }> {
     const out: Array<{
       name: string;
-      kind: "file" | "dynamic";
+      kind: "file" | "dynamic" | "planned";
       nodeCount: number;
       failurePolicy: FailurePolicy;
       timeout?: number;
@@ -138,17 +151,27 @@ export class BroadcastRunner {
         version: entry.spec.version,
       });
     }
+    for (const [name] of this.planners) out.push({ name, kind: "planned", nodeCount: 0, failurePolicy: "fail-fast", timeout: undefined });
     return out;
   }
 
   /** Check whether a broadcast is registered (file OR dynamic) by name. */
   hasBroadcast(name: string): boolean {
-    return this.fileRegistry.has(name) || this.dynamicRegistry.has(name);
+    return this.fileRegistry.has(name) || this.dynamicRegistry.has(name) || this.planners.has(name);
   }
 
   /** Whether a dynamic broadcast with this name is currently registered. */
   hasDynamicBroadcast(name: string): boolean {
     return this.dynamicRegistry.has(name);
+  }
+
+  /** Register an external planner. Planning itself runs as a queued, retryable signal. */
+  registerPlanner(name: string, planner: BroadcastPlanner): this {
+    if (!this.signalRunner.getSignal(planner.signalName)) throw new Error("Planner signal is not registered");
+    for (const target of Object.values(planner.dependencies)) if (!this.signalRunner.getSignal(target)) throw new Error(`Planner dependency ${target} is not registered`);
+    this.planners.set(name, { signalName: planner.signalName, dependencies: { ...planner.dependencies } });
+    this.refreshSignalRegistry();
+    return this;
   }
 
   /** Register a broadcast definition explicitly (alternative to auto-discovery). */
@@ -203,17 +226,34 @@ export class BroadcastRunner {
     return this.adapter.getBroadcastRun(id);
   }
 
+  private async serializeRun<T>(id: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.runOperations.get(id) ?? Promise.resolve();
+    const next = previous.catch(() => {}).then(operation);
+    this.runOperations.set(id, next);
+    try { return await next; }
+    finally { if (this.runOperations.get(id) === next) this.runOperations.delete(id); }
+  }
+
   async cancel(broadcastRunId: string): Promise<boolean> {
+    return this.serializeRun(broadcastRunId, () => this.cancelUnlocked(broadcastRunId));
+  }
+
+  private async cancelUnlocked(broadcastRunId: string): Promise<boolean> {
     const bRun = await this.adapter.getBroadcastRun(broadcastRunId);
     if (!bRun) return false;
     if (bRun.status === "completed" || bRun.status === "failed" || bRun.status === "cancelled") {
       return false;
     }
 
+    // Even a malformed stored snapshot must remain cancellable.
+    let isPlanning = false;
+    try { isPlanning = Boolean(bRun.definitionSnapshot && JSON.parse(bRun.definitionSnapshot).kind === "station.planner/v1"); } catch {}
+    if (isPlanning) await this.signalRunner.cancel(plannerRunId(bRun.id));
+
     // Cancel all running/pending nodes
     const nodeRuns = await this.adapter.getNodeRuns(broadcastRunId);
     for (const nr of nodeRuns) {
-      if (nr.status === "running" && nr.signalRunId) {
+      if ((nr.status === "pending" || nr.status === "running") && nr.signalRunId) {
         await this.signalRunner.cancel(nr.signalRunId);
       }
       if (nr.status === "pending" || nr.status === "running") {
@@ -242,10 +282,44 @@ export class BroadcastRunner {
    * then falls back to dynamic broadcasts. For dynamic broadcasts, the current
    * spec is snapshotted into the run record so spec edits don't mutate the run.
    */
-  async trigger(broadcastName: string, input: unknown): Promise<string> {
+  async trigger(broadcastName: string, input: unknown, options?: { idempotencyKey?: string; requiredStationId?: string }): Promise<string> {
+    const target = options?.requiredStationId;
+    if (target !== undefined && (typeof target !== "string" || target.length < 1 || target.length > 255)) throw new Error("Invalid station target");
+    if (target && !this.planners.has(broadcastName)) throw new Error("Station pinning currently requires an image-planned broadcast");
+    const key = options?.idempotencyKey;
+    if (key === undefined) return this.triggerNew(broadcastName, input, undefined, target);
+    if (typeof key !== "string" || key.length < 1 || key.length > 512) throw new Error("Invalid broadcast idempotency key");
+    const id = createHash("sha256").update(`station-broadcast-trigger:${key}`).digest("hex").slice(0, 32);
+    const encoded = JSON.stringify(input);
+    if (typeof encoded !== "string") throw new Error("Broadcast input must be JSON-serializable");
+    const match = (existing: BroadcastRun): string => {
+      if (existing.broadcastName !== broadcastName || existing.input !== encoded || (existing.definitionSnapshot ? JSON.parse(existing.definitionSnapshot).requiredStationId : undefined) !== target) throw new Error("Broadcast idempotency key conflicts with an existing invocation");
+      return existing.id;
+    };
+    return this.serializeRun(id, async () => {
+      const existing = await this.adapter.getBroadcastRun(id);
+      if (existing) return match(existing);
+      try { return await this.triggerNew(broadcastName, input, id, target); }
+      catch (error) {
+        const concurrent = await this.adapter.getBroadcastRun(id);
+        if (concurrent) return match(concurrent);
+        throw error;
+      }
+    });
+  }
+
+  private async triggerNew(broadcastName: string, input: unknown, requestedId?: string, requiredStationId?: string): Promise<string> {
+    const planner = this.planners.get(broadcastName);
+    if (planner) {
+      const id = requestedId ?? this.adapter.generateId();
+      const run: BroadcastRun = { id, broadcastName, input: JSON.stringify(input), status: "pending", failurePolicy: "fail-fast", createdAt: new Date(), definitionSnapshot: JSON.stringify({ kind: "station.planner/v1", ...planner, requiredStationId } satisfies PlannerSnapshot) };
+      await this.adapter.addBroadcastRun(run);
+      this.emit("onBroadcastQueued", { broadcastRun: run });
+      return id;
+    }
     const fileDef = this.fileRegistry.get(broadcastName);
     if (fileDef) {
-      const id = this.adapter.generateId();
+      const id = requestedId ?? this.adapter.generateId();
       const bRun: BroadcastRun = {
         id,
         broadcastName,
@@ -262,7 +336,7 @@ export class BroadcastRunner {
 
     const dynamic = this.dynamicRegistry.get(broadcastName);
     if (dynamic) {
-      return this.triggerDynamic(broadcastName, input);
+      return this.triggerDynamicRun(broadcastName, input, requestedId);
     }
 
     throw new Error(`No broadcast definition registered for "${broadcastName}"`);
@@ -270,11 +344,15 @@ export class BroadcastRunner {
 
   /** Trigger a dynamic broadcast and snapshot its current spec into the run. */
   async triggerDynamic(name: string, input: unknown): Promise<string> {
+    return this.triggerDynamicRun(name, input);
+  }
+
+  private async triggerDynamicRun(name: string, input: unknown, requestedId?: string): Promise<string> {
     const entry = this.dynamicRegistry.get(name);
     if (!entry) {
       throw new Error(`No dynamic broadcast registered for "${name}"`);
     }
-    const id = this.adapter.generateId();
+    const id = requestedId ?? this.adapter.generateId();
     const bRun: BroadcastRun = {
       id,
       broadcastName: name,
@@ -425,7 +503,7 @@ export class BroadcastRunner {
       } catch (err) {
         console.error("[station-broadcast] tick() failed:", err);
       }
-      await this.sleep(this.pollIntervalMs);
+      if (this.running) await this.sleep(this.pollIntervalMs);
     }
 
     process.removeListener("SIGINT", shutdown);
@@ -440,6 +518,7 @@ export class BroadcastRunner {
       clearTimeout(this.pollTimer);
       this.pollTimer = null;
     }
+    this.wakePoll?.();
     this.snapshotDefinitionCache.clear();
 
     if (options?.graceful) {
@@ -475,7 +554,8 @@ export class BroadcastRunner {
 
   private sleep(ms: number): Promise<void> {
     return new Promise((res) => {
-      this.pollTimer = setTimeout(res, ms);
+      this.wakePoll = () => { this.wakePoll = undefined; res(); };
+      this.pollTimer = setTimeout(this.wakePoll, ms);
     });
   }
 
@@ -606,10 +686,23 @@ export class BroadcastRunner {
   // ─── Init broadcast ────────────────────────────────────────────────
 
   private async initBroadcast(bRun: BroadcastRun): Promise<void> {
+    return this.serializeRun(bRun.id, () => this.initBroadcastUnlocked(bRun));
+  }
+
+  private async initBroadcastUnlocked(bRun: BroadcastRun): Promise<void> {
     // H4: Optimistic lock — re-read status to avoid double-init from concurrent ticks
     const fresh = await this.adapter.getBroadcastRun(bRun.id);
     if (!fresh || fresh.status !== "pending") return;
 
+    if (fresh.definitionSnapshot) {
+      let snapshot;
+      try { snapshot = JSON.parse(fresh.definitionSnapshot); }
+      catch { await this.failPlanning(fresh, "Broadcast definition snapshot is malformed"); return; }
+      if (snapshot?.kind === "station.planner/v1") {
+        await this.advancePlanning(fresh, snapshot as PlannerSnapshot);
+        return;
+      }
+    }
     // Use the snapshot if present (dynamic), else file/dynamic registry.
     const definition = this.resolveDefinitionForRun(fresh);
     if (!definition) {
@@ -628,20 +721,19 @@ export class BroadcastRunner {
       return;
     }
 
-    // Mark as running
-    bRun.status = "running";
-    bRun.startedAt = new Date();
-    await this.adapter.updateBroadcastRun(bRun.id, {
-      status: bRun.status,
-      startedAt: bRun.startedAt,
-    });
-    this.emit("onBroadcastStarted", { broadcastRun: bRun });
-
-    // Create node run records for all nodes
-    const nodeRunsByName = new Map<string, BroadcastNodeRun>();
+    // Persist every node while the broadcast is still pending. After a crash,
+    // the next init reuses these records rather than completing an empty DAG or
+    // overwriting an already-created node. Nothing executes before this finishes.
+    const existing = await this.adapter.getNodeRuns(bRun.id);
+    const nodeRunsByName = new Map(existing.map(node => [node.nodeName, node]));
     for (const node of definition.nodes) {
+      const previous = nodeRunsByName.get(node.name);
+      if (previous) {
+        if (previous.signalName !== node.signalName) throw new Error("Persisted broadcast node differs from its immutable definition");
+        continue;
+      }
       const nodeRun: BroadcastNodeRun = {
-        id: this.adapter.generateId(),
+        id: createHash("sha256").update(`station-node:${bRun.id}:${node.name}`).digest("hex").slice(0, 32),
         broadcastRunId: bRun.id,
         nodeName: node.name,
         signalName: node.signalName,
@@ -651,13 +743,85 @@ export class BroadcastRunner {
       nodeRunsByName.set(node.name, nodeRun);
     }
 
+    bRun.status = "running";
+    bRun.startedAt = new Date();
+    await this.adapter.updateBroadcastRun(bRun.id, { status: bRun.status, startedAt: bRun.startedAt });
+    this.emit("onBroadcastStarted", { broadcastRun: bRun });
+
     // Trigger ready nodes (root nodes with no dependencies)
     await this.triggerReadyNodes(bRun, definition, nodeRunsByName);
+  }
+
+  private async failPlanning(run: BroadcastRun, error: string): Promise<void> {
+    const current = await this.adapter.getBroadcastRun(run.id);
+    if (current?.status !== "pending") return;
+    const patch = { status: "failed" as const, error, completedAt: new Date() };
+    await this.adapter.updateBroadcastRun(run.id, patch);
+    this.emit("onBroadcastFailed", { broadcastRun: { ...current, ...patch }, error });
+  }
+
+  private async advancePlanning(run: BroadcastRun, snapshot: PlannerSnapshot): Promise<void> {
+    try {
+      if (typeof snapshot.signalName !== "string" || !snapshot.dependencies || typeof snapshot.dependencies !== "object" || Array.isArray(snapshot.dependencies) || Object.values(snapshot.dependencies).some(value => typeof value !== "string")) throw new Error("Malformed planner snapshot");
+      const id = plannerRunId(run.id);
+      let planner = await this.signalAdapter.getRun(id);
+      if (!planner) {
+        const definition = this.signalRunner.getSignal(snapshot.signalName);
+        if (!definition) throw new Error("Pinned broadcast planner is not registered");
+        definition.inputSchema.parse(JSON.parse(run.input));
+        try {
+          await this.signalAdapter.addRun({ id, signalName: snapshot.signalName, requiredStationId: snapshot.requiredStationId, kind: "trigger", input: run.input, status: "pending", attempts: 0, maxAttempts: definition.maxAttempts, timeout: definition.timeout, createdAt: new Date() });
+        } catch (error) {
+          // Shared adapters may race another controller's successful insert.
+          planner = await this.signalAdapter.getRun(id);
+          if (!planner || planner.signalName !== snapshot.signalName || planner.input !== run.input || planner.requiredStationId !== snapshot.requiredStationId) throw error;
+        }
+        return;
+      }
+      if (planner.signalName !== snapshot.signalName || planner.input !== run.input || planner.requiredStationId !== snapshot.requiredStationId) throw new Error("Planner invocation identity mismatch");
+      if (planner.status === "pending" || planner.status === "running") return;
+      if (planner.status !== "completed") throw new Error("Broadcast planner failed or was cancelled");
+      if (!planner.output || Buffer.byteLength(planner.output) > 1024 * 1024) throw new Error("Invalid broadcast plan size");
+      const plan = JSON.parse(planner.output);
+      if (!plan || typeof plan !== "object" || Array.isArray(plan) || Object.keys(plan).some(key => !["nodes", "failurePolicy", "timeout"].includes(key)) || !Array.isArray(plan.nodes) || plan.nodes.length === 0 || plan.nodes.length > 256) throw new Error("Invalid broadcast plan");
+      if (plan.failurePolicy !== undefined && !["fail-fast", "skip-downstream", "continue"].includes(plan.failurePolicy)) throw new Error("Invalid planner failure policy");
+      if (plan.timeout !== undefined && (!Number.isSafeInteger(plan.timeout) || plan.timeout < 1 || plan.timeout > 86400000)) throw new Error("Invalid planner timeout");
+      const names = new Set<string>();
+      const spec: DynamicBroadcastSpec = {
+        name: run.broadcastName, requiredStationId: snapshot.requiredStationId, version: 1, failurePolicy: plan.failurePolicy ?? "fail-fast", timeout: plan.timeout,
+        createdAt: run.createdAt, updatedAt: new Date(), nodes: plan.nodes.map((node: Record<string, unknown>) => {
+          if (!node || typeof node !== "object" || Array.isArray(node) || Object.keys(node).some(key => !["name", "signalName", "dependsOn", "input", "when"].includes(key))) throw new Error("Malformed plan node");
+          if (typeof node.name !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,199}$/.test(node.name) || ["__proto__", "constructor", "prototype"].includes(node.name) || names.has(node.name)) throw new Error("Invalid or duplicate plan node name");
+          names.add(node.name);
+          if (typeof node.signalName !== "string" || !Object.hasOwn(snapshot.dependencies, node.signalName)) throw new Error("Planner referenced an undeclared dependency");
+          if (!Array.isArray(node.dependsOn) || node.dependsOn.some(value => typeof value !== "string") || new Set(node.dependsOn).size !== node.dependsOn.length) throw new Error("Invalid plan dependencies");
+          return { name: node.name, signalName: snapshot.dependencies[node.signalName]!, dependsOn: node.dependsOn as string[], ...(node.input === undefined ? {} : { input: node.input }), ...(node.when === undefined ? {} : { when: node.when }) };
+        }),
+      };
+      this.refreshSignalRegistry();
+      const validation = validateDynamicSpec(spec, { signalSchemas: new Map([...this.signalRegistry.keys()].map(name => [name, { inputSchema: { type: "any" }, outputSchema: { type: "any" } }])) });
+      if (!validation.ok) throw new Error("Invalid planned workflow expressions or graph");
+      materializeDynamic(spec, this.signalRegistry);
+      const current = await this.adapter.getBroadcastRun(run.id);
+      if (current?.status !== "pending") return;
+      await this.adapter.updateBroadcastRun(run.id, { definitionSnapshot: JSON.stringify(spec), failurePolicy: spec.failurePolicy, timeout: spec.timeout });
+      // The next tick starts children from this durable immutable plan.
+    } catch {
+      await this.failPlanning(run, "Broadcast planning failed validation or execution");
+    }
   }
 
   // ─── Advance broadcast ─────────────────────────────────────────────
 
   private async advanceBroadcast(bRun: BroadcastRun): Promise<void> {
+    return this.serializeRun(bRun.id, async () => {
+      const current = await this.adapter.getBroadcastRun(bRun.id);
+      if (current?.status !== "running") return;
+      await this.advanceBroadcastUnlocked(current);
+    });
+  }
+
+  private async advanceBroadcastUnlocked(bRun: BroadcastRun): Promise<void> {
     const definition = this.resolveDefinitionForRun(bRun);
     if (!definition) {
       await this.adapter.updateBroadcastRun(bRun.id, {
@@ -677,7 +841,7 @@ export class BroadcastRunner {
       if (elapsed > bRun.timeout) {
         const nodeRuns = await this.adapter.getNodeRuns(bRun.id);
         for (const nr of nodeRuns) {
-          if (nr.status === "running" && nr.signalRunId) {
+          if ((nr.status === "pending" || nr.status === "running") && nr.signalRunId) {
             await this.signalRunner.cancel(nr.signalRunId);
           }
           if (nr.status === "pending" || nr.status === "running") {
@@ -803,7 +967,7 @@ export class BroadcastRunner {
     if (policy === "fail-fast") {
       // Cancel all running signal runs and mark non-terminal nodes as skipped
       for (const nr of nodeRunsByName.values()) {
-        if (nr.status === "running" && nr.signalRunId) {
+        if ((nr.status === "pending" || nr.status === "running") && nr.signalRunId) {
           await this.signalRunner.cancel(nr.signalRunId);
         }
         if (nr.status === "pending" || nr.status === "running") {
@@ -1013,10 +1177,22 @@ export class BroadcastRunner {
         nodeInput = upstreamOutputs;
       }
 
-      // H1: Use signal.trigger() for Zod input validation instead of writing directly
+      // Persist the deterministic enqueue intent first. A crash after enqueue
+      // can then be retried without duplicating work, or cancelled while the
+      // node record is still pending. Runner-owned triggers retain Zod validation.
       let signalRunId: string;
       try {
-        signalRunId = await node.signal.trigger(nodeInput);
+        if (this.signalRunner.getSignal(node.signalName)) {
+          const key = `broadcast-node:${bRun.id}:${node.name}`;
+          const expectedId = signalRunIdForKey(key);
+          await this.adapter.updateNodeRun(nodeRun.id, { signalRunId: expectedId, input: JSON.stringify(nodeInput) });
+          nodeRun.signalRunId = expectedId;
+          signalRunId = await this.signalRunner.triggerSignal(node.signalName, nodeInput, undefined, { idempotencyKey: key, requiredStationId: bRun.definitionSnapshot ? JSON.parse(bRun.definitionSnapshot).requiredStationId : undefined });
+        } else {
+          // Preserve embedding support for static definitions whose caller owns
+          // signal registration. Planned dependencies are always registered.
+          signalRunId = await node.signal.trigger(nodeInput);
+        }
       } catch (err) {
         const error = err instanceof Error ? err.message : String(err);
         nodeRun.status = "failed";

@@ -55,13 +55,20 @@ any of them:
 
 ## Dashboard
 
-`station.config.ts` points the dashboard at these beacons. Run:
+`station.config.ts` points the daemon at these beacons. Run:
 
 ```bash
-npx station
+pnpm exec stationd
 ```
 
-Then open **http://localhost:4400/beacons** to watch each beacon's status,
+In another terminal, start the separate dashboard from the repository root:
+
+```bash
+pnpm --filter station-dashboard build
+STATION_DAEMON_URL=http://127.0.0.1:4400 PORT=4401 HOSTNAME=127.0.0.1 pnpm --filter station-dashboard exec station-dashboard
+```
+
+Then open **http://localhost:4401/beacons** to watch each beacon's status,
 incarnation, restart count, live logs, and lifecycle events — and start / stop /
 restart them from the UI. On a beacon's page, **New instance** builds one from
 its config schema; each instance gets its own controls, logs, and a delete
@@ -69,7 +76,7 @@ button.
 
 ## Controlling instances over the API
 
-The same operations are available over HTTP. On the dashboard API:
+The same operations are available over HTTP. On the daemon API:
 
 ```bash
 # Create an instance and start it

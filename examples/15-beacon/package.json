@@ -10,7 +10,7 @@
     "station-signal": "workspace:*"
   },
   "devDependencies": {
-    "station-kit": "workspace:*",
+    "station-daemon": "workspace:*",
     "tsx": "^4.21.0"
   }
 }

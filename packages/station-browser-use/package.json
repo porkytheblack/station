@@ -1,6 +1,6 @@
 {
   "name": "station-browser-use",
-  "version": "2.4.0",
+  "version": "3.0.0",
   "description": "Container-isolated, Bun WebView and Playwright browser sessions for Station workers",
   "license": "MIT",
   "type": "module",
@@ -33,18 +33,33 @@
     "./container": {
       "types": "./dist/container.d.ts",
       "import": "./dist/container.js"
+    },
+    "./remote": {
+      "types": "./dist/remote.d.ts",
+      "import": "./dist/remote.js"
+    },
+    "./browserbase": {
+      "types": "./dist/browserbase.d.ts",
+      "import": "./dist/browserbase.js"
+    },
+    "./steel": {
+      "types": "./dist/steel.d.ts",
+      "import": "./dist/steel.js"
     }
   },
   "files": [
     "dist",
-    "src"
+    "src",
+    "REMOTE.md"
   ],
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
     "test:browsers": "pnpm run build && node --import tsx --test test/browser.integration.ts test/advanced.integration.ts test/interaction.integration.ts",
-    "test:containers": "pnpm run build && node --import tsx --test test/container.integration.ts"
+    "test:containers": "pnpm run build && node --import tsx --test test/container.integration.ts",
+    "test:remote": "pnpm run build && node --import tsx --test test/remote.integration.ts",
+    "test:provider:live": "pnpm run build && node --import tsx test/provider.live.ts"
   },
   "peerDependencies": {
     "playwright": "^1.63.0"

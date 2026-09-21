@@ -66,6 +66,7 @@ export class BeaconSqliteAdapter implements BeaconStateAdapter {
         next_restart_at    TEXT,
         created_at         TEXT NOT NULL,
         updated_at         TEXT NOT NULL
+        ,required_station_id TEXT
         ,station_id        TEXT
         ,exposure          TEXT
       )
@@ -85,6 +86,7 @@ export class BeaconSqliteAdapter implements BeaconStateAdapter {
     `);
 
     this.migrateToMultiInstance();
+    if (!this.columns(this.table).has("required_station_id")) this.db.exec(`ALTER TABLE ${this.table} ADD COLUMN required_station_id TEXT`);
     if (!this.columns(this.table).has("station_id")) this.db.exec(`ALTER TABLE ${this.table} ADD COLUMN station_id TEXT`);
     if (!this.columns(this.table).has("exposure")) this.db.exec(`ALTER TABLE ${this.table} ADD COLUMN exposure TEXT`);
 
@@ -146,11 +148,11 @@ export class BeaconSqliteAdapter implements BeaconStateAdapter {
       INSERT OR REPLACE INTO ${this.table}
         (id, beacon_name, label, origin, status, desired_state, incarnation, restart_count, pid, config,
          started_at, ready_at, last_heartbeat_at, last_exit_at, last_exit_reason,
-         last_error, next_restart_at, created_at, updated_at, station_id, exposure)
+         last_error, next_restart_at, created_at, updated_at, station_id, exposure, required_station_id)
       VALUES
         (@id, @beacon_name, @label, @origin, @status, @desired_state, @incarnation, @restart_count, @pid, @config,
          @started_at, @ready_at, @last_heartbeat_at, @last_exit_at, @last_exit_reason,
-         @last_error, @next_restart_at, @created_at, @updated_at, @station_id, @exposure)
+         @last_error, @next_restart_at, @created_at, @updated_at, @station_id, @exposure, @required_station_id)
     `).run({
       id: instance.id,
       beacon_name: instance.beaconName,
@@ -173,6 +175,7 @@ export class BeaconSqliteAdapter implements BeaconStateAdapter {
       updated_at: dateToStr(instance.updatedAt),
       station_id: instance.stationId ?? null,
       exposure: instance.exposure ?? null,
+      required_station_id: instance.requiredStationId ?? null,
     });
   }
 
@@ -329,6 +332,7 @@ function rowToInstance(row: Record<string, unknown>): BeaconInstance {
     lastExitReason: (row.last_exit_reason as BeaconInstance["lastExitReason"] | null) ?? undefined,
     lastError: (row.last_error as string | null) ?? undefined,
     nextRestartAt: strToDate(row.next_restart_at),
+    requiredStationId: (row.required_station_id as string | null) ?? undefined,
     stationId: (row.station_id as string | null) ?? undefined,
     exposure: (row.exposure as string | null) ?? undefined,
     createdAt: strToDate(row.created_at)!,

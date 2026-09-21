@@ -34,6 +34,8 @@ and application-owned artifact storage for large transfers.
 
 ## Choose the execution boundary
 
+Hosted browsers: `BrowserbaseBrowserAdapter` from `station-browser-use/browserbase` and `SteelBrowserAdapter` from `station-browser-use/steel` reuse Playwright controls through provider CDP. Configure provider credentials/project, a private `rootDir`, fixed `tenantId` and a profile alias allowlist on the worker. Read [REMOTE.md](../../../packages/station-browser-use/REMOTE.md). Remote profiles are operator-managed; remote downloads/traces are disabled. A proxy does not establish tenant isolation: cloud deployment capabilities default false and require verified operator attestation. Uncertain creates fence admission until operator reconciliation; never repeat a create blindly. Remote reliability checks default on; local/container Playwright opt in. On `challenge_required`, pause for human Live takeover. On `rate_limited`, inspect diagnostics and wait. Agent tools must never acquire a human control lease to bypass the pause. Provider keys/CDP URLs must not enter model arguments or logs.
+
 - `HostSandboxAdapter` from `station-sandbox`: trusted POSIX commands, files, supervised services and optional Node PTYs. `isolated: false`; directories and HOME are organizational, not security boundaries.
 - `ContainerSandboxAdapter` from `station-sandbox/container`: one Linux Docker/Podman container and persistent named volume per workspace. Nonroot, read-only root, dropped capabilities, no-new-privileges, bounded CPU/memory/PIDs, no host socket/mounts exposed to code. Requires an operator-managed engine and pre-pulled tools image. Call `ready()` before admission.
 - `PlaywrightBrowserAdapter` from `station-browser-use/playwright`: host browser sessions with rich controls and optional persistent profiles. Browser process separation does not isolate unrelated tenants.
@@ -43,6 +45,8 @@ and application-owned artifact storage for large transfers.
 The controller runtime, signal/beacon `ProcessRuntime`, browser backend and sandbox backend are independent choices. `BunProcessRuntime` from `station-signal` selects Bun child bootstraps; Node remains the default. Benchmark real workloads before claiming throughput gains. Native PTYs currently require a Node controller; Bun programs can run as children inside them.
 
 ## Sandbox API
+
+For the full sandbox lifecycle, a runnable offline CLI installation/recovery example, Git credential integration, exact tenant RPC payloads and deployment boundaries, read [the detailed Sandbox guide](../../../packages/station-sandbox/GUIDE.md).
 
 ```ts
 import { HostSandboxAdapter } from "station-sandbox";
@@ -64,7 +68,13 @@ Methods:
 
 Commands, terminals and services use workspace `node_modules/.bin` then `HOME/.local/bin` on PATH. npm global prefix defaults to `HOME/.local`. A dependency-free custom CLI tarball can be uploaded and installed using `npm install --global --offline --ignore-scripts --no-audit --no-fund ./tool.tgz`, then invoked by name in later commands/terminals/services. Persist the workspace volume to retain installation. Registry installs need a permitted network route. Image tools/native dependencies must be prepared by the operator.
 
-One active manager owns a root; a second owner fails. Interrupted commands are not automatically replayed. Live PTYs are interrupted on worker restart; services follow saved desired state and restart policy. Host processes deliberately escaping groups remain outside host-adapter containment. Container cleanup stops the whole container.
+One active manager owns a root; a second owner fails. Interrupted commands are not automatically replayed. Live PTYs are interrupted on worker restart. Host services require an explicit restart; container services with retained desired-running state relaunch automatically after initialization. Stop a container service explicitly if it must remain stopped after recovery. Host terminal rings are memory-only; container terminals checkpoint a bounded output tail, without restoring the live shell. Container services share command execution slots. Host processes deliberately escaping groups remain outside host-adapter containment. Container cleanup can stop the whole container when process cleanup cannot be confirmed.
+
+## Persistent account workflows and media
+
+For WhatsApp, TikTok or Instagram browser workflows, read [the account workflow guide](../../../packages/station-browser-use/REMOTE.md#account-workflows-whatsapp-tiktok-and-instagram). Use a tenant/service/account profile grant and serialize its use. A session ending is not an account logout. Steel saves profile changes on release; the operator must wait for provider `READY` before reuse. Station does not provision profiles or automatically wait for uploads. Verify authentication after each reopen and request human login when necessary. Only WhatsApp QR linking was live-tested; authenticated profile reuse and TikTok/Instagram workflows remain unverified.
+
+Inline browser uploads allow at most 16 files and 4 MiB total decoded bytes. They do not constitute permission to publish/send. Remote Steel/Browserbase downloads remain unsupported. Local/container download artifacts are session-owned and must be exported before close. Large-video uploads, remote downloads and a shared sandbox/browser artifact store are proposed work, not available APIs. Do not invent artifact-reference commands, assume a shared filesystem, or expose raw profile credentials to agents.
 
 ## Browser API
 
@@ -158,3 +168,7 @@ The explicit `--protocol-only` mode checks Foundry assembly without inference.
 Report local browser/protocol success separately from real-model task success;
 missing or rejected credentials do not establish either a browser regression or
 a successful agent test.
+
+## Container seccomp admission
+
+Both `ContainerSandboxAdapter` and `ContainerBrowserAdapter` require enforced seccomp. For engines with an unconfined default, set `seccompProfile` to an absolute operator-reviewed deny-default JSON file; the adapter validates and stages a private copy. Unsafe or missing policy fails admission, without falling back to host execution. Seccomp does not replace tenant egress restrictions, storage quotas or dedicated worker ownership.

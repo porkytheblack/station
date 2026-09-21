@@ -109,7 +109,7 @@ Customer onboarding, metering/billing, automatic worker provisioning, distribute
 Build the packages and test image, then point the test at your local engine. Tests create only labeled temporary containers/volumes and remove their resources on completion.
 
 ```sh
-pnpm --filter station-kit... build
+pnpm --filter station-daemon... build
 podman build --target integration -t localhost/station-browser-integration:test \
   -f scripts/execution-container/Containerfile .
 STATION_CONTAINER_ENGINE=/opt/podman/bin/podman \

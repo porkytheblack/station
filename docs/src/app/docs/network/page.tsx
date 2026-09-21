@@ -42,7 +42,7 @@ export default function NetworkPage() {
       </p>
 
       <h3>Configure Headquarters</h3>
-      <Code>{`import { defineConfig } from "station-kit";
+      <Code>{`import { defineConfig } from "station-daemon";
 import { PostgresAdapter } from "station-adapter-postgres";
 import { StationNetworkPostgresAdapter } from "station-adapter-postgres/network";
 

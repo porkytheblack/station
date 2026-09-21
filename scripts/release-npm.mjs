@@ -25,9 +25,15 @@ const releaseOrder = [
   "station-adapter-redis",
   "station-sandbox",
   "station-browser-use",
-  "station-kit",
+  "station-images",
+  "station-daemon",
+  "station-client",
+  "station-dashboard",
+  "station-runtime-cli",
   "station-tauri",
 ];
+// npm identities need not match workspace directory names.
+const packageDirectories = { "station-runtime-cli": "station-cli" };
 
 const args = new Set(process.argv.slice(2));
 const dryRun = args.has("--dry-run");
@@ -99,7 +105,7 @@ function run(command, commandArgs, options = {}) {
 }
 
 function readPackage(name) {
-  const packageDir = resolve(root, "packages", name);
+  const packageDir = resolve(root, "packages", packageDirectories[name] ?? name);
   const manifestPath = resolve(packageDir, "package.json");
   if (!existsSync(manifestPath)) fail(`Missing manifest for ${name}.`);
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
@@ -109,6 +115,46 @@ function readPackage(name) {
   if (!existsSync(resolve(packageDir, "LICENSE"))) fail(`${name} is missing LICENSE.`);
   if (!existsSync(resolve(packageDir, "README.md"))) fail(`${name} is missing README.md.`);
   return { name, version: manifest.version, manifest };
+}
+
+function registryJSON(result, description) {
+  if (result.status !== 0) fail(`Could not verify ${description}. Check npm login and registry permissions before releasing.`);
+  try { return JSON.parse(result.stdout); }
+  catch { fail(`Invalid registry response while verifying ${description}.`); }
+}
+
+function verifyPublishAccess(packages) {
+  const identity = run("npm", ["whoami", "--json"], { capture: true, allowFailure: true });
+  if (identity.status !== 0 && dryRun) {
+    console.warn("[release] npm authentication unavailable: packaging dry run only; publish access is NOT verified. Run npm login and repeat before release.");
+    return;
+  }
+  const username = registryJSON(identity, "authenticated npm identity");
+  if (typeof username !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(username)) fail("Invalid authenticated npm username.");
+  // Effective user permissions include organization/team grants. Comparing only
+  // package maintainers would incorrectly reject authorized team publishers.
+  const grants = registryJSON(run("npm", ["access", "list", "packages", username, "--json"], { capture: true, allowFailure: true }), `npm publish access for ${username}`);
+  if (!grants || typeof grants !== "object" || Array.isArray(grants) || Object.values(grants).some(value => !["read-only", "read-write", "read", "write"].includes(value))) fail("Invalid registry package-access response.");
+  const checkedScopes = new Set();
+  for (const item of packages) {
+    // Check the package name independently of the release version: a new
+    // version's E404 does not mean its name is available to this publisher.
+    const result = run("npm", ["view", item.name, "name", "--json"], { capture: true, allowFailure: true });
+    if (result.status === 0) {
+      if (registryJSON(result, item.name) !== item.name) fail(`Registry returned an unexpected package identity for ${item.name}.`);
+      if (!["read-write", "write"].includes(grants[item.name])) fail(`npm user ${username} has no verified write access to existing package ${item.name}. No packages were uploaded.`);
+      continue;
+    }
+    if (!/E404|404 Not Found|is not in this registry/i.test(`${result.stdout}\n${result.stderr}`)) fail(`Could not verify availability of npm package ${item.name}.`);
+    const scope = item.name.startsWith("@") ? item.name.slice(1).split("/")[0] : undefined;
+    if (scope && scope !== username && !checkedScopes.has(scope)) {
+      const members = registryJSON(run("npm", ["org", "ls", scope, username, "--json"], { capture: true, allowFailure: true }), `membership in npm organization @${scope}`);
+      if (!members || !["owner", "admin", "developer"].includes(members[username])) fail(`Cannot verify permission to create packages in @${scope}.`);
+      checkedScopes.add(scope);
+    }
+    console.log(`[release] ${item.name}: name not published; availability is not a reservation.`);
+  }
+  console.log(`[release] Verified existing-package write access for ${username}; npm may still require publish-time 2FA or token permissions.`);
 }
 
 function publishedVersion(name, version) {
@@ -180,7 +226,7 @@ function main() {
     return false;
   });
   if (!pending.length) { console.log("[release] All versions are already published; nothing to do."); return; }
-  if (!dryRun) run("npm", ["whoami"]);
+  verifyPublishAccess(pending);
 
   // Finish every build/check/archive before the first irreversible upload.
   // Build all dependencies even on --resume so clean checkouts need no dist files.
@@ -194,7 +240,7 @@ function main() {
   try {
     const archives = pending.map((item) => {
       run("pnpm", ["--filter", item.name, "pack", "--pack-destination", staging]);
-      const path = resolve(staging, `${item.name}-${item.version}.tgz`);
+      const path = resolve(staging, `${item.name.replace(/^@/, "").replaceAll("/", "-")}-${item.version}.tgz`);
       if (!existsSync(path)) fail(`Missing packed archive: ${path}`);
       validateArchive(item, path);
       return path;

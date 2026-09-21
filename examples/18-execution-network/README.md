@@ -34,7 +34,7 @@ pnpm --filter example-18-execution-network sandbox
 pnpm --filter example-18-execution-network browser
 ```
 
-Headquarters listens on port 5700, Sandbox on 5701, and Browser Use on 5702. Open Headquarters, log in, and create an API key with the `admin` scope. Only that public key belongs in clients. The execution token is a separate secret shared exclusively by Headquarters and private workers.
+Headquarters API listens on port 5700, Sandbox on 5701, and Browser Use on 5702. Start the dashboard separately, log in, and create an API key with the `admin` scope. Only that public key belongs in clients. The execution token is a separate secret shared exclusively by Headquarters and private workers.
 
 ## Dashboard
 
@@ -125,3 +125,15 @@ The example now persists Playwright profiles under `BROWSER_PROFILE_ROOT` (defau
 ## Public customer deployment
 
 This example intentionally uses trusted host adapters and administrator login. Do not issue its admin credentials to customers. Use the [tenant deployment contract](../../scripts/execution-container/README.md) for tenant-scoped keys, dedicated workers, isolated containers and required network/storage controls. The standard example is not a public multi-tenant deployment configuration.
+
+## Independent dashboard (Station 3.0)
+
+Build and run the dashboard separately from the repository root:
+
+```sh
+pnpm --filter station-dashboard build
+STATION_DAEMON_URL=http://127.0.0.1:5700 PORT=5704 HOSTNAME=127.0.0.1 pnpm --filter station-dashboard exec station-dashboard
+```
+
+Open `http://127.0.0.1:5704`. The daemon API stays on port 5700.
+Stopping the dashboard does not stop Headquarters or the workers.

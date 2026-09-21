@@ -1,3 +1,4 @@
+import { prepareContainerSeccomp, type ContainerSeccompPolicy } from "./container-seccomp.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, existsSync, statSync } from "node:fs";
@@ -17,6 +18,8 @@ export interface ContainerSandboxOptions {
   image: string;
   engine?: "docker" | "podman";
   executable?: string;
+  /** Operator-reviewed deny-default JSON profile; required when engine default is unconfined. */
+  seccompProfile?: string;
   /** none (default), bridge, or an operator-created network name. */
   network?: string;
   /** Operator attests a named network enforces tenant-safe egress; not a firewall implementation. */
@@ -36,7 +39,7 @@ export interface ContainerSandboxOptions {
   enablePty?: boolean;
   env?: Record<string, string>;
 }
-interface Workspace extends Sandbox { container: string; volume: string; image: string; unavailable?: boolean }
+interface Workspace extends Sandbox { seccomp: string; container: string; volume: string; image: string; unavailable?: boolean }
 interface ServiceState { meta: SandboxService; desired: boolean; runId?: string; timer?: ReturnType<typeof setTimeout> }
 interface TerminalState { meta: TerminalSession; process?: import("node-pty").IPty; data: Buffer; startOffset: number; nextOffset: number; done: Promise<void> }
 interface Active { run: CommandRun; child: ChildProcess; done: Promise<void>; finish(): void; stop(status: CommandRun["status"]): Promise<void>; }
@@ -76,6 +79,7 @@ export class ContainerSandboxAdapter implements SandboxAdapter {
   private readonly cpus: number;
   private readonly user: string;
   private readonly initialized: Promise<void>;
+  private seccomp!: ContainerSeccompPolicy;
   private creating = 0;
   private readonly creations = new Set<Promise<Sandbox>>();
   private closed = false;
@@ -167,6 +171,8 @@ export class ContainerSandboxAdapter implements SandboxAdapter {
     if ((info.OSType ?? info.host?.os ?? info.Host?.OS) !== "linux") fail("unsupported", "A Linux container engine is required.");
     if ([info.MemoryLimit, info.CpuCfsQuota, info.PidsLimit].some((supported) => supported === false)) fail("unsupported", "The container engine cannot enforce the requested resource limits.");
     if (this.name === "podman" && Array.isArray(info.host?.cgroupControllers) && ["cpu", "memory", "pids"].some((controller) => !info.host.cgroupControllers.includes(controller))) fail("unsupported", "The container engine requires delegated CPU, memory and PID controllers.");
+    try { this.seccomp = prepareContainerSeccomp(this.root, this.options.seccompProfile, info, this.name === "podman" ? "podman" : "docker"); }
+    catch { fail("unsupported", "An enforced seccomp policy is required; use a reviewed deny-default seccompProfile when engine defaults are unconfined."); }
     await this.call(["image", "inspect", this.options.image]);
     for (const id of readdirSync(this.root)) {
       if (!uuid.test(id)) continue;
@@ -205,12 +211,14 @@ export class ContainerSandboxAdapter implements SandboxAdapter {
     }).catch(() => { this.broken = true; }); });
   }
   private async provision(workspace: Workspace, recovering = false) {
+    if (workspace.seccomp !== this.seccomp.fingerprint) fail("invalid_state", "Workspace seccomp policy differs; explicit recreation or migration is required.");
     const volume = await this.inspect("volume", workspace.volume);
     if (volume) this.checkOwner(volume, workspace, true);
     else await this.call(["volume", "create", ...this.labels(workspace), workspace.volume]);
     const existing = await this.inspect("container", workspace.container);
     if (existing) {
       this.checkOwner(existing, workspace);
+      if (existing.Config?.Labels?.["station.sandbox.seccomp"] !== this.seccomp.fingerprint || existing.HostConfig?.SecurityOpt?.some((option: string) => option === "seccomp=unconfined")) fail("invalid_state", "Container seccomp policy does not match the workspace.");
       const network = this.options.network ?? "none";
       const actualNetwork = existing.HostConfig?.NetworkMode;
       const namedMatch = !["none", "bridge"].includes(network) && Object.hasOwn(existing.NetworkSettings?.Networks ?? {}, network);
@@ -220,7 +228,7 @@ export class ContainerSandboxAdapter implements SandboxAdapter {
     } else {
       const env = { ...this.options.env, HOME: "/home/node", NPM_CONFIG_PREFIX: "/home/node/.local", TMPDIR: "/tmp", PATH: "/home/node/workspace/node_modules/.bin:/home/node/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" };
       await this.call(["run", "-d", "--name", workspace.container, ...this.labels(workspace), "--user", this.user,
-        "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--read-only", "--init",
+        "--cap-drop", "ALL", "--security-opt", "no-new-privileges", ...(this.seccomp.path ? ["--security-opt", `seccomp=${this.seccomp.path}`] : []), "--label", `station.sandbox.seccomp=${this.seccomp.fingerprint}`, "--read-only", "--init",
         "--memory", `${this.memory}m`, "--cpus", String(this.cpus), "--pids-limit", String(this.pids),
         "--network", this.options.network ?? "none", "--tmpfs", "/tmp:rw,nosuid,nodev,size=64m,mode=1777",
         "--mount", `type=volume,source=${workspace.volume},target=/home/node`,
@@ -250,7 +258,7 @@ export class ContainerSandboxAdapter implements SandboxAdapter {
     if (this.workspaces.size + this.creating >= this.maxEnvironments) fail("capacity", "Workspace capacity reached.");
     this.creating++;
     const id = randomUUID();
-    const workspace: Workspace = { id, backend: this.name, createdAt: new Date().toISOString(), image: this.options.image, container: `station-${this.owner.slice(0, 12)}-${id}`, volume: `station-data-${this.owner.slice(0, 12)}-${id}` };
+    const workspace: Workspace = { id, seccomp: this.seccomp.fingerprint, backend: this.name, createdAt: new Date().toISOString(), image: this.options.image, container: `station-${this.owner.slice(0, 12)}-${id}`, volume: `station-data-${this.owner.slice(0, 12)}-${id}` };
     try {
       for (const directory of ["runs", "services", "terminals"]) mkdirSync(join(this.root, id, directory), { recursive: true, mode: 0o700 });
       this.write(join(this.root, id, "workspace.json"), workspace);

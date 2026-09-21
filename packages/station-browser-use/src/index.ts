@@ -19,3 +19,5 @@ export type { BrowserUseClientOptions } from "./client.js";
 export { createBrowserAgentTools } from "./agent.js";
 export type { BrowserAgentTool, BrowserAgentTools, BrowserAgentToolsOptions, BrowserAgentResult } from "./agent.js";
 export { browserCommandSchema, browserOpenOptionsSchema } from "./agent-schema.js";
+
+export type { BrowserReliabilityOptions, BrowserReliabilityState } from "./reliability.js";

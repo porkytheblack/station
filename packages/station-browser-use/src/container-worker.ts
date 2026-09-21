@@ -30,7 +30,9 @@ lines.on("line", (line) => { void (async () => {
     } else if (message.op === "close") { await close(); }
     else {
       if (!session || closing) throw new BrowserUseError("unavailable", "Browser is unavailable.");
-      switch (message.op) {
+      if (message.humanControl !== undefined && typeof message.humanControl !== "boolean") throw new BrowserUseError("invalid_input", "Invalid control context.");
+      session.setHumanControl?.(message.humanControl === true);
+      try { switch (message.op) {
         case "navigate": await session.navigate(message.value); break;
         case "click": await session.click(message.value); break;
         case "type": await session.type(message.value); break;
@@ -39,7 +41,7 @@ lines.on("line", (line) => { void (async () => {
         case "screenshot": result = Buffer.from(await session.screenshot()).toString("base64"); break;
         case "execute": result = await session.execute!(message.value); break;
         default: throw new BrowserUseError("invalid_input", "Unknown browser operation.");
-      }
+      } } finally { session.setHumanControl?.(false); }
     }
     respond({ id, result });
   } catch (error) { respond({ id, error: { code: error instanceof BrowserUseError ? error.code : "unavailable", message: error instanceof BrowserUseError ? error.message : "Container browser operation failed." } }); }

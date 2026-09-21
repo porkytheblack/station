@@ -53,6 +53,7 @@ export default function AgentSkillPage() {
             <td><code>browser.md</code></td>
             <td>BrowserStation setup, worker and service-worker hosting, API usage, supported definitions, recovery, and known limits. Read this first for browser-local work.</td>
           </tr>
+          <tr><td><code>images.md</code></td><td>Compiled native/JavaScript images, registry operations, environment grants, worker pins and independent Docker cleanup.</td></tr>
           <tr>
             <td><code>execution.md</code></td>
             <td>Separate Sandbox and Browser Use primitives, exact-owner Headquarters routing, trusted-code limits, persistence, and opt-in Bun process children.</td>
@@ -70,7 +71,7 @@ export default function AgentSkillPage() {
             <td>
               Exhaustive package and v1 REST API reference, including signals,
               broadcasts, beacons, schedules, environment variables, expressions,
-              Station Networks, adapters, station-kit, and station-tauri.
+              Station Networks, adapters, station-daemon, and station-tauri.
             </td>
           </tr>
           <tr>

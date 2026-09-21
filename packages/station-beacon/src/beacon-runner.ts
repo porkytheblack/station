@@ -101,6 +101,8 @@ export interface CreateInstanceOptions {
   label?: string;
   /** Config for this instance — validated against the beacon's config schema. */
   config?: unknown;
+  /** Pin every incarnation to this station, including restart and recovery. */
+  requiredStationId?: string;
   /** Start the instance immediately. @default true */
   start?: boolean;
 }
@@ -114,6 +116,16 @@ export interface UpdateInstanceOptions {
   /** Restart a running instance so the new config takes effect now. @default false */
   restart?: boolean;
 }
+
+export interface BeaconDependencyTriggerRequest {
+  beaconName: string;
+  instanceId: string;
+  incarnation: number;
+  alias: string;
+  input: unknown;
+  requestId: string;
+}
+export type BeaconDependencyTrigger = (request: BeaconDependencyTriggerRequest) => Promise<string>;
 
 export interface BeaconRunnerOptions {
   /** Child execution runtime. Defaults to Node; does not change controller runtime. */
@@ -169,6 +181,16 @@ export interface BeaconRunnerOptions {
  * {@link BeaconRunner.createInstance}, each with its own config.
  */
 export class BeaconRunner {
+  private dependencyTrigger?: BeaconDependencyTrigger;
+  setDependencyTrigger(handler: BeaconDependencyTrigger): this { this.dependencyTrigger = handler; return this; }
+  /** Register a newly installed immutable definition and seed it on a live supervisor. */
+  async install(beacon: AnyBeacon, filePath: string): Promise<void> {
+    const existing = this.registry.get(beacon.name);
+    if (existing) return;
+    this.registry.set(beacon.name, { beacon, filePath: resolve(filePath) });
+    if (this.running && beacon.startMode !== "on-demand") await this.seedOrResumeDefinitionInstance(beacon);
+  }
+
   private adapter: BeaconStateAdapter;
   private beaconsDir?: string;
   private pollIntervalMs: number;
@@ -516,6 +538,11 @@ export class BeaconRunner {
     const reg = this.registry.get(beaconName);
     if (!reg) throw new Error(`Beacon "${beaconName}" is not registered`);
     const beacon = reg.beacon;
+    if (opts.requiredStationId !== undefined && (
+      typeof opts.requiredStationId !== "string" || !opts.requiredStationId.length
+      || opts.requiredStationId.length > 255 || opts.requiredStationId.trim() !== opts.requiredStationId
+      || /[\r\n\0]/.test(opts.requiredStationId)
+    )) throw new BeaconValidationError(beaconName, "requiredStationId must be a nonempty station id of at most 255 characters");
 
     // Validate config up front so a bad payload fails the API call rather than
     // silently crash-looping a child process.
@@ -551,6 +578,7 @@ export class BeaconRunner {
       id,
       beaconName,
       label: opts.label,
+      requiredStationId: opts.requiredStationId,
       origin: "api",
       status: start ? "backoff" : "stopped",
       desiredState: start ? "running" : "stopped",
@@ -779,6 +807,8 @@ export class BeaconRunner {
       this.instances.set(instance.id, instance);
       this.supervised.set(instance.id, this.freshSupervised());
 
+      if (instance.requiredStationId !== undefined && instance.requiredStationId !== this.stationId) continue;
+
       if (!this.registry.has(instance.beaconName)) {
         // A network is intentionally heterogeneous: another station may own a
         // definition this station does not have. Never corrupt its shared
@@ -832,6 +862,7 @@ export class BeaconRunner {
       };
       this.instances.set(instance.id, instance);
       this.supervised.set(instance.id, this.freshSupervised());
+      if (instance.requiredStationId !== undefined && instance.requiredStationId !== this.stationId) return;
       if (instance.desiredState === "running") {
         const restartPatch: BeaconInstancePatch = {
           status: "backoff",
@@ -950,6 +981,7 @@ export class BeaconRunner {
     if (!inst) return;
     const sup = this.supervised.get(instanceId);
     if (!sup || sup.removing) return;
+    if (inst.requiredStationId !== undefined && inst.requiredStationId !== this.stationId) return;
 
     // Enforce desired=stopped: stop any live child that shouldn't be running.
     // This is the reconcile safety net that closes the window where a
@@ -1021,6 +1053,7 @@ export class BeaconRunner {
   private async spawnBeacon(beacon: AnyBeacon, instanceId: string): Promise<void> {
     const reg = this.registry.get(beacon.name)!;
     const inst = this.instances.get(instanceId)!;
+    if (inst.requiredStationId !== undefined && inst.requiredStationId !== this.stationId) return;
     const incarnation = inst.incarnation + 1;
 
     // Resolve store-managed env vars and enforce `.env()` requirements before
@@ -1154,7 +1187,7 @@ export class BeaconRunner {
     this.supervised.set(instanceId, sup);
 
     child.on("message", (msg: BeaconIPCMessage) => {
-      this.handleMessage(instanceId, msg).catch((err) =>
+      this.handleMessage(instanceId, msg, child).catch((err) =>
         console.error(`[station-beacon] message handler error for "${instanceId}":`, err),
       );
     });
@@ -1188,15 +1221,28 @@ export class BeaconRunner {
     await this.patch(instanceId, { pid: child.pid });
   }
 
-  private async handleMessage(instanceId: string, msg: BeaconIPCMessage): Promise<void> {
+  private async handleMessage(instanceId: string, msg: BeaconIPCMessage, source: ChildProcess): Promise<void> {
     const sup = this.supervised.get(instanceId);
-    if (!sup || sup.leaseLost) return;
+    if (!sup || sup.leaseLost || sup.child !== source || msg.incarnation !== this.instances.get(instanceId)?.incarnation) return;
     if (!(await this.ownsNetworkLease(instanceId))) {
       sup.leaseLost = true;
       sup.child?.kill("SIGTERM");
       return;
     }
+    if (this.supervised.get(instanceId) !== sup || sup.leaseLost || sup.child !== source || msg.incarnation !== this.instances.get(instanceId)?.incarnation) return;
     switch (msg.type) {
+      case "beacon:trigger": {
+        const instance = this.instances.get(instanceId);
+        const { alias, input, requestId } = msg.data ?? {};
+        if (typeof alias !== "string" || alias.length > 128 || typeof requestId !== "string" || requestId.length > 128 || JSON.stringify(input ?? null).length > 1024 * 1024) return;
+        try {
+          if (!instance || this.stopping || sup.stopRequested || !this.dependencyTrigger) throw new Error("Trigger not granted");
+          const runId = await this.dependencyTrigger({ beaconName: instance.beaconName, instanceId, incarnation: instance.incarnation, alias, input, requestId });
+          const ownsAfterTrigger = await this.ownsNetworkLease(instanceId);
+          if (ownsAfterTrigger && this.supervised.get(instanceId) === sup && !sup.leaseLost && !sup.stopRequested && sup.child === source && this.instances.get(instanceId)?.incarnation === instance.incarnation && source.connected) source.send({ type: "beacon:trigger-result", requestId, runId }, () => {});
+        } catch { if (source.connected) source.send({ type: "beacon:trigger-result", requestId, error: "dependency_trigger_failed" }, () => {}); }
+        break;
+      }
       case "beacon:started": {
         sup.runningSinceMs = Date.now();
         if (!sup.stopRequested) {

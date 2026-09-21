@@ -286,3 +286,31 @@ test("migrates a pre-multi-instance database without losing state", async () => 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("legacy beacon schema adds immutable station pin without changing existing records", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "station-beacon-pin-migration-"));
+  const dbPath = join(dir, "state.db");
+  let adapter = new BeaconSqliteAdapter({ dbPath });
+  try {
+    await adapter.upsertInstance(fixture({ id: "legacy" }));
+    await adapter.close();
+    const legacy = new Database(dbPath);
+    legacy.exec("ALTER TABLE beacon_instances DROP COLUMN required_station_id");
+    legacy.close();
+    adapter = new BeaconSqliteAdapter({ dbPath });
+    const previous = await adapter.getInstance("legacy");
+    assert.equal(previous?.incarnation, 1);
+    assert.equal(previous?.requiredStationId, undefined);
+    await adapter.upsertInstance(fixture({ id: "pinned", requiredStationId: "worker-a" }));
+    await adapter.updateInstance("pinned", { requiredStationId: "worker-b", status: "backoff" } as any);
+    const pinned = await adapter.getInstance("pinned");
+    assert.equal(pinned?.requiredStationId, "worker-a");
+    assert.equal(pinned?.status, "backoff");
+    await adapter.close();
+    adapter = new BeaconSqliteAdapter({ dbPath });
+    assert.equal((await adapter.getInstance("pinned"))?.requiredStationId, "worker-a");
+  } finally {
+    await adapter.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

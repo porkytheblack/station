@@ -77,6 +77,17 @@ test('malformed successful replies and disconnected operations have unknown outc
   assert.equal(count, 2);
 });
 
+test('challenge and provider errors retain safe codes for agent decisions', async t => {
+  const cases = [['challenge_required', 409], ['rate_limited', 429], ['provider_auth', 503], ['provider_capacity', 429], ['provider_unavailable', 503]] as const;
+  let count = 0;
+  const baseUrl = await server(t, (_req, res) => { const [error, status] = cases[count++]; res.statusCode = status; res.end(JSON.stringify({ error, message: 'PRIVATE-PROVIDER-KEY' })); });
+  const client = new BrowserUseClient({ baseUrl, stationId: 'worker', apiKey: 'key' });
+  for (const [code, status] of cases) await assert.rejects(client.request({ method: 'open' }), error => {
+    isError(code, status, status >= 500 ? 'unknown' : undefined)(error); assert.doesNotMatch(String(error), /PRIVATE-PROVIDER-KEY/); return true;
+  });
+  assert.equal(count, cases.length);
+});
+
 test('timeout applies while reading a response and cancellation after dispatch remains uncertain', async t => {
   let count = 0; let dispatched!: () => void;
   const arrived = new Promise<void>(resolve => { dispatched = resolve; });

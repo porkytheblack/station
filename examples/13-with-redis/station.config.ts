@@ -1,4 +1,4 @@
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 import { RedisAdapter } from "station-adapter-redis";
 
 const url = process.env.REDIS_URL ?? "redis://localhost:6379";

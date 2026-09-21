@@ -12,7 +12,7 @@ export const pageGroups = [
       { route: "/docs/getting-started", title: "Getting started", description: "Install Station, define and run a signal, add persistence, and prepare a production configuration." },
       { route: "/docs/browser", title: "Browser runtime (experimental)", description: "Build signals, DAGs, and beacons in Web Workers or service workers with IndexedDB, explicit wake handling, recovery, and browser execution limits. Includes beacon configuration and start-mode behavior." },
       { route: "/docs/execution", title: "Sandbox and Browser Use (experimental)", description: "Build persistent shell workspaces and agent-controlled browser sessions through Headquarters. Covers host/container adapters, tenant authorization, enforced network/storage controls, agent tools and image observations, dashboard subpages, recordings, recovery and optional Bun children." },
-      { route: "/docs/dashboard", title: "Dashboard guide", description: "Operate the StationKit dashboard, inspect runs, and understand Headquarters fleet views." },
+      { route: "/docs/dashboard", title: "Dashboard guide", description: "Operate the independent Station dashboard, inspect runs, and understand Headquarters fleet views." },
       { route: "/docs/network", title: "Station Networks", description: "Scale execution across Headquarters and worker stations with placement, capacity, leases, and draining." },
       { route: "/docs/agent-skill", title: "Agent skill", description: "Install and use the Station coding-agent skill and its bundled API references." },
     ],
@@ -20,6 +20,7 @@ export const pageGroups = [
   {
     heading: "Guides and operations",
     pages: [
+      { route: "/docs/images", title: "Station Images and registry", description: "Publish native and bundled JavaScript signals, broadcast planners and beacons; grant environment variables, synchronize Headquarters workers, pin execution, and operate isolated Docker invocations with an independent reaper." },
       { route: "/docs/remote-triggers", title: "Remote triggers", description: "Trigger Station signals from another service through the authenticated HTTP API." },
       { route: "/docs/dynamic-broadcasts", title: "Dynamic broadcasts", description: "Create runtime-defined DAG workflows with expressions, validation, and versioned definitions." },
       { route: "/docs/schedules", title: "Schedules", description: "Configure interval and cron schedules with timezones, overlap policy, and misfire handling." },
@@ -35,7 +36,7 @@ export const pageGroups = [
       { route: "/docs/beacons", title: "Beacons", description: "Supervised long-running processes, instances, restart policies, health, and service proxying." },
       { route: "/docs/expressions", title: "Expressions", description: "Deterministic expression AST, parser, evaluator, validation, and workflow references." },
       { route: "/docs/adapters", title: "Adapters", description: "Memory, SQLite, PostgreSQL, MySQL, and Redis persistence and coordination adapters." },
-      { route: "/docs/station", title: "StationKit", description: "Configuration, CLI, dashboard, authentication, REST API, runners, and deployment." },
+      { route: "/docs/station", title: "Station Daemon", description: "Headless daemon configuration, separate CLI/dashboard clients, authentication, REST API, runners, and deployment." },
     ],
   },
   {
