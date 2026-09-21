@@ -56,6 +56,8 @@ export interface BroadcastRunnerOptions {
    * the same cadence as broadcast discovery. Wire `station-schedules` here.
    */
   scheduleReconciler?: BroadcastScheduleReconciler;
+  /** Admission guard for a dedicated worker's isolated control plane. */
+  canReconcile?: () => Promise<boolean>;
 }
 
 export class BroadcastRunner {
@@ -65,6 +67,7 @@ export class BroadcastRunner {
   private broadcastsDir?: string;
   private pollIntervalMs: number;
   private subscribers: BroadcastSubscriber[];
+  private canReconcile?: () => Promise<boolean>;
   /** File-defined broadcasts (immutable, discovered at startup). */
   private planners = new Map<string, BroadcastPlanner>();
   private runOperations = new Map<string, Promise<unknown>>();
@@ -101,6 +104,7 @@ export class BroadcastRunner {
     this.broadcastsDir = options.broadcastsDir;
     this.pollIntervalMs = options.pollIntervalMs ?? 1000;
     this.subscribers = options.subscribers ? [...options.subscribers] : [];
+    this.canReconcile = options.canReconcile;
     this.reconcileEveryNTicks = options.reconcileEveryNTicks ?? 5;
     this.scheduleReconciler = options.scheduleReconciler;
 
@@ -617,6 +621,7 @@ export class BroadcastRunner {
     if (this.ticking) return;
     this.ticking = true;
     try {
+      if (this.canReconcile && !await this.canReconcile()) return;
       this.tickCount++;
       if (
         this.reconcileEveryNTicks > 0 &&

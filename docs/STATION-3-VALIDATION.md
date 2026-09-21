@@ -19,13 +19,13 @@ The checks below exercise real behavior where stated; passing a simulated engine
 
 | Area | Evidence |
 | --- | --- |
-| Daemon | 111 tests passed, including authenticated registry APIs and execution ownership |
+| Daemon | 143 tests passed, including authenticated registry APIs and execution ownership |
 | Image integration | 11 tests passed: JavaScript/native execution, granted environment variables, persisted broadcast plans, supervised beacon dependency triggers and Headquarters distribution |
 | Placement | Shared SQLite workers exercised signal retries, owner-only execution, beacon restart and expired-lease recovery; broadcast tests verify planner and child placement persistence |
 | Broadcasts | 27 tests passed, including cancellation races, durable planning and partial-write recovery |
 | Beacons | 58 tests passed |
 | SQLite adapters | 40 tests passed, including additive placement migrations |
-| Registry storage adapters | 38 image tests passed, including all four file/memory combinations, concurrent immutable publication, quota admission, corruption checks and upload snapshots; daemon tests include adapter-backed Headquarters and offline cache recovery |
+| Registry storage adapters | 49 image tests passed, including all four file/memory combinations, concurrent immutable publication, quota admission, corruption checks and upload snapshots; daemon tests include adapter-backed Headquarters and offline cache recovery |
 | Image Docker backend | Five live Docker tests passed: isolation settings, JavaScript execution, compiled Go execution, timeout cleanup and independent reaping |
 | Sandbox Docker backend | Three live tests passed with an explicit seccomp profile: custom npm install persistence, files, terminals, services, cancellation, default network denial and killed-controller recovery |
 | Browser Docker backend | Live named-volume integration passed: active kernel seccomp, isolation/resource flags, separate cookies, persistent profile restart, page controls, uploads/downloads, screenshots, trace ZIPs, recording recovery and cancellation |
@@ -35,7 +35,7 @@ The checks below exercise real behavior where stated; passing a simulated engine
 | Execution policy | Four proxy tests and five provisioner tests passed |
 | Package separation | Tarballs installed into independent temporary applications; daemon lacks Next/React/dashboard dependencies, dashboard lacks daemon dependencies; stopping the dashboard leaves the daemon running |
 | Workspace regression | Full `pnpm test` passed with zero failures; full workspace typecheck passed |
-| Release packaging | All 20 package dry runs passed with `node scripts/release-npm.mjs --dry-run --allow-dirty --skip-checks`; full tests and typechecking were run independently |
+| Release packaging | All 20 packages passed `pnpm release --dry-run --allow-dirty` with build, typecheck and tests included; no checks skipped and no uploads performed |
 | Release access checks | 10 release-script tests passed, including foreign ownership, team grants, read-only access and unauthenticated dry-run behavior |
 
 The live image, sandbox and browser tests used Docker Desktop's Linux arm64 engine and an explicitly supplied official Moby 27.5.1 deny-default seccomp profile. This engine advertises an unconfined default; these backends refused that configuration until the profile was supplied. These tests do not validate a production Linux host's filesystem quotas, egress policy, HA configuration or VM isolation.
@@ -43,13 +43,17 @@ The live image, sandbox and browser tests used Docker Desktop's Linux arm64 engi
 ## Remaining limits
 
 - Registry storage has file/memory adapters and extension interfaces; PostgreSQL/S3 registry drivers are not bundled.
-- Image registry operations currently require operator privileges. Customer-scoped image publication, tenant registry namespaces and the complete public deployment authorization model are not implemented.
-- The CLI has explicit commands and generic API access. Its TUI is read-only; interactive provisioning, terminal attachment and full image deployment/dashboard workflows remain future work.
-- No VM backend, automatic network enrollment, deployment generation/rollback manager or registry garbage collector is implemented.
+- Operator registry operations require admin. Tenant registries use isolated namespaces/mapped registry-only keys and a fixed dedicated-worker execution/lifecycle gateway. This does not provision a general tenant scheduler or establish the complete public deployment security model.
+- The CLI has image packaging/resumable publishing, binary transfers, interactive PTYs and an action-capable TUI with safe reconnect. The dashboard has nested private registry workflows, binding edits and upload resume. Specialized TUI workspace/browser/registry/deployment views passed model tests and an additional real PTY navigation/action case. An exhaustive every-method/provider interaction matrix is not claimed; the command coverage map records the current evidence.
+- Explicit network enrollment/revocation, immutable deployment generations, invocation binding audit and beacon rollout are implemented. No VM backend, automatic executable-image garbage collector or automatic cross-worker runtime-artifact transfer service is implemented.
 - Durable adapters other than SQLite were typechecked, but placement changes have not been exercised against live PostgreSQL, MySQL or Redis servers.
 - The existing bounded pending-job scan can delay eligible work behind a large backlog for offline workers. It does not permit another worker to take a pinned job.
 - Docker shares the host kernel. Public operation still requires deployment-specific isolation, storage quota, network, recovery and capacity acceptance tests. A trusted-host backend is for trusted code only.
 - External image side effects remain at-least-once. Applications must implement their own idempotency where needed.
+
+The latest follow-through also passed native Docker beacon lifecycle, dedicated tenant signal/broadcast/beacon lifecycle routing, mixed native/image planner grants, actual SQLite SIGKILL saved-plan/preparation recovery, real daemon revocation, audited environment override generations, explicit beacon replacement and 5-MiB-plus invocation artifact transfers. See the [numbered acceptance map](STATION-IMAGES-ACCEPTANCE.md) for exact files, counts and limits. The user explicitly skipped unavailable intended-Linux-host validation; no production host was provisioned.
+
+Final coordinated release and packed-install logs are `/tmp/station-plan-release-dry-run.log` and `/tmp/station-plan-packed-final.log`. All 20 package dry runs passed with checks enabled; npm publish access remains unverified.
 
 ## Release procedure
 

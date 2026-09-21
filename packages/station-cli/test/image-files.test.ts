@@ -1,0 +1,35 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { mkdtemp, writeFile, readFile, symlink, rm, readdir } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { digestBytes } from "station-images";
+import { readImage, packImage } from "../src/images.js";
+import { run, parseArgs } from "../src/commands.js";
+import { ContextStore } from "../src/store.js";
+const template = () => ({ format: "station.image/v1", protocol: "station.process/v1", name: "acme/echo", version: "1.0.0", artifacts: [{ entrypoint: "echo.mjs", platform: { os: "any", arch: "any" }, runtime: "node", runtimeMajor: 22 }], exports: [{ name: "echo", kind: "signal" }] });
+test("offline build hashes only explicitly named artifacts, validates and packs without a daemon", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "station-image-cli-")); t.after(() => rm(dir, { recursive: true, force: true }));
+  await writeFile(join(dir, "echo.mjs"), "console.log('hello');\n"); await writeFile(join(dir, ".env"), "SECRET=must-not-package");
+  await writeFile(join(dir, "template.json"), JSON.stringify(template()));
+  const packed = await packImage(join(dir, "template.json"), dir, join(dir, "packed"), true);
+  const result = await readImage(packed.manifest, packed.artifactsDirectory);
+  assert.equal(result.manifest.artifacts[0].digest, digestBytes("console.log('hello');\n"));
+  assert.deepEqual(await readdir(packed.artifactsDirectory), ["echo.mjs"]);
+  await run(parseArgs(["images", "validate", packed.manifest, "--artifacts-dir", packed.artifactsDirectory]), new ContextStore(join(dir, "no-context")));
+  await assert.rejects(packImage(packed.manifest, packed.artifactsDirectory, packed.directory), /EEXIST/);
+  await writeFile(join(packed.artifactsDirectory, "echo.mjs"), "tampered");
+  await assert.rejects(readImage(packed.manifest, packed.artifactsDirectory), /size|digest/);
+  assert.match(await readFile(join(dir, ".env"), "utf8"), /must-not-package/);
+});
+test("image preparation rejects symlinks, traversal and disguised native scripts", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "station-image-cli-")); t.after(() => rm(dir, { recursive: true, force: true }));
+  await writeFile(join(dir, "source"), "#!/bin/sh\necho forbidden\n");
+  await symlink(join(dir, "source"), join(dir, "echo.mjs"));
+  const file = join(dir, "manifest.json"); await writeFile(file, JSON.stringify(template()));
+  await assert.rejects(readImage(file, dir, true), /ELOOP/);
+  const bad = template(); bad.artifacts[0].entrypoint = "../source"; await writeFile(file, JSON.stringify(bad));
+  await assert.rejects(readImage(file, dir, true), /basename/);
+  const native = { ...template(), artifacts: [{ entrypoint: "source", runtime: "native", platform: { os: "linux", arch: "amd64", abi: "glibc" } }] };
+  await writeFile(file, JSON.stringify(native)); await assert.rejects(readImage(file, dir, true), /Native artifact/);
+});

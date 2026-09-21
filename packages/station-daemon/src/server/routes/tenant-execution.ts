@@ -69,6 +69,7 @@ export function tenantExecutionRoutes(deps: ExecutionDeps): Hono {
   const identity = (c: Context) => tenantFor(c, mappings);
   const denied = (c: Context) => c.json({ error: c.get("authType") === "none" || !c.get("authType") ? "unauthorized" : "forbidden" }, c.get("authType") === "none" || !c.get("authType") ? 401 : 403);
   app.use("/tenant/*", async (c, next) => {
+    if (/^(?:\/api\/v1)?\/tenant\/registry(?:\/|$)/.test(c.req.path)) return next();
     const tenantId = identity(c);
     if (!tenantId) return denied(c);
     const bucket = buckets.get(tenantId)!;

@@ -21,6 +21,7 @@ test('standalone proxy preserves authenticated API, streams and WebSocket while 
   const proxy = dashboardProxy(daemonURL, uiURL); const base = await listen(proxy.server);
   t.after(async () => { await proxy.close(); wss.close(); await Promise.all([new Promise((r) => daemon.close(r)), new Promise((r) => frontend.close(r))]); });
   assert.equal(await (await fetch(base)).text(), 'dashboard');
+  assert.deepEqual(await (await fetch(`${base}/api/dashboard/context`)).json(), { data: { daemonURL } });
   assert.equal((await fetch(`${base}/api/data`)).status, 401);
   const login = await fetch(`${base}/api/auth/login`, { method: 'POST' });
   assert.match(login.headers.get('set-cookie'), /HttpOnly/);

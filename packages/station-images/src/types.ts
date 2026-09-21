@@ -36,12 +36,15 @@ export interface ImageExport {
   configSchema?: ImageSchema;
   timeoutMs?: number;
   requiredEnv?: string[];
+  /** Declared invocation artifact operations; operator grants are additionally required. */
+  artifacts?: { read?: boolean; write?: boolean };
   planner?: "binary";
   mode?: "run" | "poll";
   pollIntervalMs?: number;
   startMode?: "auto" | "on-demand";
 }
 export interface ImageDependency { image: string; export: string; kind: "signal" | "broadcast" }
+export interface NativeSignalDependency { name: string; revision: Digest }
 export interface ImageManifest {
   format: typeof IMAGE_FORMAT;
   protocol: typeof PROCESS_PROTOCOL;
@@ -50,6 +53,8 @@ export interface ImageManifest {
   artifacts: ImageArtifact[];
   exports: ImageExport[];
   dependencies?: Record<string, ImageDependency>;
+  /** Explicit operator-granted, immutable native Station signal bundles. */
+  nativeSignals?: Record<string, NativeSignalDependency>;
   /** Non-secret defaults only. Never place secrets in an image. */
   env?: Record<string, string>;
 }

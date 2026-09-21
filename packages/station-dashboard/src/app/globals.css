@@ -1764,3 +1764,38 @@ a:hover {
   .explorer-directory { border-right: 0; border-bottom: 1px solid var(--wire); }
   .explorer-entries { max-height: 280px; }
 }
+
+/* Immutable registry: hierarchy is reflected in routes, not stacked forms. */
+.registry-screen { max-width: 1080px; }
+.registry-context { display: flex; flex-wrap: wrap; gap: .4rem 1rem; padding: .75rem 0 1rem; margin-bottom: 1.25rem; border-bottom: 1px solid var(--wire); font-size: .75rem; color: var(--muted); }
+.registry-context strong { color: var(--charcoal); overflow-wrap: anywhere; }
+.registry-context > :last-child { flex-basis: 100%; }
+.registry-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; }
+.registry-heading .page-title { overflow-wrap: anywhere; }
+.registry-heading > button { flex-shrink: 0; }
+.registry-list { display: grid; border-top: 1px solid var(--wire); }
+.registry-row { display: grid; grid-template-columns: minmax(160px, 1.2fr) auto minmax(120px, 1fr) 20px; align-items: center; gap: 1rem; padding: 1.1rem .25rem; border-bottom: 1px solid var(--wire); text-decoration: none; color: inherit; }
+.registry-row:hover { background: var(--concrete-dark); }
+.registry-row > span { color: var(--muted); font-size: .75rem; }
+.registry-digest { overflow-wrap: anywhere; font-size: .7rem; color: var(--muted); }
+.registry-tabs { display: flex; flex-wrap: wrap; gap: 1.25rem; border-bottom: 1px solid var(--wire); margin: 1rem 0; }
+.registry-tabs a { padding: .65rem 0; color: var(--muted); text-decoration: none; border-bottom: 2px solid transparent; }
+.registry-tabs a[aria-current="page"] { color: var(--charcoal); border-bottom-color: var(--rust); }
+.registry-panel { max-width: 840px; }
+.registry-details { margin: 1.5rem 0; }
+.registry-details summary { cursor: pointer; color: var(--muted); font-size: .8125rem; }
+.registry-artifacts article + article { margin-top: 1.25rem; padding-top: 1.25rem; border-top: 1px solid var(--wire); }
+.registry-dependency { display: grid; gap: .35rem; padding: .6rem 0; }
+.registry-export-title { display: flex; gap: 1rem; align-items: center; }
+.registry-export-title h2 { margin: 0; }
+.registry-screen .btn + .btn { margin-left: .5rem; }
+.registry-screen input[type="file"] { max-width: 100%; font-size: .8125rem; }
+@media(max-width: 640px) { .registry-row { grid-template-columns: 1fr auto; gap: .6rem; } .registry-row > :nth-child(3) { grid-column: 1; } }
+
+.registry-context .execution-field { flex-basis:100%; max-width:540px; margin: .5rem 0; }
+.registry-context .execution-field select { width:100%; }
+.registry-bindings { margin:1.25rem 0; padding:1rem; border:1px solid var(--wire); min-width:0; }
+.registry-bindings legend { padding:0 .4rem; }
+.registry-binding { display:grid; gap:.5rem; padding:1rem 0; border-top:1px solid var(--wire); }
+.registry-binding .execution-field { margin:0; }
+.registry-binding > .btn { justify-self:start; margin:.5rem 0; }

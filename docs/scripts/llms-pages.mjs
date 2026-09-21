@@ -20,7 +20,7 @@ export const pageGroups = [
   {
     heading: "Guides and operations",
     pages: [
-      { route: "/docs/images", title: "Station Images and registry", description: "Publish native and bundled JavaScript signals, broadcast planners and beacons; grant environment variables, synchronize Headquarters workers, pin execution, and operate isolated Docker invocations with an independent reaper." },
+      { route: "/docs/images", title: "Station Images and registry", description: "Publish native and bundled JavaScript exports with resumable uploads; stage generations, bind environment references, activate/rollback/drain, prepare cold workers, target private registries and configure tenant grants. Includes nested dashboard workflows, Docker reaping and a numbered acceptance map." },
       { route: "/docs/remote-triggers", title: "Remote triggers", description: "Trigger Station signals from another service through the authenticated HTTP API." },
       { route: "/docs/dynamic-broadcasts", title: "Dynamic broadcasts", description: "Create runtime-defined DAG workflows with expressions, validation, and versioned definitions." },
       { route: "/docs/schedules", title: "Schedules", description: "Configure interval and cron schedules with timezones, overlap policy, and misfire handling." },

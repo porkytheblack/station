@@ -53,3 +53,15 @@ test("SSE decodes multiline events split across network chunks and closes on con
   for await (const event of client.events(new AbortController().signal)) { assert.deepEqual(event, { event: "run", data: "one\ntwo" }); break; }
   assert.equal(cancelled, true);
 });
+test("SSE sends an explicit replay cursor and rejects header injection before transport", async () => {
+  let calls = 0, opened = 0;
+  const client = new StationClient({ url: "https://hq.example" }, { fetch: async (_url, options) => {
+    calls++; assert.equal(new Headers(options?.headers).get("Last-Event-ID"), "epoch:42");
+    return new Response("id: epoch:43\nevent: stream.ready\ndata: {}\n\n");
+  } });
+  const events = [];
+  for await (const event of client.events(new AbortController().signal, { lastEventId: "epoch:42", onOpen: () => { opened++; } })) events.push(event);
+  assert.equal(opened, 1); assert.deepEqual(events, [{ id: "epoch:43", event: "stream.ready", data: "{}" }]);
+  await assert.rejects(async () => { for await (const _ of client.events(new AbortController().signal, { lastEventId: "bad\r\nInjected: value" })) {} });
+  assert.equal(calls, 1);
+});

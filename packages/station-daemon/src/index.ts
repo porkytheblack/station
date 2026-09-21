@@ -1,4 +1,11 @@
 import type { StationUserConfig } from "./config/schema.js";
+export { FileImageDeploymentStorage, type ImageDeploymentStorage, type DeploymentSnapshot, type ImageDeployment, type DeploymentGeneration } from './images/deployments.js';
+export type { TenantImageRegistryConfig, TenantRegistryNamespace, TenantRegistryGrant, TenantRegistryExecution, TenantImageRunTarget, RegistryPermission } from './registry/tenants.js';
+export type { ImageArtifactPolicy } from './images/shim.js';
+export type { NativeSignalGrant } from './images/native-signal.js';
+export type { BeaconRollout } from './images/deployments.js';
+export type { RegistryTargets } from './registry/proxy.js';
+export { createTenantRegistryWorkerGateway, type TenantRegistryWorkerGatewayOptions } from './registry/worker-gateway.js';
 
 export function defineConfig(config: StationUserConfig): StationUserConfig {
   return config;

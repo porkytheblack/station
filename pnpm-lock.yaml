@@ -510,6 +510,9 @@ importers:
       station-client:
         specifier: workspace:*
         version: link:../station-client
+      station-images:
+        specifier: workspace:*
+        version: link:../station-images
     devDependencies:
       '@types/node':
         specifier: ^25.3.0

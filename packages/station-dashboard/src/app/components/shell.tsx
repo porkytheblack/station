@@ -193,6 +193,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           <NavLink href="/broadcasts" label="Broadcasts" section="broadcasts" icon={<IconBroadcasts />} />
           <NavLink href="/beacons" label="Beacons" section="beacons" icon={<IconBeacon />} />
           <NavLink href="/schedules" label="Schedules" section="schedules" icon={<IconSchedules />} />
+          <NavLink href="/registry" label="Registry" section="registry" icon={<IconOverview />} />
           <NavLink href="/stations" label="Stations" section="stations" icon={<IconStations />} />
           <NavLink href="/sandboxes" label="Sandboxes" section="sandboxes" icon={<IconSandbox />} />
           <NavLink href="/browser-use" label="Browser Use" section="browser-use" icon={<IconBrowserUse />} />

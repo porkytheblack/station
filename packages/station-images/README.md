@@ -220,3 +220,59 @@ A beacon can emit `trigger` with `id`, `dependency` alias and JSON `input`. Only
 Opt in to real Docker checks with `STATION_IMAGE_DOCKER_IMAGE=repo@sha256:…`, optionally `STATION_IMAGE_DOCKER_SOCKET`, `STATION_IMAGE_DOCKER_SECCOMP`, and `STATION_IMAGE_DOCKER_NATIVE`, then run `node --import tsx --test packages/station-images/test/docker.integration.ts`. The native fixture source is `test/fixtures/docker-native.go`; cross-compile it for the configured Linux architecture with `CGO_ENABLED=0`. Images and seccomp policy are operator-prepared inputs; tests never weaken Docker host settings.
 
 This library does not implement a compiler, tenant billing, signature/provenance trust, registry retention/GC, artifact-media broker, microVM backend or cluster ownership. It supports those as daemon/backend responsibilities rather than silently claiming that a local process launcher provides them.
+
+## Resumable uploads
+
+`ImageUploadManager` stages bounded, digest-verified chunks before committing the
+complete artifact through `ImageRegistry.putBlob()`. `ImageUploadStorage` is a
+separate adapter contract: it must serialize each callback across every client of
+one staging namespace and persist each write before resolving. The callback does
+not promise rollback; immutable chunk writes and final registry commits are
+recoverable when a later metadata write fails. `FileImageUploadStorage` supplies
+single-host durable staging, and `MemoryImageUploadStorage` is deliberately
+volatile. Distributed deployments must supply a shared transactional/locking
+adapter; separate in-memory adapters do not coordinate.
+
+```ts
+import { FileImageUploadStorage, ImageUploadManager, digestBytes } from "station-images";
+const uploads = new ImageUploadManager({
+  registry,
+  storage: new FileImageUploadStorage("/data/station/upload-staging"),
+  maxChunkBytes: 1024 * 1024,
+  maxUploads: 64,
+  maxStagedBytes: 512 * 1024 * 1024,
+  ttlMs: 3_600_000,
+});
+const blob = Buffer.from("compiled artifact bytes");
+const upload = await uploads.create(digestBytes(blob), blob.length);
+await uploads.append(upload.id, 0, blob, digestBytes(blob));
+await uploads.commit(upload.id);
+await uploads.cancel(upload.id); // Release staging; the immutable registry blob remains.
+```
+
+A create reserves the entire declared size. Fixed expiry is not extended by
+activity. Completed uploads retain their reservation and chunks until cancellation
+or expiry so an interrupted response can be retried; `sweep()` deletes expired
+staging, and creation also sweeps before quota admission. Metadata, temporary-file
+and filesystem overhead require operator disk capacity beyond the byte reservation.
+The file adapter synchronizes data and directories, rejects symlinks, uses atomic
+metadata replacement, and serializes local processes with an exclusive lock. A
+process killed while holding that lock requires operator recovery: confirm no owner
+is active, inspect any incomplete temporary files/metadata, then remove the stale
+lock. It never guesses that a live controller is dead.
+
+The authenticated daemon upload contract is:
+
+- `POST /api/v1/registry/uploads` with `{ "digest": "sha256:…", "size": 123 }`.
+- `GET /api/v1/registry/uploads/:id` returns the durable offset and fixed expiry.
+- `PATCH /api/v1/registry/uploads/:id` sends raw chunk bytes, `Upload-Offset`, and
+  `X-Chunk-SHA256` (the complete `sha256:…` chunk digest). Identical chunk retries
+  are idempotent; overlapping or out-of-order writes return a conflict.
+- `POST /api/v1/registry/uploads/:id/commit` verifies the complete SHA-256 digest
+  and performs an idempotent immutable blob commit.
+- `DELETE /api/v1/registry/uploads/:id` cancels/releases staging idempotently.
+
+Responses are private/noncacheable; `Upload-Max-Chunk-Bytes` advertises the server
+chunk limit. These routes require operator authorization. An upload ID alone never
+grants artifact access. Uploading a blob neither publishes a manifest nor activates
+or executes code. All staging records are bound to the final registry namespace.

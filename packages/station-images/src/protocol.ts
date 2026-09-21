@@ -29,6 +29,7 @@ export function validateBroadcastPlan(value: unknown, manifest: ImageManifest): 
   if (value.timeout !== undefined && (!Number.isSafeInteger(value.timeout) || (value.timeout as number) < 1 || (value.timeout as number) > 86400000)) fail("invalid_plan", "Invalid plan timeout");
   const signals = new Set(manifest.exports.filter(e => e.kind === "signal").map(e => e.name));
   for (const [alias, dep] of Object.entries(manifest.dependencies ?? {})) if (dep.kind === "signal") signals.add(alias);
+  for (const alias of Object.keys(manifest.nativeSignals ?? {})) signals.add(alias);
   const nodes = new Map<string, BroadcastPlanNode>();
   for (const node of value.nodes) {
     if (!isRecord(node)) fail("invalid_plan", "Invalid node");

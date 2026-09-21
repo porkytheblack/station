@@ -79,6 +79,11 @@ await mkdir(join(daemonRoot, 'signals'));
 await writeFile(join(daemonRoot, 'signals', 'echo.ts'), `import { signal,z } from 'station-signal'; export const echo = signal('packed-echo').input(z.object({message:z.string()})).output(z.object({message:z.string()})).run(async input => input);\n`);
 await writeFile(join(daemonRoot, 'station.config.ts'), `import { defineConfig } from 'station-daemon'; export default defineConfig({host:'127.0.0.1',signalsDir:'./signals',stationDir:'./station-data',auth:{username:'packed-test',password:${JSON.stringify(password)}},network:{stationId:'packed-daemon'}});\n`, { mode: 0o600 });
 const cli = (root, args, input) => command(process.execPath, [join(root, 'node_modules/station-runtime-cli/dist/cli.js'), ...args], { cwd: root, env: { STATION_CLI_HOME: cliHome }, input });
+await writeFile(join(scratch, 'image.mjs'), "console.log('compiled artifact');\n");
+await writeFile(join(scratch, 'image-template.json'), JSON.stringify({ format: 'station.image/v1', protocol: 'station.process/v1', name: 'packed/echo', version: '1.0.0', artifacts: [{ entrypoint: 'image.mjs', runtime: 'node', runtimeMajor: 22, platform: { os: 'any', arch: 'any' } }], exports: [{ name: 'echo', kind: 'signal' }] }));
+const bundle = JSON.parse(await cli(daemonRoot, ['images', 'build', join(scratch, 'image-template.json'), '--artifacts-dir', scratch, '--out', join(scratch, 'image-bundle')]));
+assert.equal(JSON.parse(await cli(daemonRoot, ['images', 'validate', bundle.manifest, '--artifacts-dir', bundle.artifactsDirectory])).valid, true);
+console.log('Installed CLI builds and validates precompiled image bundles offline without a context.');
 let daemonStarted = false, dashboardStarted = false;
 try {
   const started = JSON.parse(await cli(daemonRoot, ['daemon', 'start', '--instance', 'packed', '--config', 'station.config.ts', '--port', String(daemonPort)])); daemonStarted = true;

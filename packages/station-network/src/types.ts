@@ -10,6 +10,8 @@ export interface StationDefinitions {
   signals: string[];
   broadcasts: string[];
   beacons: string[];
+  /** Authorized compatible catalog entries that can be prepared before claiming a run. */
+  images?: { installableSignals: string[] };
   /** Optional execution capabilities advertised by newer workers. */
   execution?: {
     /** Internal dedicated-worker ownership; never derive from customer request headers. */

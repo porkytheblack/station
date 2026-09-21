@@ -53,7 +53,7 @@ export default function AgentSkillPage() {
             <td><code>browser.md</code></td>
             <td>BrowserStation setup, worker and service-worker hosting, API usage, supported definitions, recovery, and known limits. Read this first for browser-local work.</td>
           </tr>
-          <tr><td><code>images.md</code></td><td>Compiled native/JavaScript images, registry operations, environment grants, worker pins and independent Docker cleanup.</td></tr>
+          <tr><td><code>images.md</code></td><td>Compiled native/JavaScript images, deployment/environment bindings, beacon rollout, enrollment, native planner grants, invocation artifacts, private registries and independent Docker cleanup.</td></tr>
           <tr>
             <td><code>execution.md</code></td>
             <td>Separate Sandbox and Browser Use primitives, exact-owner Headquarters routing, trusted-code limits, persistence, and opt-in Bun process children.</td>

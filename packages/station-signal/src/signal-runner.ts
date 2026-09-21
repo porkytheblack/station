@@ -150,6 +150,8 @@ export interface SignalRunnerOptions {
   stationLabels?: Record<string, string>;
   /** Dynamic admission gate used for station draining. */
   canClaim?: () => Promise<boolean>;
+  /** Admission-only gate: denial or failure fences active children before renewal. Do not use draining state. */
+  canRenew?: () => Promise<boolean>;
   /**
    * Grace given to a child that has already reported its result before the
    * runner starts reaping it. A well-behaved signal exits on its own once its
@@ -187,6 +189,9 @@ export class SignalRunner {
   private stationLabels: Record<string, string>;
   private networkSlotByRunId = new Map<string, { name: string; token: string }>();
   private canClaim?: () => Promise<boolean>;
+  private canRenew?: () => Promise<boolean>;
+  private admissionFencedChildren = new WeakSet<ChildProcess>();
+  private prepareDefinition?: (run: Run) => Promise<boolean>;
   private activeCount = 0;
   private activePerSignal = new Map<string, number>();
   /** Map runId → child process for cancel/timeout kill. */
@@ -212,6 +217,8 @@ export class SignalRunner {
   private initialized = false;
   /** How often to scan for orphaned "running" runs when we own no children. */
   private static readonly ORPHAN_SWEEP_INTERVAL_MS = 30_000;
+  /** Trusted controller hook: schedule bounded preparation without claiming or executing the run. */
+  setDefinitionPreparer(prepare: (run: Run) => Promise<boolean>): void { this.prepareDefinition = prepare; }
 
   constructor(options: SignalRunnerOptions = {}) {
     this.processRuntime = options.processRuntime ?? new NodeProcessRuntime();
@@ -246,6 +253,7 @@ export class SignalRunner {
     this.networkId = options.networkId ?? "default";
     this.stationLabels = { ...(options.stationLabels ?? {}) };
     this.canClaim = options.canClaim;
+    this.canRenew = options.canRenew;
     this.reapGraceMs = options.reapGraceMs ?? 10_000;
     this.killGraceMs = options.killGraceMs ?? 5_000;
   }
@@ -751,8 +759,11 @@ export class SignalRunner {
     if (this.ticking) return true;
     this.ticking = true;
     try {
-    await this.recoverAndRenewLeases();
+    if (!await this.recoverAndRenewLeases()) return this.childByRunId.size > 0;
     await this.checkTimeouts();
+    if (this.canClaim && !(await this.canClaim())) {
+      return this.childByRunId.size > 0;
+    }
     await this.tickRecurring();
     if (this.scheduleReconciler) {
       try {
@@ -760,10 +771,6 @@ export class SignalRunner {
       } catch (err) {
         console.error("[station-signal] Schedule reconciler error:", err);
       }
-    }
-
-    if (this.canClaim && !(await this.canClaim())) {
-      return this.childByRunId.size > 0;
     }
 
     // Bounded batch: we dispatch at most `maxConcurrent` per tick, but some
@@ -778,6 +785,7 @@ export class SignalRunner {
       if (run.requiredStationId != null && run.requiredStationId !== this.stationId) continue;
       const sig = this.registry.get(run.signalName);
       if (!sig) {
+        if (await this.prepareDefinition?.(run)) continue;
         if (!this.failUnknownSignals) continue;
         const error = `No signal registered for "${run.signalName}"`;
         this.emit("onRunFailed", { run, error });
@@ -910,10 +918,29 @@ export class SignalRunner {
     }
   }
 
-  private async recoverAndRenewLeases(): Promise<void> {
+  private async admissionAllowsRenewal(): Promise<boolean> {
+    if (!this.canRenew) return true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        Promise.resolve().then(() => this.canRenew!()),
+        new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), 5000); }),
+      ]);
+    } catch { return false; }
+    finally { if (timer) clearTimeout(timer); }
+  }
+
+  private async recoverAndRenewLeases(): Promise<boolean> {
+    if (!await this.admissionAllowsRenewal()) {
+      for (const [runId, child] of this.childByRunId) {
+        this.admissionFencedChildren.add(child);
+        this.ensureExit(child, runId, 0);
+      }
+      return false;
+    }
     const now = new Date();
     await this.adapter.requeueExpiredRuns?.(now);
-    if (!this.adapter.renewRunLease || this.childByRunId.size === 0) return;
+    if (!this.adapter.renewRunLease || this.childByRunId.size === 0) return true;
 
     const leaseExpiresAt = new Date(now.getTime() + this.leaseDurationMs);
     for (const runId of this.childByRunId.keys()) {
@@ -941,6 +968,7 @@ export class SignalRunner {
         }
       }
     }
+    return true;
   }
 
   private async acquireNetworkSlot(
@@ -1174,6 +1202,7 @@ export class SignalRunner {
     };
 
     child.on("message", async (msg: IPCMessage) => {
+      if (this.admissionFencedChildren.has(child)) return;
       switch (msg.type) {
         case "run:started": {
           const current = await this.adapter.getRun(run.id);

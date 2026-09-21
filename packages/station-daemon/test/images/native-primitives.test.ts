@@ -1,0 +1,63 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createServer } from "node:net";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { MemoryAdapter } from "station-signal";
+import { BroadcastMemoryAdapter } from "station-broadcast";
+import { ScheduleMemoryAdapter } from "station-schedules";
+import { FileImageRegistry, type ImageManifest } from "station-images";
+import { createStation } from "../../src/server/index.js";
+import { resolveConfig } from "../../src/config/schema.js";
+import { imageSignalName, type ImageBackendConfig } from "../../src/images/runtime.js";
+process.env.__STATION_TSX ??= fileURLToPath(import.meta.resolve("tsx"));
+async function freePort(){const server=createServer();await new Promise<void>((resolve,reject)=>{server.once("error",reject);server.listen(0,"127.0.0.1",resolve)});const address=server.address();assert.ok(address&&typeof address!=="string");await new Promise<void>(resolve=>server.close(()=>resolve()));return address.port;}
+async function waitFor<T>(read:()=>Promise<T|undefined>,label:string){const deadline=Date.now()+15000;while(Date.now()<deadline){const value=await read();if(value!==undefined)return value;await new Promise(resolve=>setTimeout(resolve,25));}throw new Error(`Timed out: ${label}`);}
+
+test("native beacon lifecycle and native Station broadcasts/schedules compose with digest-qualified images",{timeout:90_000},async t=>{
+  const root=await mkdtemp(join(tmpdir(),"station-native-primitives-"));t.after(()=>rm(root,{recursive:true,force:true}));
+  const binary=join(root,"native-beacon");
+  execFileSync("go",["build","-o",binary,fileURLToPath(new URL("./fixtures/native-beacon.go",import.meta.url))],{env:{...process.env,CGO_ENABLED:"0",GOOS:process.platform,GOARCH:process.arch==="arm64"?"arm64":"amd64",GOCACHE:join(tmpdir(),"station-native-fixture-go-cache")},timeout:60_000});
+  const target={os:process.platform as "linux"|"darwin",arch:process.arch==="arm64"?"arm64" as const:"amd64" as const,abi:"none" as const,runtimes:{node:Number(process.versions.node.split(".")[0])}};
+  const backend:ImageBackendConfig={kind:"trusted-local",allowUnsafeHostExecution:true,target};
+  const registry=new FileImageRegistry(join(root,"registry")),bytes=await readFile(binary),artifact=await registry.putBlob(bytes);
+  const nativeArtifact={...artifact,entrypoint:"native-beacon",runtime:"native" as const,platform:{os:target.os,arch:target.arch,abi:target.abi}};
+  const signalImage=await registry.publish({format:"station.image/v1",protocol:"station.process/v1",name:"native/echo",version:"1.0.0",artifacts:[nativeArtifact],exports:[{name:"echo",kind:"signal",requiredEnv:["IMAGE_TOKEN"],inputSchema:{type:"object"}}]});
+  const beaconManifest:ImageManifest={format:"station.image/v1",protocol:"station.process/v1",name:"native/watch",version:"1.0.0",artifacts:[nativeArtifact],exports:[{name:"watch",kind:"beacon",mode:"poll",pollIntervalMs:50,startMode:"on-demand",requiredEnv:["IMAGE_TOKEN"],configSchema:{type:"object",required:["observed","message"]}}],dependencies:{echo:{image:`native/echo@${signalImage.digest}`,export:"echo",kind:"signal"}}};
+  const beaconImage=await registry.publish(beaconManifest),name=imageSignalName(signalImage.digest,"echo");
+  const broadcastsDir=join(root,"broadcasts");await mkdir(broadcastsDir);await writeFile(join(root,"package.json"),JSON.stringify({type:"module"}));
+  const shim=pathToFileURL(fileURLToPath(new URL("../../src/images/shim.ts",import.meta.url))).href;
+  const signalConfig={registryRoot:registry.root,digest:signalImage.digest,name,definition:signalImage.manifest.exports[0],backend,allowedEnv:["IMAGE_TOKEN"]};
+  await writeFile(join(broadcastsDir,"native.js"),`import {broadcast} from ${JSON.stringify(import.meta.resolve("station-broadcast"))};import{createImageSignal}from ${JSON.stringify(shim)};const external=createImageSignal(${JSON.stringify(signalConfig)});export const nativeWorkflow=broadcast('native_composition').input(external).then(external,{as:'second',map:upstream=>({via:'native-broadcast-second',first:upstream[${JSON.stringify(name)}]})}).build();`);
+  const queue=new MemoryAdapter(),broadcastQueue=new BroadcastMemoryAdapter(),schedules=new ScheduleMemoryAdapter();const port=await freePort();
+  const old=process.env.IMAGE_HOST_ONLY;process.env.IMAGE_HOST_ONLY="never-forward";t.after(()=>{if(old===undefined)delete process.env.IMAGE_HOST_ONLY;else process.env.IMAGE_HOST_ONLY=old});
+  const station=await createStation(resolveConfig({host:"127.0.0.1",port,stationDir:"station",broadcastsDir,adapter:queue,broadcastAdapter:broadcastQueue,scheduleAdapter:schedules,auth:{username:"test",password:"test-native-primitives"},runner:{pollIntervalMs:15},broadcastRunner:{pollIntervalMs:15},network:{stationId:"native-worker",heartbeatIntervalMs:30},registry:{rootDir:registry.root,execution:{backend,allowedEnv:["IMAGE_TOKEN"]},activate:[signalImage.digest,beaconImage.digest]}}),root);
+  t.after(()=>station.stop());const key=await station.keyStore!.create("native acceptance",["admin","read","trigger","cancel"]);await station.start();
+  const base=`http://127.0.0.1:${port}/api/v1`,headers={authorization:`Bearer ${key.key}`,"content-type":"application/json"};
+  async function api(path:string,method="GET",body?:unknown,expected=200){const response=await fetch(base+path,{method,headers,...(body===undefined?{}:{body:JSON.stringify(body)})});const result=await response.json();assert.equal(response.status,expected,JSON.stringify(result));return result.data;}
+  await api("/env","POST",{key:"IMAGE_TOKEN",value:"approved-native",secret:true},201);
+  const observed=join(root,"beacon-observed.jsonl");
+  const events=async()=>{try{return (await readFile(observed,"utf8")).trim().split("\n").filter(Boolean).map(line=>JSON.parse(line));}catch{return[];}};
+  const beacon=await api("/registry/run","POST",{reference:beaconImage.digest,export:"watch",input:{observed,message:"hello native"}},201);
+  const instancePath=`/beacons/${beacon.registeredName}/instances/${beacon.id}`;
+  await waitFor(async()=>{const value=await api(instancePath);return value.readyAt?value:undefined},"native readiness");
+  await waitFor(async()=>{const rows=await events();return rows.filter(event=>event.event==="trigger-result").length>=2?true:undefined},"deduplicated native trigger responses");
+  const firstInit=(await events()).find(event=>event.event==="init");assert.equal(firstInit.instanceId,beacon.id);assert.equal(firstInit.token,"approved-native");assert.equal(firstInit.hostOnly,"");assert.equal(firstInit.config.message,"hello native");
+  assert.ok((await events()).some(event=>event.event==="poll"));
+  const triggered=await waitFor(async()=>{const rows=await queue.listRuns(name);return rows.find(run=>run.status==="completed"&&JSON.parse(run.input).via==="native-beacon")},"native beacon dependency execution");assert.equal(JSON.parse(triggered.output!).native,true);
+  await api(instancePath+"/restart","POST",{});
+  await waitFor(async()=>{const rows=await events();return rows.filter(event=>event.event==="init").length===2&&rows.filter(event=>event.event==="trigger-result").length>=4?true:undefined},"native restarted incarnation");
+  const inits=(await events()).filter(event=>event.event==="init");assert.equal(inits[1].instanceId,inits[0].instanceId);assert.notEqual(inits[1].incarnation,inits[0].incarnation);
+  await waitFor(async()=>{const rows=(await queue.listRuns(name)).filter(run=>run.status==="completed"&&JSON.parse(run.input).via==="native-beacon");return rows.length===2?rows:undefined},"one trigger per incarnation");
+  await api(instancePath+"/stop","POST",{});await waitFor(async()=>{const state=await api(instancePath);return state.status==="stopped"?state:undefined},"native graceful stop");
+  assert.equal((await events()).filter(event=>event.event==="stopped").length,2);assert.ok(!(await events()).some(event=>event.event==="trigger-error"));
+  const job=await api("/trigger-broadcast","POST",{broadcastName:"native_composition",input:{via:"native-broadcast"}},201);
+  const workflow=await waitFor(async()=>{const run=await broadcastQueue.getBroadcastRun(job.id??job.runId);return run&&["completed","failed"].includes(run.status)?run:undefined},"ordinary Station broadcast calling native image");assert.equal(workflow.status,"completed",workflow.error);
+  const broadcastRuns=(await queue.listRuns(name)).filter(run=>run.status==="completed"&&JSON.parse(run.input).via?.startsWith("native-broadcast"));assert.equal(broadcastRuns.length,2);assert.equal(JSON.parse(broadcastRuns.find(run=>JSON.parse(run.input).via==="native-broadcast-second")!.output!).input.first.native,true);
+  const scheduled=await api("/schedules","POST",{kind:"signal",target:name,interval:"1s",input:{via:"schedule"}},201);
+  const scheduledRun=await waitFor(async()=>{const rows=await queue.listRuns(name);return rows.find(run=>run.status==="completed"&&JSON.parse(run.input).via==="schedule")},"schedule calling native image");
+  await api(`/schedules/${scheduled.id}`,"PATCH",{enabled:false});assert.equal(scheduledRun.signalName,name);assert.deepEqual(JSON.parse(scheduledRun.output!),{native:true,input:{via:"schedule"},token:"approved-native"});
+});

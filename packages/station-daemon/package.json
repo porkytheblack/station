@@ -25,7 +25,8 @@
     "./cli": "./dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "REGISTRY-TENANCY.md"
   ],
   "scripts": {
     "build": "tsc",

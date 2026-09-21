@@ -120,4 +120,14 @@ test('Adapter-backed Headquarters publication becomes executable on both cold ne
   const secondRun = await waitFor(async () => { const value = await hqQueue.getRun(second.id); return value && ['completed', 'failed'].includes(value.status) ? value : undefined; }, 'remaining worker executing same Headquarters image');
   assert.equal(secondRun.status, 'completed', secondRun.error); assert.notEqual(secondRun.stationId, firstWorker); assert.notEqual(secondRun.stationId, 'hq');
   assert.deepEqual(JSON.parse(secondRun.output!), { request: { round: 2 }, runId: second.id });
+  // A worker joining after publication has no cache and needs no republish.
+  const late = await createStation(resolveConfig({ role: 'station', host: '127.0.0.1', port: 0, stationDir: 'worker-c', adapter: new SqliteAdapter({ dbPath: queuePath }), network: { id: 'image-network', stationId: 'worker-c', adapter: new StationNetworkSqliteAdapter({ dbPath: networkPath }), heartbeatIntervalMs: 40, leaseDurationMs: 3000 }, runner: { pollIntervalMs: 20, maxConcurrent: 1 }, registry: { execution: { backend }, upstream: { url: `http://127.0.0.1:${hqPort}`, token: key.key, syncIntervalMs: 1000, mode: 'on-demand' } } }), root);
+  active.set('worker-c', late); await late.start();
+  await waitFor(async () => (await hqNetwork.getStation('worker-c'))?.definitions.images?.installableSignals.includes(name) ? true : undefined, 'new worker catalog advertisement');
+  const cache = new FileImageRegistry(join(late.dataDir, 'registry'));
+  await assert.rejects(cache.getBlob(manifest.artifacts[0]!.digest), { code: 'not_found' });
+  const third = await api('/registry/run', { reference: image.digest, export: 'echo', input: { round: 3 }, stationId: 'worker-c' });
+  const thirdRun = await waitFor(async () => { const value = await hqQueue.getRun(third.id); return value && ['completed', 'failed'].includes(value.status) ? value : undefined; }, 'late cold worker execution');
+  assert.equal(thirdRun.status, 'completed', thirdRun.error); assert.equal(thirdRun.stationId, 'worker-c');
+  assert.deepEqual(JSON.parse(thirdRun.output!), { request: { round: 3 }, runId: third.id });
 });

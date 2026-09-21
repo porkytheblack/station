@@ -1,6 +1,9 @@
 import type { DaemonImageExecution } from "../images/controller.js";
+import type { ImageDeploymentStorage } from "../images/deployments.js";
+import type { RegistryTargets } from '../registry/proxy.js';
+import type { TenantImageRegistryConfig } from '../registry/tenants.js';
 import type { RegistryUpstream } from "../registry/source.js";
-import type { RegistryOptions, RegistryStorage } from "station-images";
+import type { RegistryOptions, RegistryStorage, ImageUploadStorage, ImageUploadOptions } from "station-images";
 import type { SignalQueueAdapter, SignalSubscriber } from "station-signal";
 import type { BroadcastQueueAdapter, BroadcastSubscriber } from "station-broadcast";
 import type { BeaconStateAdapter, BeaconSubscriber } from "station-beacon";
@@ -68,6 +71,8 @@ export interface StationNetworkConfig {
   endpoint?: string;
   heartbeatIntervalMs?: number;
   leaseDurationMs?: number;
+  /** Optional authenticated fleet admission. Shared queue adapters are configured separately. */
+  enrollment?: { authority: true } | { url: string; credential: string };
 }
 
 /**
@@ -152,7 +157,7 @@ export interface StationConfig {
   deploy?: DeployConfig;
   execution?: ExecutionConfig;
   /** Operator-owned image storage, served only to authenticated admin clients. */
-  registry?: RegistryOptions & { rootDir?: string; storage?: RegistryStorage; cacheDir?: string; upstream?: RegistryUpstream; execution?: DaemonImageExecution; activate?: string[] };
+  registry?: RegistryOptions & { rootDir?: string; storage?: RegistryStorage; cacheDir?: string; tenantId?: string; targets?: RegistryTargets; tenants?: TenantImageRegistryConfig; deploymentStorage?: ImageDeploymentStorage; uploads?: Omit<ImageUploadOptions, 'registry' | 'storage' | 'now'> & { storage?: ImageUploadStorage }; upstream?: RegistryUpstream; execution?: DaemonImageExecution; activate?: string[] };
 }
 
 export type StationUserConfig = Partial<Omit<StationConfig, "runner" | "broadcastRunner" | "network">> & {
@@ -221,6 +226,7 @@ export function resolveConfig(input: StationUserConfig): StationConfig {
       adapter: input.network?.adapter,
       labels: input.network?.labels ?? {},
       endpoint: input.network?.endpoint,
+      enrollment: input.network?.enrollment,
       heartbeatIntervalMs: input.network?.heartbeatIntervalMs ?? DEFAULTS.network.heartbeatIntervalMs,
       leaseDurationMs: Math.max(
         input.network?.leaseDurationMs ?? DEFAULTS.network.leaseDurationMs,

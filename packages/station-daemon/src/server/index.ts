@@ -1,8 +1,14 @@
 import { ImageController } from "../images/controller.js";
 import { registrySource } from "../registry/source.js";
-import { FileImageRegistry, ImageRegistry } from "station-images";
+import { FileImageRegistry, ImageRegistry, ImageUploadManager, FileImageUploadStorage } from "station-images";
 import { imageRegistryRoutes } from "./routes/v1/registry.js";
+import { imageUploadRoutes } from './routes/v1/registry-uploads.js';
+import { registryProxyRoutes } from '../registry/proxy.js';
+import { tenantImageRegistryRoutes } from './routes/v1/tenant-registry.js';
 import { bindStationTenant } from "./tenant-binding.js";
+import { EnrollmentAuthority } from '../enrollment/authority.js';
+import { createEnrollmentAdmission } from '../enrollment/client.js';
+import { v1EnrollmentAdminRoutes, v1EnrollmentWorkerRoutes } from './routes/v1/enrollment.js';
 import { Hono } from "hono";
 import { tenantExecutionRoutes, validateExecutionTenancy } from "./routes/tenant-execution.js";
 import { executionCatalogRoutes, internalExecutionRoutes, publicExecutionRoutes } from "./routes/execution.js";
@@ -11,7 +17,7 @@ import { bodyLimit } from "hono/body-limit";
 import { serve } from "@hono/node-server";
 import { resolve } from "node:path";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 import type { Server } from "node:http";
 import { SignalRunner, MemoryAdapter, parseInterval } from "station-signal";
 import { BroadcastRunner, BroadcastMemoryAdapter } from "station-broadcast";
@@ -102,8 +108,13 @@ export async function createStation(config: StationConfig, cwd: string): Promise
   let dataDir: string;
   try {
     validateExecutionTenancy(config);
+    if (config.registry?.tenantId !== undefined) {
+      const tenantId = config.registry.tenantId;
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(tenantId) || config.role !== 'station' || !config.auth || config.registry.execution?.backend.kind !== 'docker' || config.registry.tenants) throw new Error('Tenant image workers require a dedicated authenticated Station with Docker image execution');
+      if (config.execution && config.execution.tenantId !== tenantId) throw new Error('Registry and execution tenant ownership must agree');
+    }
     ({ dataDir } = ensureStationDir(cwd, config.stationDir));
-    bindStationTenant(dataDir, config.execution?.tenantId);
+    bindStationTenant(dataDir, config.execution?.tenantId ?? config.registry?.tenantId);
     await config.execution?.sandbox?.ready?.();
     await config.execution?.browser?.adapter.ready?.();
     await config.execution?.sandbox?.bindTenant?.(config.execution.tenantId);
@@ -115,6 +126,13 @@ export async function createStation(config: StationConfig, cwd: string): Promise
   }
   const signalAdapter: SignalQueueAdapter = config.adapter ?? new MemoryAdapter();
   const networkAdapter: StationNetworkAdapter = config.network.adapter ?? new StationNetworkMemoryAdapter();
+  const enrollment = config.network.enrollment;
+  if (enrollment && (!config.auth || ('authority' in enrollment ? config.role !== 'headquarters' : config.role !== 'station'))) throw new Error('Enrollment requires an authenticated Headquarters authority or an authenticated member Station');
+  const enrollmentAuthority = enrollment && 'authority' in enrollment
+    ? new EnrollmentAuthority({ path: resolve(dataDir, 'network-enrollment.json'), networkId: config.network.id }) : undefined;
+  const admission = enrollment && 'url' in enrollment
+    ? createEnrollmentAdmission({ ...enrollment, networkId: config.network.id, stationId: config.network.stationId }) : undefined;
+  const canClaim = async () => (!admission || await admission.canClaim()) && (await networkAdapter.getStation(config.network.stationId))?.status === 'online';
   const broadcastAdapter: BroadcastQueueAdapter | undefined =
     config.broadcastAdapter ?? ((config.broadcastsDir || config.registry?.execution) ? new BroadcastMemoryAdapter() : undefined);
   const beaconAdapter: BeaconStateAdapter | undefined =
@@ -214,7 +232,7 @@ export async function createStation(config: StationConfig, cwd: string): Promise
   let images: ImageController | undefined;
 
   const runsControlPlane = config.role === "headquarters" ||
-    (config.role === "standalone" && config.runRunners);
+    ((config.role === "standalone" || Boolean(config.registry?.tenantId)) && config.runRunners);
   const runsExecutionPlane = config.role !== "headquarters" && config.runRunners;
 
   if (runsControlPlane || runsExecutionPlane) {
@@ -250,7 +268,8 @@ export async function createStation(config: StationConfig, cwd: string): Promise
       networkCoordinator: networkAdapter,
       networkId: config.network.id,
       stationLabels: config.network.labels,
-      canClaim: async () => (await networkAdapter.getStation(config.network.stationId))?.status === "online",
+      canClaim,
+      canRenew: admission?.canClaim,
     });
 
     if (broadcastsDir || broadcastAdapter) {
@@ -267,6 +286,7 @@ export async function createStation(config: StationConfig, cwd: string): Promise
         : undefined;
 
       broadcastRunner = new BroadcastRunner({
+        canReconcile: admission ? canClaim : undefined,
         signalRunner,
         broadcastsDir,
         adapter: broadcastAdapter ?? new BroadcastMemoryAdapter(),
@@ -290,7 +310,8 @@ export async function createStation(config: StationConfig, cwd: string): Promise
         stationId: config.network.stationId,
         stationLabels: config.network.labels,
         leaseDurationMs: config.network.leaseDurationMs,
-        canClaim: async () => (await networkAdapter.getStation(config.network.stationId))?.status === "online",
+        canClaim,
+        canRenew: admission?.canClaim,
       });
     }
   }
@@ -306,13 +327,17 @@ export async function createStation(config: StationConfig, cwd: string): Promise
   const imageSource = config.registry?.upstream ? registrySource(config.registry.upstream) : undefined;
   if (imageRegistry && config.registry?.execution && signalRunner) {
     if (config.execution?.tenantId && config.registry.execution.backend.kind === "trusted-local") throw new Error("Tenant image execution requires isolation");
-    images = new ImageController({ registry: imageRegistry, cacheDir: config.registry.cacheDir ? resolve(dataDir, config.registry.cacheDir) : undefined, source: imageSource, signalRunner, broadcastRunner, beaconRunner, stateDir: resolve(dataDir, "images"), stationId: config.role === "headquarters" ? undefined : config.network.stationId,
-      canTarget: async (id, name) => { const node = await networkAdapter.getStation(id); return Boolean(node && node.networkId === config.network.id && node.role !== "headquarters" && node.status === "online" && node.leaseExpiresAt > new Date() && node.definitions.signals.includes(name)); },
+    images = new ImageController({ registry: imageRegistry, deploymentStorage: config.registry.deploymentStorage, cacheDir: config.registry.cacheDir ? resolve(dataDir, config.registry.cacheDir) : undefined, source: imageSource, signalRunner, broadcastRunner, beaconRunner, stateDir: resolve(dataDir, "images"), stationId: config.role === "headquarters" ? undefined : config.network.stationId,
+      beaconAdapter, maxBeaconInstances: config.beaconMaxInstances,
+      rolloutCoordinator: networkAdapter,
+      preparation: config.registry.upstream?.mode === 'on-demand' ? { adapter: networkAdapter, networkId: config.network.id, stationId: config.network.stationId } : undefined,
+      canTarget: async (id, name) => { const node = await networkAdapter.getStation(id); return Boolean(node && node.networkId === config.network.id && node.role !== "headquarters" && node.status === "online" && node.leaseExpiresAt > new Date() && (node.definitions.signals.includes(name) || node.definitions.beacons.includes(name) || node.definitions.images?.installableSignals.includes(name))); },
       ...config.registry.execution });
   }
 
   // Bound request bodies so oversized payloads can't be parsed/stored.
   app.use("/api/*", async (c, next) => {
+    if (config.registry?.targets && c.req.method === 'PUT' && /^\/api\/v1\/stations\/[^/]+\/registry\/blobs\/sha256(?::|%3A)[0-9a-f]{64}$/i.test(c.req.path)) return next();
     if (imageRegistry && c.req.method === "PUT" && /^\/api\/v1\/registry\/blobs\/sha256%3A[0-9a-f]{64}$/i.test(c.req.path)) return next();
     if (imageRegistry && c.req.method === "PUT" && /^\/api\/v1\/registry\/blobs\/sha256:[0-9a-f]{64}$/.test(c.req.path)) return next();
     return bodyLimit({
@@ -391,6 +416,10 @@ export async function createStation(config: StationConfig, cwd: string): Promise
 
   // Public v1 routes (no auth required)
   app.route("/api/v1", v1HealthRoutes({ signalAdapter, broadcastAdapter }));
+  if (enrollmentAuthority) {
+    for (const path of ['join', 'admission', 'leave']) app.use(`/api/v1/network/${path}`, rateLimiter({ windowMs: 60_000, max: path === 'admission' ? 6000 : 30 }));
+    app.route('/api/v1', v1EnrollmentWorkerRoutes(enrollmentAuthority));
+  }
 
   // Auth routes: public but rate-limited to prevent brute force. The limiter
   // is scoped to /auth/* — a "/*" limiter here would run for every /api/v1
@@ -406,6 +435,11 @@ export async function createStation(config: StationConfig, cwd: string): Promise
   // prominent warning during start-up below.
   const v1 = new Hono();
   v1.use("/*", authResolver({ keyStore, sessionConfig }));
+  v1.use('/*', async (c, next) => {
+    const tenant = c.req.header('X-Station-Image-Tenant'), worker = c.req.header('X-Station-Image-Worker'), namespace = c.req.header('X-Station-Image-Registry');
+    if (tenant !== undefined && tenant !== config.registry?.tenantId || worker !== undefined && worker !== config.network.stationId || namespace !== undefined && (!imageRegistry || namespace !== createHash('sha256').update(imageRegistry.identity).digest('hex'))) return c.json({ error: 'registry_target_mismatch' }, 409);
+    return next();
+  });
   const authEnabled = Boolean(keyStore || sessionConfig);
 
   // Hono runs a sub-app's `use("/*")` middleware for routes that sibling
@@ -425,10 +459,11 @@ export async function createStation(config: StationConfig, cwd: string): Promise
 
   // Read-scope routes
   const readRoutes = new Hono();
-  if (authEnabled) v1.use("/info", requireScope("read", "admin", "execution"));
+  if (authEnabled) v1.use("/info", requireScope("read", "admin", "execution", "registry"));
   v1.get("/info", (c) => c.json({ data: {
     protocol: "station.api/v1", version: "3.0.0", stationId: config.network.stationId,
     role: config.role, capabilities: ["signals", "broadcasts", "beacons", "schedules", "network", ...(config.execution ? ["execution"] : []), ...(imageRegistry ? ["registry"] : [])],
+    ...(config.registry?.tenantId ? { imageExecution: { tenantId: config.registry.tenantId, isolation: config.registry.execution?.backend.kind === 'docker' ? 'container' : 'trusted-host', registryIdentity: createHash('sha256').update(imageRegistry!.identity).digest('hex') } } : {}),
   } }));
   readRoutes.route("/", v1StationReadRoutes({ adapter: networkAdapter, networkId: config.network.id }));
   readRoutes.route("/", v1SignalRoutes({ signalRunner, signalSubscriber: stationSignalSub, networkAdapter, networkId: config.network.id }));
@@ -509,6 +544,7 @@ export async function createStation(config: StationConfig, cwd: string): Promise
 
   // Admin-scope routes — destructive / mutating endpoints
   const adminRoutes = new Hono();
+  if (enrollmentAuthority) adminRoutes.route('/', v1EnrollmentAdminRoutes(enrollmentAuthority));
   adminRoutes.route("/", v1StationAdminRoutes({ adapter: networkAdapter, networkId: config.network.id }));
   adminRoutes.route("/", v1KeyRoutes({ keyStore }));
   adminRoutes.route("/", v1DefinitionRoutes({
@@ -536,7 +572,19 @@ export async function createStation(config: StationConfig, cwd: string): Promise
     v1.route("/", tenantExecutionRoutes(executionDeps));
     app.route("/internal", internalExecutionRoutes(executionDeps));
   }
-  if (imageRegistry) v1.route("/", imageRegistryRoutes(imageRegistry, imageSource, images));
+  if (imageRegistry) {
+    const uploads = new ImageUploadManager({ ...config.registry?.uploads, registry: imageRegistry, storage: config.registry?.uploads?.storage ?? new FileImageUploadStorage(resolve(dataDir, 'image-uploads')) });
+    v1.route('/', imageUploadRoutes(uploads));
+    v1.route("/", imageRegistryRoutes(imageRegistry, imageSource, images));
+  }
+  if (config.registry?.targets) {
+    if (config.role !== 'headquarters') throw new Error('Registry targets require Headquarters');
+    v1.route('/', registryProxyRoutes(config.registry.targets));
+  }
+  if (config.registry?.tenants) {
+    if (!config.auth) throw new Error('Tenant registries require authenticated API keys');
+    v1.route('/', tenantImageRegistryRoutes(config.registry.tenants, imageRegistry ? [imageRegistry.identity] : []));
+  }
   app.route("/api/v1", v1);
 
   app.notFound((c) => c.json({ error: "not_found", message: "API route not found. Start station-dashboard separately for the web UI." }, 404));
@@ -546,7 +594,7 @@ export async function createStation(config: StationConfig, cwd: string): Promise
   let imageSync: Promise<void> | undefined;
   const syncImages = () => {
     if (!images || !imageSource || imageSync) return imageSync;
-    imageSync = imageSource.list().then(catalog => images!.sync(catalog)).catch(error => { console.error("[station] Image catalog sync failed:", error instanceof Error ? error.message : "unavailable"); }).finally(() => { imageSync = undefined; });
+    imageSync = (async () => { await images!.sync(await imageSource.list()); await images!.syncGenerations(await imageSource.generations()); })().catch(error => { console.error("[station] Image catalog sync failed:", error instanceof Error ? error.message : "unavailable"); }).finally(() => { imageSync = undefined; });
     return imageSync;
   };
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -569,6 +617,7 @@ export async function createStation(config: StationConfig, cwd: string): Promise
       },
       definitions: {
         signals: signalRunner?.listRegistered().map((item) => item.name).sort() ?? [],
+        ...(images ? { images: { installableSignals: images.installableNames() } } : {}),
         broadcasts: broadcastRunner?.listRegistered().map((item) => item.name).sort() ?? [],
         beacons: registeredBeacons.map((item) => item.name).sort(),
         beaconMetadata: registeredBeacons,
@@ -590,11 +639,17 @@ export async function createStation(config: StationConfig, cwd: string): Promise
     if (heartbeating) return;
     heartbeating = true;
     try {
+      if (admission && !await admission.canClaim()) {
+        await networkAdapter.heartbeat(config.network.stationId, stationSnapshot('offline'));
+        return;
+      }
       const existing = await networkAdapter.getStation(config.network.stationId);
       const snapshot = stationSnapshot(existing?.status === "draining" ? "draining" : "online");
       const updated = await networkAdapter.heartbeat(snapshot.id, snapshot);
       if (!updated) await networkAdapter.upsertStation(snapshot);
       await networkAdapter.markOfflineBefore(new Date(), config.network.id);
+      await images?.reconcileRollouts();
+      await images?.reapArtifacts();
     } catch (err) {
       console.error("[station] Network heartbeat failed:", err);
     } finally {
@@ -606,6 +661,7 @@ export async function createStation(config: StationConfig, cwd: string): Promise
     keyStore,
     dataDir,
     async start() {
+      if (admission && !await admission.canClaim()) throw new Error('Station enrollment admission denied or unavailable');
       if (!config.network.adapter && config.role !== "standalone") {
         console.warn(
           "[station] A non-standalone role is using the in-memory network adapter; " +
@@ -687,6 +743,7 @@ export async function createStation(config: StationConfig, cwd: string): Promise
     async stop() {
       if (imageSyncTimer) { clearInterval(imageSyncTimer); imageSyncTimer = undefined; }
       await imageSync;
+      await images?.stop();
       if (heartbeatTimer) {
         clearInterval(heartbeatTimer);
         heartbeatTimer = null;

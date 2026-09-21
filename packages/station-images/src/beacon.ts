@@ -37,6 +37,7 @@ export async function startImageBeacon(options: StartImageBeaconOptions): Promis
   const exp = image.manifest.exports.find(e => e.name === options.exportName && e.kind === "beacon");
   if (!exp) fail("unknown_export", "Beacon export not found");
   validateValue(exp.configSchema, options.config);
+  for (const permission of ["read", "write"] as const) if (options.artifacts?.permissions[permission] && !exp.artifacts?.[permission]) fail("artifact_denied", "Operator artifact grant exceeds export declaration");
   const artifact = selectArtifact(image.manifest, options.backend.target);
   const bytes = await options.registry.getBlob(artifact.digest);
   validateArtifactBytes(artifact, bytes);
@@ -44,7 +45,7 @@ export async function startImageBeacon(options: StartImageBeaconOptions): Promis
   const startupMs = options.startupTimeoutMs ?? 10000, heartbeatMs = options.heartbeatTimeoutMs ?? 30000, pollMs = options.pollTimeoutMs ?? exp.timeoutMs ?? 60000, stopMs = options.stopTimeoutMs ?? 3000;
   const maxFrame = options.maxFrameBytes ?? 1024 * 1024, maxOutput = options.maxOutputBytes ?? 4 * 1024 * 1024, maxStderr = options.maxStderrBytes ?? 64 * 1024;
   if ([startupMs, heartbeatMs, pollMs, stopMs].some(v => !Number.isSafeInteger(v) || v < 1 || v > 86400000) || [maxFrame, maxOutput, maxStderr].some(v => !Number.isSafeInteger(v) || v < 1 || v > 16 * 1024 * 1024)) fail("invalid_limits", "Invalid beacon limits");
-  const initFrame = { type: "beacon:init", export: exp.name, instanceId: options.instanceId, incarnation: options.incarnation, config: options.config, mode: exp.mode };
+  const initFrame = { type: "beacon:init", export: exp.name, instanceId: options.instanceId, incarnation: options.incarnation, config: options.config, mode: exp.mode, ...(options.artifacts ? { artifacts: { permissions: options.artifacts.permissions, references: options.artifacts.references, maxChunkBytes: options.artifacts.maxChunkBytes } } : {}) };
   if (Buffer.byteLength(JSON.stringify({ protocol: PROCESS_PROTOCOL, ...initFrame }) + "\n") > maxFrame) fail("input_too_large", "Beacon initialization exceeds frame limit");
   const directory = await mkdtemp(join(tmpdir(), "station-beacon-image-"));
   let boundary: ImageProcessBoundary;
@@ -73,7 +74,15 @@ export async function startImageBeacon(options: StartImageBeaconOptions): Promis
   const health = (): void => { if (healthTimer) clearTimeout(healthTimer); healthTimer = setTimeout(() => failSession("heartbeat_timeout", "Beacon heartbeat deadline exceeded"), heartbeatMs); };
   const requests = new Map<string, { serialized: string; promise: Promise<string> }>();
   let activeTriggers = 0;
+  let artifactWork = Promise.resolve(), queuedArtifacts = 0;
   const event = (frame: Record<string, unknown>): void => {
+    if (frame.type === "artifact:request") {
+      if (!options.artifacts || stopping || ++queuedArtifacts > 16) fail("artifact_denied", "Artifact broker unavailable or request concurrency exceeded");
+      artifactWork = artifactWork.then(async () => { if (!failure && !closed) send(await options.artifacts!.handle(frame)); })
+        .catch(error => failSession(error instanceof ImageError ? error.code : "artifact_io", "Artifact operation rejected"))
+        .finally(() => { queuedArtifacts--; });
+      return;
+    }
     state.accept(frame);
     if (frame.type === "beacon:ready") { clearTimeout(startupTimer); health(); readyResolve(); }
     if (frame.type === "beacon:heartbeat") health();
@@ -107,14 +116,14 @@ export async function startImageBeacon(options: StartImageBeaconOptions): Promis
   const budgetTimer = setInterval(() => { stdoutBytes = 0; stderrBytes = 0; }, 60000);
   boundary.stdout.on("data", (chunk: Buffer | string) => {
     if (failure || closed) return;
-    const data = Buffer.from(chunk); stdoutBytes += data.byteLength;
-    if (stdoutBytes > maxOutput) { failSession("output_limit", "Beacon output exceeds minute budget"); return; }
+    const data = Buffer.from(chunk);
+    if (!options.artifacts) { stdoutBytes += data.byteLength; if (stdoutBytes > maxOutput) { failSession("output_limit", "Beacon output exceeds minute budget"); return; } }
     buffer = Buffer.concat([buffer, data]);
     let newline;
     while ((newline = buffer.indexOf(10)) >= 0) {
       if (newline > maxFrame) { failSession("frame_limit", "Beacon frame exceeds limit"); return; }
       const line = buffer.subarray(0, newline); buffer = buffer.subarray(newline + 1);
-      try { event(JSON.parse(line.toString("utf8"))); } catch (error) { failSession(error instanceof ImageError ? error.code : "malformed_protocol", "Beacon emitted invalid protocol data"); return; }
+      try { const frame = JSON.parse(line.toString("utf8")); if (options.artifacts && frame.type !== "artifact:request") stdoutBytes += line.byteLength + 1; if (stdoutBytes > maxOutput) fail("output_limit", "Beacon output exceeds minute budget"); event(frame); } catch (error) { failSession(error instanceof ImageError ? error.code : "malformed_protocol", "Beacon emitted invalid protocol data"); return; }
     }
     if (buffer.byteLength > maxFrame) failSession("frame_limit", "Beacon frame exceeds limit");
   });
@@ -132,7 +141,7 @@ export async function startImageBeacon(options: StartImageBeaconOptions): Promis
       closed = true; clearTimeout(startupTimer); clearInterval(budgetTimer);
       if (killTimer) clearTimeout(killTimer); if (healthTimer) clearTimeout(healthTimer); if (stopTimer) clearTimeout(stopTimer); if (pendingPoll) clearTimeout(pendingPoll.timer);
       options.signal?.removeEventListener("abort", abort);
-      try { await boundary.dispose(); } finally { await rm(directory, { recursive: true, force: true }); }
+      try { await boundary.dispose(); } finally { await artifactWork; await options.artifacts?.close(); await rm(directory, { recursive: true, force: true }); }
     }
   })();
   void done.catch(() => {});

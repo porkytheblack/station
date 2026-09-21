@@ -52,3 +52,27 @@ test("registry lifecycle commands keep reference and export separate and surface
     { path: "/api/v1/registry/pull", method: "POST", body: { reference: "acme/tools@1.0.0" } },
   ]);
 });
+
+test("private registry target routing stays separate from image execution pinning", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "station-cli-target-")); t.after(() => rm(dir, { recursive: true, force: true }));
+  const store = new ContextStore(dir); await store.add("hq", { url: "https://hq.example" });
+  const original = globalThis.fetch; t.after(() => { globalThis.fetch = original; });
+  const calls: { path: string; body: unknown }[] = [];
+  globalThis.fetch = async (url, init) => {
+    const path = new URL(String(url)).pathname;
+    if (path.endsWith("/info")) return new Response(JSON.stringify({ data: { protocol: "station.api/v1", version: "3.0.0", stationId: "hq" } }));
+    calls.push({ path, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+    return new Response(JSON.stringify({ data: [] }));
+  };
+  const { run } = await import("../src/commands.js");
+  await run(parseArgs(["images", "list", "--station", "worker-a"]), store);
+  await run(parseArgs(["images", "install", "acme/echo@1.0.0", "--station", "worker-a"]), store);
+  await run(parseArgs(["deployments", "list", "--station", "worker-a"]), store);
+  await run(parseArgs(["images", "run", "acme/echo@1.0.0", "echo", "--station", "worker-a"]), store);
+  assert.deepEqual(calls, [
+    { path: "/api/v1/stations/worker-a/registry/images", body: undefined },
+    { path: "/api/v1/stations/worker-a/registry/install", body: { reference: "acme/echo@1.0.0" } },
+    { path: "/api/v1/stations/worker-a/registry/deployments", body: undefined },
+    { path: "/api/v1/registry/run", body: { reference: "acme/echo@1.0.0", export: "echo", input: {}, stationId: "worker-a" } },
+  ]);
+});

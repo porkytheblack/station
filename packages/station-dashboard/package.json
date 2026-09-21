@@ -21,7 +21,8 @@
     "build": "next build && node scripts/package-dashboard.mjs && node scripts/prune-standalone.mjs",
     "dev": "next dev",
     "typecheck": "tsc -p tsconfig.next.json --noEmit",
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "test:registry:browser": "STATION_DASHBOARD_BROWSER_TEST=1 node --test test/registry.integration.mjs"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",

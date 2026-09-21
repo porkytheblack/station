@@ -28,7 +28,7 @@ function envKey(key: unknown): void {
 export function validateManifest(value: unknown): asserts value is ImageManifest {
   assertJson(value);
   if (Buffer.byteLength(JSON.stringify(value)) > MAX_MANIFEST_BYTES || !isRecord(value)) fail("invalid_manifest", "Manifest must be an object within 256 KiB");
-  keys(value, ["format", "protocol", "name", "version", "artifacts", "exports", "dependencies", "env"], "manifest");
+  keys(value, ["format", "protocol", "name", "version", "artifacts", "exports", "dependencies", "nativeSignals", "env"], "manifest");
   if (value.format !== IMAGE_FORMAT || value.protocol !== PROCESS_PROTOCOL) fail("incompatible_protocol", "Unsupported image format or process protocol");
   if (typeof value.name !== "string" || value.name.length > 200 || !NAME_PATTERN.test(value.name) || value.name.split("/").some(s => s === "." || s === "..")) fail("invalid_manifest", "Invalid image name");
   if (typeof value.version !== "string" || value.version.length > 100 || !VERSION_PATTERN.test(value.version)) fail("invalid_manifest", "Image version must be semantic version");
@@ -54,7 +54,7 @@ export function validateManifest(value: unknown): asserts value is ImageManifest
   const names = new Set<string>();
   for (const exp of value.exports) {
     if (!isRecord(exp)) fail("invalid_manifest", "Invalid export");
-    keys(exp, ["name", "kind", "inputSchema", "outputSchema", "configSchema", "timeoutMs", "requiredEnv", "planner", "mode", "pollIntervalMs", "startMode"], "export");
+    keys(exp, ["name", "kind", "inputSchema", "outputSchema", "configSchema", "timeoutMs", "requiredEnv", "artifacts", "planner", "mode", "pollIntervalMs", "startMode"], "export");
     if (typeof exp.name !== "string" || !EXPORT_PATTERN.test(exp.name) || names.has(exp.name)) fail("invalid_manifest", "Invalid or duplicate export name");
     names.add(exp.name);
     if (!["signal", "broadcast", "beacon"].includes(String(exp.kind))) fail("invalid_manifest", "Unsupported export kind");
@@ -63,6 +63,11 @@ export function validateManifest(value: unknown): asserts value is ImageManifest
     if (exp.requiredEnv !== undefined) {
       if (!Array.isArray(exp.requiredEnv) || exp.requiredEnv.length > 128 || new Set(exp.requiredEnv).size !== exp.requiredEnv.length) fail("invalid_environment", "Invalid requiredEnv");
       exp.requiredEnv.forEach(envKey);
+    }
+    if (exp.artifacts !== undefined) {
+      if (!isRecord(exp.artifacts)) fail("invalid_manifest", "Invalid artifact capability declaration");
+      keys(exp.artifacts, ["read", "write"], "artifact capability");
+      if (Object.values(exp.artifacts).some(v => typeof v !== "boolean")) fail("invalid_manifest", "Artifact permissions must be booleans");
     }
     if (exp.kind === "broadcast" && exp.planner !== "binary" || exp.kind !== "broadcast" && exp.planner !== undefined) fail("invalid_manifest", "Broadcast exports require binary planner");
     if (exp.kind === "beacon") {
@@ -76,6 +81,15 @@ export function validateManifest(value: unknown): asserts value is ImageManifest
       if (!EXPORT_PATTERN.test(alias) || names.has(alias) || !isRecord(dependency)) fail("invalid_manifest", "Invalid dependency");
       keys(dependency, ["image", "export", "kind"], "dependency");
       if (typeof dependency.image !== "string" || !/^([a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)*)@sha256:[0-9a-f]{64}$/.test(dependency.image) || typeof dependency.export !== "string" || !EXPORT_PATTERN.test(dependency.export) || !["signal", "broadcast"].includes(String(dependency.kind))) fail("invalid_manifest", "Dependencies must pin image digest and signal/broadcast export");
+    }
+  }
+  if (value.nativeSignals !== undefined) {
+    if (!isRecord(value.nativeSignals) || Object.keys(value.nativeSignals).length > 128) fail("invalid_manifest", "Invalid native signal dependencies");
+    for (const [alias, dependency] of Object.entries(value.nativeSignals)) {
+      if (!EXPORT_PATTERN.test(alias) || names.has(alias) || isRecord(value.dependencies) && Object.hasOwn(value.dependencies, alias) || !isRecord(dependency)) fail("invalid_manifest", "Invalid or conflicting native signal alias");
+      keys(dependency, ["name", "revision"], "native signal dependency");
+      if (typeof dependency.name !== "string" || !/^[a-zA-Z][a-zA-Z0-9_-]{0,127}$/.test(dependency.name)) fail("invalid_manifest", "Invalid native Station signal name");
+      assertDigest(dependency.revision);
     }
   }
   if (value.env !== undefined) {

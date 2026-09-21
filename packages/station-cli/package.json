@@ -21,7 +21,8 @@
     "test:packed": "node scripts/packed-smoke.mjs"
   },
   "dependencies": {
-    "station-client": "workspace:*"
+    "station-client": "workspace:*",
+    "station-images": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^25.3.0",

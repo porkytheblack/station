@@ -1,8 +1,9 @@
 import { ImageError, type ImageRecord, type ImageSource, validateManifest, assertDigest, manifestDigest } from 'station-images';
+import type { ImageExecutionGeneration } from '../images/runtime.js';
 
-export interface RegistryUpstream { url: string; token: string; maxBlobBytes?: number; syncIntervalMs?: number }
+export interface RegistryUpstream { url: string; token: string; maxBlobBytes?: number; syncIntervalMs?: number; mode?: 'eager' | 'on-demand' }
 /** Fixed operator-supplied upstream. Request callers cannot choose URLs or credentials. */
-export function registrySource(config: RegistryUpstream): ImageSource & { list(): Promise<ImageRecord[]> } {
+export function registrySource(config: RegistryUpstream): ImageSource & { list(): Promise<ImageRecord[]>; generations(): Promise<{ digest: string; generation: ImageExecutionGeneration; stationId?: string }[]> } {
   const origin = new URL(config.url);
   if (!['https:', 'http:'].includes(origin.protocol) || origin.username || origin.password || origin.pathname !== '/' || origin.search || origin.hash) throw new Error('Registry upstream must be an HTTP(S) origin');
   if (origin.protocol === 'http:' && !['localhost', '127.0.0.1', '[::1]'].includes(origin.hostname)) throw new Error('Remote registry credentials require HTTPS');
@@ -36,6 +37,16 @@ export function registrySource(config: RegistryUpstream): ImageSource & { list()
     return Buffer.concat(chunks);
   };
   return {
+    async generations() {
+      const bytes = await read('/api/v1/registry/generations', 8 * 1024 * 1024);
+      const result = JSON.parse(bytes.toString('utf8'));
+      if (!Array.isArray(result?.data) || result.data.length > 1024) throw new ImageError('upstream_invalid', 'Invalid generation catalog');
+      for (const entry of result.data) {
+        assertDigest(entry?.digest);
+        if (!entry?.generation || typeof entry.generation.id !== 'string' || !/^[a-f0-9-]{36}$/.test(entry.generation.id) || entry.stationId !== undefined && (typeof entry.stationId !== 'string' || entry.stationId.length < 1 || entry.stationId.length > 255)) throw new ImageError('upstream_invalid', 'Invalid generation catalog');
+      }
+      return result.data;
+    },
     async list() {
       const bytes = await read('/api/v1/registry/images', 8 * 1024 * 1024);
       let result: { data?: unknown };

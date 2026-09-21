@@ -8,6 +8,7 @@ import { validateValue } from "./schema.js";
 import { validateBroadcastPlan, validateTerminalFrame, type TerminalFrame } from "./protocol.js";
 import type { ImageRegistry } from "./registry.js";
 import { fail, ImageError, PROCESS_PROTOCOL, type HostTarget, type ImageArtifact, type ImageRecord } from "./types.js";
+import type { InvocationArtifactScope } from "./artifacts.js";
 export type ImageIsolation = "trusted-host" | "container" | "vm";
 export interface ImageProcessSpec {
   /** Host path to a private directory containing ONLY the verified artifact. Mount readonly in isolation. */
@@ -39,6 +40,7 @@ export interface ExecuteImageOptions {
   reference: string;
   exportName: string;
   input: unknown;
+  artifacts?: InvocationArtifactScope;
   runId: string;
   attempt?: number;
   backend: ImageProcessBackend;
@@ -64,6 +66,7 @@ export async function executeImage(options: ExecuteImageOptions): Promise<ImageE
   if (!exp) fail("unknown_export", "Image export not found");
   if (exp.kind === "beacon") fail("beacon_requires_supervisor", "Beacons require a long-lived incarnation supervisor");
   validateValue(exp.inputSchema, options.input);
+  for (const permission of ["read", "write"] as const) if (options.artifacts?.permissions[permission] && !exp.artifacts?.[permission]) fail("artifact_denied", "Operator artifact grant exceeds export declaration");
   const artifact = selectArtifact(image.manifest, backend.target);
   const bytes = await options.registry.getBlob(artifact.digest);
   validateArtifactBytes(artifact, bytes);
@@ -71,7 +74,7 @@ export async function executeImage(options: ExecuteImageOptions): Promise<ImageE
   const timeoutMs = Math.min(exp.timeoutMs ?? 60000, options.timeoutMs ?? 60000);
   const maxFrame = options.maxFrameBytes ?? 1024 * 1024, maxOutput = options.maxOutputBytes ?? 4 * 1024 * 1024, maxStderr = options.maxStderrBytes ?? 64 * 1024;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 86400000 || [maxFrame, maxOutput, maxStderr].some(v => !Number.isSafeInteger(v) || v < 1 || v > 16 * 1024 * 1024)) fail("invalid_limits", "Invalid invocation limits");
-  const requestObject = { protocol: PROCESS_PROTOCOL, type: "invoke", export: exp.name, runId: options.runId, attempt: options.attempt ?? 1, input: options.input, deadline: new Date(Date.now() + timeoutMs).toISOString() };
+  const requestObject = { protocol: PROCESS_PROTOCOL, type: "invoke", export: exp.name, runId: options.runId, attempt: options.attempt ?? 1, input: options.input, ...(options.artifacts ? { artifacts: { permissions: options.artifacts.permissions, references: options.artifacts.references, maxChunkBytes: options.artifacts.maxChunkBytes } } : {}), deadline: new Date(Date.now() + timeoutMs).toISOString() };
   const request = Buffer.from(JSON.stringify(requestObject) + "\n");
   if (request.byteLength > maxFrame) fail("input_too_large", "Invocation request exceeds frame limit");
   const directory = await mkdtemp(join(tmpdir(), "station-image-"));
@@ -93,10 +96,11 @@ export async function executeImage(options: ExecuteImageOptions): Promise<ImageE
       void child.terminate(false).catch(() => {});
       killTimer = setTimeout(() => { void child.terminate(true).catch(() => {}); }, 200);
     };
+    let artifactWork = Promise.resolve(); let queuedArtifacts = 0;
     const onData = (chunk: Buffer | string): void => {
       if (failure) return;
-      const data = Buffer.from(chunk); total += data.byteLength;
-      if (total > maxOutput) { reject("output_limit", "Process output exceeds limit"); return; }
+      const data = Buffer.from(chunk);
+      if (!options.artifacts) { total += data.byteLength; if (total > maxOutput) { reject("output_limit", "Process output exceeds limit"); return; } }
       buffer = Buffer.concat([buffer, data]);
       let newline;
       while ((newline = buffer.indexOf(10)) >= 0) {
@@ -105,7 +109,21 @@ export async function executeImage(options: ExecuteImageOptions): Promise<ImageE
         if (terminal) { reject("duplicate_terminal", "Process emitted more than one terminal frame"); return; }
         try {
           const value: unknown = JSON.parse(line.toString("utf8"));
+          if (value && typeof value === "object" && (value as { type?: string }).type === "artifact:request") {
+            if (!options.artifacts || ++queuedArtifacts > 16) { reject("artifact_denied", "Artifact broker unavailable or request concurrency exceeded"); return; }
+            artifactWork = artifactWork.then(async () => {
+              if (failure) return;
+              const response = await options.artifacts!.handle(value);
+              const encoded = JSON.stringify(response) + "\n";
+              if (Buffer.byteLength(encoded) > maxFrame) throw new ImageError("frame_limit", "Artifact response exceeds frame limit");
+              if (!failure && !child.stdin.destroyed) await new Promise<void>((resolve, rejectWrite) => child.stdin.write(encoded, error => error ? rejectWrite(error) : resolve()));
+            }).catch(error => reject(error instanceof ImageError ? error.code : "artifact_io", "Artifact operation rejected")).finally(() => { queuedArtifacts--; });
+            continue;
+          }
+          if (options.artifacts) total += line.byteLength + 1;
+          if (total > maxOutput) { reject("output_limit", "Process output exceeds limit"); return; }
           validateTerminalFrame(value); terminal = value;
+          if (options.artifacts) void artifactWork.then(() => child.stdin.end());
         } catch (error) { reject(error instanceof ImageError ? error.code : "malformed_protocol", "Process emitted invalid protocol data"); return; }
       }
       if (buffer.byteLength > maxFrame) reject("frame_limit", "Protocol frame exceeds limit");
@@ -124,8 +142,10 @@ export async function executeImage(options: ExecuteImageOptions): Promise<ImageE
     options.signal?.addEventListener("abort", abort, { once: true });
     if (options.signal?.aborted) abort();
     requestObject.deadline = new Date(Date.now() + timeoutMs).toISOString();
-    child.stdin.end(JSON.stringify(requestObject) + "\n");
+    if (options.artifacts) child.stdin.write(JSON.stringify(requestObject) + "\n");
+    else child.stdin.end(JSON.stringify(requestObject) + "\n");
     const exit = await child.exited;
+    await artifactWork;
     if (failure) throw failure;
     if (buffer.byteLength) fail("malformed_protocol", "Process left an unterminated protocol frame");
     if (exit.code !== 0 || exit.signal !== null) fail("process_exit", "Image process did not exit successfully");
@@ -138,7 +158,7 @@ export async function executeImage(options: ExecuteImageOptions): Promise<ImageE
     if (timer) clearTimeout(timer);
     if (killTimer) clearTimeout(killTimer);
     if (abort) options.signal?.removeEventListener("abort", abort);
-    try { await boundary?.dispose(); } finally { await rm(directory, { recursive: true, force: true }); }
+    try { await boundary?.dispose(); } finally { await options.artifacts?.close(); await rm(directory, { recursive: true, force: true }); }
   }
 }
 /** Development-only, Unix host-process backend. NOT an untrusted-code isolation boundary. */

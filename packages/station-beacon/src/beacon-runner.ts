@@ -166,6 +166,8 @@ export interface BeaconRunnerOptions {
   stationLabels?: Record<string,string>;
   leaseDurationMs?: number;
   canClaim?: () => Promise<boolean>;
+  /** Admission-only gate: denial or failure fences active children before renewal. Do not use draining state. */
+  canRenew?: () => Promise<boolean>;
 }
 
 /**
@@ -212,6 +214,7 @@ export class BeaconRunner {
   private stationLabels: Record<string,string>;
   private leaseDurationMs: number;
   private canClaim?: () => Promise<boolean>;
+  private canRenew?: () => Promise<boolean>;
   private networkLeaseByInstance = new Map<string,{name:string;token:string}>();
 
   private running = false;
@@ -246,6 +249,7 @@ export class BeaconRunner {
     this.stationLabels = { ...(options.stationLabels ?? {}) };
     this.leaseDurationMs = Math.max(options.leaseDurationMs ?? 30_000, this.pollIntervalMs * 3);
     this.canClaim = options.canClaim;
+    this.canRenew = options.canRenew;
     this.readyPromise = this.armReady();
   }
 
@@ -904,7 +908,7 @@ export class BeaconRunner {
     this.ticking = true;
     try {
       const now = Date.now();
-      await this.renewNetworkLeases(new Date(now));
+      if (!await this.renewNetworkLeases(new Date(now))) return;
       if (this.networkCoordinator) await this.syncNetworkInstances();
       // Snapshot: reconcile awaits, and an API call can add or delete an
       // instance in the meantime.
@@ -1413,8 +1417,38 @@ export class BeaconRunner {
     return lease;
   }
 
-  private async renewNetworkLeases(now: Date): Promise<void> {
-    if (!this.networkCoordinator) return;
+  private async admissionAllowsRenewal(): Promise<boolean> {
+    if (!this.canRenew) return true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        Promise.resolve().then(() => this.canRenew!()),
+        new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), 5000); }),
+      ]);
+    } catch { return false; }
+    finally { if (timer) clearTimeout(timer); }
+  }
+
+  private fenceChild(instanceId: string): void {
+    const sup = this.supervised.get(instanceId);
+    if (!sup) return;
+    sup.leaseLost = true;
+    sup.child?.kill("SIGTERM");
+    // A hostile/blocked child may ignore SIGTERM. Preserve ownership-loss
+    // semantics while bounding cleanup, without writing a stale instance state.
+    if (sup.child && !sup.killTimer) {
+      const child = sup.child;
+      sup.killTimer = setTimeout(() => child.kill("SIGKILL"), 1000);
+      sup.killTimer.unref?.();
+    }
+  }
+
+  private async renewNetworkLeases(now: Date): Promise<boolean> {
+    if (!await this.admissionAllowsRenewal()) {
+      for (const instanceId of this.supervised.keys()) this.fenceChild(instanceId);
+      return false;
+    }
+    if (!this.networkCoordinator) return true;
     for (const [instanceId, lease] of this.networkLeaseByInstance) {
       const renewed = await this.networkCoordinator.renewControllerLease(
         lease.name,
@@ -1424,11 +1458,10 @@ export class BeaconRunner {
         now,
       );
       if (!renewed) {
-        const supervised = this.supervised.get(instanceId);
-        if (supervised) supervised.leaseLost = true;
-        supervised?.child?.kill("SIGTERM");
+        this.fenceChild(instanceId);
       }
     }
+    return true;
   }
 
   private async releaseNetworkLease(instanceId: string): Promise<void> {

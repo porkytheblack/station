@@ -25,8 +25,8 @@ Foundry bridge. The dashboard is the operator observation/control surface.
 
 For independently compiled native or bundled JavaScript signals, broadcast planners
 and beacons, read [images.md](images.md). Images implement `station.process/v1`;
-they are not OCI images or an isolation boundary. Registry APIs currently require
-operator admin access. Do not infer a complete public hosting platform from Docker support.
+they are not OCI images or an isolation boundary. Operator registry APIs require admin access; tenant registry keys use a separate
+namespace and grant boundary. The images reference also covers immutable deployment bindings, explicit beacon rollout, worker enrollment/revocation, revision-pinned native planner dependencies and invocation artifact scopes. Do not infer a complete public hosting platform or automatic cross-worker media transfer from Docker support.
 
 For Node applications, use `station-daemon` as the application entry point. Create a `station.config.ts`
 with `defineConfig`, export definitions from the configured directories, and run

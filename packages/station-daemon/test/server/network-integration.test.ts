@@ -191,6 +191,7 @@ test("Headquarters and two stations route, bound, and place real signal processe
     const gpuId = scheduled.lastRunId!;
     const gpuRun = await waitFor(async () => {
       const run = await hqQueue.getRun(gpuId);
+      if (run?.status === 'failed' || run?.status === 'cancelled') assert.fail(`GPU run ${run.status}: ${run.error ?? 'no error'} (owner ${run.stationId ?? 'unclaimed'})`);
       return run?.status === "completed" ? run : undefined;
     }, "placed GPU run");
     assert.equal(gpuRun.stationId, "station-a");

@@ -27,6 +27,12 @@ export function dashboardProxy(daemon, frontend) {
     return copy;
   };
   const server = http.createServer((req, res) => {
+    // Read-only identity for the dashboard's selected, fixed daemon context.
+    // Never accept a request-supplied destination or expose credentials here.
+    if (req.url === '/api/dashboard/context' && req.method === 'GET') {
+      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+      res.end(JSON.stringify({ data: { daemonURL: daemon.origin } })); return;
+    }
     const api = req.url?.startsWith('/api/');
     if (api && !['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !sameOrigin(req)) {
       res.writeHead(403); res.end('Cross-origin request rejected'); return;
