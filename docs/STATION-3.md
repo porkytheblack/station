@@ -53,7 +53,7 @@ pnpm exec stationd --config ./station.config.ts
 Start the dashboard separately in another terminal:
 
 ```sh
-STATION_DAEMON_URL=http://127.0.0.1:4400 PORT=4401 HOSTNAME=127.0.0.1 pnpm exec station-dashboard
+STATION_DAEMON_URL=http://127.0.0.1:4400 PORT=4401 STATION_DASHBOARD_HOST=127.0.0.1 pnpm exec station-dashboard
 ```
 
 Open `http://127.0.0.1:4401` and log in with the daemon credentials. Port 4400 is the API; it no longer serves the dashboard. The API returns an explanatory 404 for web-page requests.
@@ -176,3 +176,5 @@ pnpm --filter station-runtime-cli test:packed
 The image backend’s five real Docker tests passed, including compiled native and bundled JavaScript invocations and independent expiry cleanup. See the [image validation instructions](STATION-IMAGES.md#recovery-validation-and-remaining-work) for the exact scope and reproduction steps. Dashboard end-to-end checks also exercised real Bun/Playwright sessions and sandbox installs, restart, terminals and files.
 
 The complete release must still pass the coordinated repository preflight. The user explicitly deferred intended-Linux-host checks because that target is unavailable; deployment isolation/adapter/network and failover guarantees remain unverified for that host. Do not infer public multi-tenant readiness from unit tests or from the major version number. Publishing to npm and deprecating old StationKit releases are explicit release operations; creating this code and documentation does neither.
+
+Managed launcher locks now recover after a killed owner or reboot only after process identity and ownership-marker checks establish that no controller/service remains. Live, ambiguous and legacy locks fail closed with their exact inspection path; no stored PID is signalled. Concurrent recovery retains a nonce-specific retired lock record so it cannot replace a new owner. Dashboard binding uses `STATION_DASHBOARD_HOST` and defaults to loopback even when the host supplies an ambient `HOSTNAME`.

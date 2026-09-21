@@ -1,3 +1,4 @@
+import { navigationUrl } from "./navigation.js";
 import { BrowserUseError, type BrowserSession } from "./browser.js";
 
 export function validateTimeout(timeout: number): number {
@@ -53,7 +54,7 @@ export function managedSession(browser: BrowserSession, timeoutMs: number): Brow
   return {
     ...(browser.setHumanControl ? { setHumanControl: (active: boolean) => browser.setHumanControl!(active) } : {}),
     ...(browser.execute ? { execute: (command: import("./commands.js").BrowserCommand) => run(() => browser.execute!(command)) } : {}),
-    navigate: (value) => text(value, () => browser.navigate(value)),
+    navigate: (value) => text(value, () => browser.navigate(navigationUrl(value))),
     click: (value) => text(value, () => browser.click(value)),
     type: (value) => text(value, () => browser.type(value)),
     press: (value) => text(value, () => browser.press(value)),

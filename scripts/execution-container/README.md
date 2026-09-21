@@ -10,7 +10,11 @@ Headquarters configuration:
 
 ```ts
 execution: {
-  token: process.env.STATION_EXECUTION_TOKEN!,
+  token: process.env.HQ_EXECUTION_TOKEN!,
+  targets: {
+    'worker-a': { endpoint: 'https://worker-a.internal', token: process.env.WORKER_A_EXECUTION_TOKEN!, tenantId: 'customer-a' },
+    'worker-b': { endpoint: 'https://worker-b.internal', token: process.env.WORKER_B_EXECUTION_TOKEN!, tenantId: 'customer-b' },
+  },
   tenants: {
     apiKeyTenants: {
       "KEY_RECORD_ID_FOR_CUSTOMER_A": "customer-a",
@@ -22,9 +26,11 @@ execution: {
 
 Use authenticated `StationInstance.keyStore.create(name, ['execution'])` or the operator key API to create customer keys. Map the returned **key record ID**, not the secret bearer value, to the tenant. Give that customer only the bearer key. Keys with admin/read/trigger/cancel scopes, mixed scopes or login cookies cannot become customer identities. Revocation and expiry apply normally. Keep mapping configuration operator-owned and redeploy Headquarters after changing it; do not accept arbitrary tenant IDs from requests.
 
-Customer discovery: `GET /api/v1/tenant/execution`. Customer RPC: `POST /api/v1/tenant/stations/:stationId/execution/sandbox` or `/browser`, with `Authorization: Bearer sk_...`. RPC payloads match the operator API. Customers receive only their dedicated workers; cross-tenant owners return404. Headquarters verifies membership and forwards its authenticated tenant assertion with the private service secret. The private worker independently rejects the wrong tenant assertion. A caller-provided header cannot replace this identity.
+Customer discovery: `GET /api/v1/tenant/execution`. Customer RPC: `POST /api/v1/tenant/stations/:stationId/execution/sandbox` or `/browser`, with `Authorization: Bearer sk_...`. RPC payloads match the operator API. Customers receive only their dedicated workers; cross-tenant owners return404. Headquarters takes destinations, tenant ownership and unique credentials from `execution.targets`, never from a heartbeat. Worker advertisements are discovery data only. Each worker gets its own inbound token; it must not receive other workers’ tokens or the Headquarters token. Tenant workers require independently configured `auth` credentials on their operator API. Headquarters supplies tenant, worker and network assertions; tenant workers reject missing or mismatched assertions. Configure a target for each private worker ID, with HTTPS except for loopback tests. A caller-provided header cannot replace this identity.
 
 The admin dashboard remains a fleet-wide operator tool. Do not give customers its administrator login. Build a customer-facing UI over tenant routes if required.
+
+Use explicit ingress IPs in `trustedProxies` when a reverse proxy appends `X-Forwarded-For`; no forwarding header is trusted by default. The limiter walks right to left to the first untrusted hop. Session cookies default to `Secure`, including behind TLS termination; `auth.secureCookies: false` is a local HTTP development escape hatch. Keep TLS and dashboard authentication configured at the ingress. Dashboard binding uses `STATION_DASHBOARD_HOST` and defaults to loopback; ambient container `HOSTNAME` is ignored.
 
 ## Dedicated sandbox worker
 
@@ -32,7 +38,7 @@ The admin dashboard remains a fleet-wide operator tool. Do not give customers it
 import { ContainerSandboxAdapter } from 'station-sandbox/container';
 
 execution: {
-  token: process.env.STATION_EXECUTION_TOKEN!,
+  token: process.env.WORKER_A_EXECUTION_TOKEN!,
   tenantId: 'customer-a',
   sandbox: new ContainerSandboxAdapter({
     rootDir: '/data/customer-a/sandbox-controller', tenantId: 'customer-a',
@@ -67,7 +73,7 @@ import { BrowserSessionManager } from 'station-browser-use';
 import { ContainerBrowserAdapter } from 'station-browser-use/container';
 
 execution: {
-  token: process.env.STATION_EXECUTION_TOKEN!,
+  token: process.env.WORKER_A_EXECUTION_TOKEN!,
   tenantId: 'customer-a',
   browser: new BrowserSessionManager(new ContainerBrowserAdapter({
     rootDir: '/data/customer-a/browser-controller', tenantId: 'customer-a',

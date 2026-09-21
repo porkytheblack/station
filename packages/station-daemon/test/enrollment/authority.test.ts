@@ -1,6 +1,8 @@
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { serve } from '@hono/node-server';
@@ -90,4 +92,42 @@ test('frequent concurrent admission reads do not block durable revocation', asyn
   await authority.revoke('worker');
   await Promise.all(reads);
   await assert.rejects(authority.admit('worker', 'fleet', member.credential), /admission_denied/);
+});
+
+test('authority outages deny new claims but preserve existing work only inside bounded renewal grace; revocation clears grace',async t=>{
+ let mode='ok',now=1000;
+ const app=new Hono();app.post('/api/v1/network/admission',c=>mode==='ok'?c.json({data:{stationId:'worker',networkId:'fleet',generation:'generation',joinedAt:new Date(0).toISOString()}}):c.json({error:mode},mode==='denied'?401:503));
+ const server=serve({fetch:app.fetch,hostname:'127.0.0.1',port:0});await new Promise<void>(resolve=>server.listening?resolve():server.once('listening',resolve));t.after(()=>new Promise<void>(resolve=>server.close(()=>resolve())));
+ const options={url:`http://127.0.0.1:${(server.address() as {port:number}).port}`,networkId:'fleet',stationId:'worker',credential:`stw_${'a'.repeat(43)}`,renewalGraceMs:1000,now:()=>now};
+ const admission=createEnrollmentAdmission(options);assert.equal(await admission.canClaim(),true);mode='unavailable';assert.equal((await admission.probe()).state,'unavailable');assert.equal(await admission.canClaim(),false);assert.equal(await admission.canRenew(),true);assert.equal(await createEnrollmentAdmission(options).canRenew(),false,'no grace without a successful admission');now+=1001;assert.equal(await admission.canRenew(),false);
+ mode='ok';assert.equal(await admission.canClaim(),true);mode='denied';assert.equal((await admission.probe()).state,'denied');assert.equal(await admission.canRenew(),false);mode='unavailable';assert.equal(await admission.canRenew(),false,'outage cannot resurrect a revoked worker');
+});
+
+
+test('a crashed lock owner is recovered while live owner locks remain protected',async t=>{
+ const directory=await mkdtemp(join(tmpdir(),'station-enroll-lock-'));t.after(()=>rm(directory,{recursive:true,force:true}));const path=join(directory,'authority.json');
+ const child=spawn(process.execPath,['-e',`const fs=require('node:fs');const birth=process.platform==='linux'?fs.readFileSync('/proc/sys/kernel/random/boot_id','utf8').trim()+':'+fs.readFileSync('/proc/'+process.pid+'/stat','utf8').split(') ')[1].split(' ')[19]:require('node:child_process').execFileSync('/bin/ps',['-p',String(process.pid),'-o','lstart='],{env:{...process.env,TZ:'UTC',LC_ALL:'C'}}).toString().trim();fs.mkdirSync(process.argv[1]);fs.writeFileSync(process.argv[1]+'/owner.json',JSON.stringify({version:2,pid:process.pid,birth,host:require('node:os').hostname(),token:require('node:crypto').randomUUID()}),{mode:0o600,flag:'wx'});process.stdout.write('ready');setInterval(()=>{},1000);`,`${path}.lock`],{stdio:['ignore','pipe','inherit']});t.after(()=>child.kill('SIGKILL'));await once(child.stdout!,'data');
+ const authority=new EnrollmentAuthority({path,networkId:'fleet'});await assert.rejects(authority.issue('live-protected'),{code:'enrollment_busy'});const stopped=once(child,'exit');child.kill('SIGKILL');await stopped;
+ const [a,b]=await Promise.all([authority.issue('worker-a'),new EnrollmentAuthority({path,networkId:'fleet'}).issue('worker-b')]);assert.equal((await authority.join(a)).stationId,'worker-a');assert.equal((await authority.join(b)).stationId,'worker-b');
+});
+
+test('BeaconRunner retains its real child during authority 503 and default request timeout, then fences revocation', {timeout:15000}, async t=>{
+ const {BeaconRunner}=await import('station-beacon');let mode='ok',renewals=0;
+ const app=new Hono();app.post('/api/v1/network/admission',async c=>{if(mode==='timeout')await new Promise(resolve=>setTimeout(resolve,2500));return mode==='ok'?c.json({data:{stationId:'worker',networkId:'fleet',generation:'one'}}):c.json({error:mode},mode==='denied'?401:503);});
+ const server=serve({fetch:app.fetch,hostname:'127.0.0.1',port:0});await new Promise<void>(resolve=>server.listening?resolve():server.once('listening',resolve));t.after(()=>new Promise<void>(resolve=>server.close(()=>resolve())));
+ const admission=createEnrollmentAdmission({url:`http://127.0.0.1:${(server.address() as {port:number}).port}`,stationId:'worker',networkId:'fleet',credential:`stw_${'b'.repeat(43)}`});assert.equal(await admission.canClaim(),true);
+ const child=spawn(process.execPath,['-e','process.on("SIGTERM",()=>{});setInterval(()=>{},1000);console.log("ready")'],{stdio:['ignore','pipe','ignore']});t.after(()=>child.kill('SIGKILL'));await once(child.stdout!,'data');const exit=once(child,'exit');
+ const runner=new BeaconRunner({canClaim:admission.canClaim,canRenew:admission.canRenew,networkCoordinator:{acquireControllerLease:async()=>true,releaseControllerLease:async()=>true,renewControllerLease:async()=>{renewals++;return true;}}});
+ const supervised={child,leaseLost:false,exitHandled:false,stopRequested:false};(runner as any).supervised.set('instance',supervised);(runner as any).networkLeaseByInstance.set('instance',{name:'lease',token:'token'});
+ mode='unavailable';assert.equal(await admission.canClaim(),false);assert.equal(await (runner as any).renewNetworkLeases(new Date()),true);assert.equal(child.exitCode,null);assert.equal(child.signalCode,null);
+ mode='timeout';const started=Date.now();assert.equal(await (runner as any).renewNetworkLeases(new Date()),true);assert.ok(Date.now()-started<4500,'request timeout resolves before supervisor admission deadline');assert.equal(supervised.leaseLost,false);assert.equal(child.signalCode,null);assert.equal(renewals,2);
+ mode='denied';assert.equal(await (runner as any).renewNetworkLeases(new Date()),false);assert.equal(supervised.leaseLost,true);assert.equal((await exit)[1],'SIGKILL');assert.equal(renewals,2);
+ assert.throws(()=>createEnrollmentAdmission({url:'https://authority.example',stationId:'w',networkId:'f',credential:`stw_${'b'.repeat(43)}`,timeoutMs:5000}),/Invalid/);
+});
+
+
+test('lock recovery detects recycled PID birth while unrecognized empty legacy locks fail within a deadline',async t=>{
+ const directory=await mkdtemp(join(tmpdir(),'station-enroll-reuse-'));t.after(()=>rm(directory,{recursive:true,force:true}));const path=join(directory,'authority.json'),lock=`${path}.lock`;
+ await mkdir(lock);await writeFile(join(lock,'owner.json'),JSON.stringify({version:2,pid:process.pid,birth:'prior-boot-or-reused-pid',host:(await import('node:os')).hostname(),token:'00000000-0000-4000-8000-000000000000'}));const authority=new EnrollmentAuthority({path,networkId:'fleet'});assert.equal((await authority.issue('worker')).stationId,'worker');
+ await mkdir(lock);const start=Date.now();await assert.rejects(authority.issue('legacy'),error=>error instanceof Error&&error.message.includes(lock));assert.ok(Date.now()-start<3000);
 });

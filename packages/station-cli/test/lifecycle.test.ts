@@ -36,3 +36,44 @@ test("stale instance state never signals an unrelated PID", async (t) => {
   await assert.rejects(stopLocal("daemon", "stale", home), /No process was signalled/);
   assert.equal((await localStatus("daemon", "stale", home)).status, "unreachable");
 });
+test("stale ownership recovers after a killed launcher and concurrent recovery never replaces a live lock", { timeout: 15_000 }, async t => {
+  const { spawn } = await import('node:child_process');
+  const { acquireLaunchLock } = await import('../dist/launch-lock.js');
+  const { mkdir, readdir } = await import('node:fs/promises');
+  const home = await mkdtemp(join(tmpdir(), 'station-lock-')); t.after(() => rm(home, { recursive: true, force: true }));
+  const lock = join(home, 'lock'), module = fileURLToPath(new URL('../dist/launch-lock.js', import.meta.url));
+  const child = spawn(process.execPath, ['--input-type=module', '-e', `import {acquireLaunchLock} from ${JSON.stringify(module)}; console.log(await acquireLaunchLock(${JSON.stringify(lock)})); setInterval(()=>{},1000);`], { stdio: ['ignore','pipe','pipe'] });
+  t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
+  await new Promise<void>((resolve, reject) => { child.stdout.once('data', () => resolve()); child.once('error', reject); child.once('exit', () => reject(new Error('Lock fixture exited early'))); });
+  await assert.rejects(acquireLaunchLock(lock), error => error instanceof Error && error.message.includes(lock) && error.message.includes('live launcher'));
+  const stopped = new Promise(resolve => child.once('exit', resolve)); child.kill('SIGKILL'); await stopped;
+  const recovered = await Promise.allSettled([acquireLaunchLock(lock), acquireLaunchLock(lock)]);
+  assert.equal(recovered.filter(result => result.status === 'fulfilled').length, 1);
+  assert.equal(recovered.filter(result => result.status === 'rejected').length, 1);
+  const owner = JSON.parse(await readFile(join(lock, 'owner.json'), 'utf8'));
+  assert.equal(owner.pid, process.pid);
+  assert.equal((await readdir(home)).filter(name => name.startsWith('lock.retired-')).length, 1);
+  await assert.rejects(acquireLaunchLock(lock), /live launcher/);
+  const legacy = join(home, 'legacy'); await mkdir(legacy);
+  await assert.rejects(acquireLaunchLock(legacy), error => error instanceof Error && error.message.includes(legacy) && error.message.includes('metadata'));
+});
+test("reused PID identity does not block safe recovery or signal the unrelated process", async t => {
+  const { acquireLaunchLock } = await import('../dist/launch-lock.js'); const { mkdir } = await import('node:fs/promises');
+  const home = await mkdtemp(join(tmpdir(), 'station-reboot-')); t.after(() => rm(home, { recursive: true, force: true }));
+  const lock = join(home, 'lock'); await mkdir(lock);
+  await writeFile(join(lock, 'owner.json'), JSON.stringify({ version: 1, pid: process.pid, birth: 'previous boot process identity', token: '1'.repeat(48) }));
+  assert.match(await acquireLaunchLock(lock), /^[a-f0-9]{48}$/);
+});
+test("an orphaned managed service fences stale-controller lock recovery", { timeout: 15_000 }, async t => {
+  const { spawn } = await import('node:child_process'); const { mkdir } = await import('node:fs/promises');
+  const { acquireLaunchLock, ownerTitle } = await import('../dist/launch-lock.js');
+  const home = await mkdtemp(join(tmpdir(), 'station-orphan-')); t.after(() => rm(home, { recursive: true, force: true }));
+  const lock = join(home, 'lock'), token = '2'.repeat(48); await mkdir(lock);
+  await writeFile(join(lock, 'owner.json'), JSON.stringify({ version: 1, pid: process.pid, birth: 'dead controller', token }));
+  const child = spawn(process.execPath, [`--title=${ownerTitle(token)}`, '-e', "console.log('ready');setInterval(()=>{},1000)"], { stdio: ['ignore','pipe','pipe'] });
+  t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
+  await new Promise<void>((resolve, reject) => { child.stdout.once('data', () => resolve()); child.once('error', reject); });
+  await assert.rejects(acquireLaunchLock(lock), /controller or service still owns/);
+  const stopped = new Promise(resolve => child.once('exit', resolve)); child.kill('SIGKILL'); await stopped;
+  assert.match(await acquireLaunchLock(lock), /^[a-f0-9]{48}$/);
+});

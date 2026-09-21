@@ -58,8 +58,8 @@ export default defineConfig({
         <code>http://127.0.0.1:4401</code>. The daemon stays on port 4400;
         dashboard shutdown does not stop its runners.
       </p>
-      <Code>{`STATION_DAEMON_URL=http://127.0.0.1:4400 PORT=4401 HOSTNAME=127.0.0.1 pnpm exec station-dashboard`}</Code>
-      <p>For a remote daemon, set <code>STATION_DAEMON_URL</code> to its trusted HTTPS address. The dashboard server forwards requests to that configured daemon; keep worker services private behind Headquarters. Use <code>PORT</code> and <code>HOSTNAME</code> for the dashboard listener.</p>
+      <Code>{`STATION_DAEMON_URL=http://127.0.0.1:4400 PORT=4401 STATION_DASHBOARD_HOST=127.0.0.1 pnpm exec station-dashboard`}</Code>
+      <p>For a remote daemon, set <code>STATION_DAEMON_URL</code> to its trusted HTTPS address. The dashboard server forwards requests to that configured daemon; keep worker services private behind Headquarters. Use <code>PORT</code> and <code>STATION_DASHBOARD_HOST</code> for the dashboard listener.</p>
       <div className="warn-box"><p>
         Authentication is optional for localhost, but do not expose an
         unauthenticated dashboard. In production, use environment-backed

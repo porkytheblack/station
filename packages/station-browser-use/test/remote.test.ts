@@ -9,7 +9,7 @@ import { BrowserbaseBrowserAdapter, SteelBrowserAdapter, type RemoteBrowserOptio
 
 function fakeBrowser(): Browser {
   const page = Object.assign(new EventEmitter(), { url: () => "about:blank", isClosed: () => false, title: async () => "fixture", evaluate: async () => false, screenshot: async () => Buffer.from("png") });
-  const context = Object.assign(new EventEmitter(), { pages: () => [page], setDefaultTimeout() {}, tracing: {} });
+  const context = Object.assign(new EventEmitter(), { pages: () => [page], route: async () => {}, setDefaultTimeout() {}, tracing: {} });
   return { isConnected: () => true, contexts: () => [context], close: async () => {} } as unknown as Browser;
 }
 class BrowserbaseFixture extends BrowserbaseBrowserAdapter { protected override async attach() { return fakeBrowser(); } }

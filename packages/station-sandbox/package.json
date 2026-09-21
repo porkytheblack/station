@@ -28,7 +28,7 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
-    "test:containers": "node --import tsx --test test/container.integration.ts"
+    "test:containers": "node --import tsx --test test/container.integration.ts test/container-security.integration.ts"
   },
   "peerDependencies": {
     "node-pty": "^1.1.0"

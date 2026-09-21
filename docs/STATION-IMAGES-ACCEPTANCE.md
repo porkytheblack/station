@@ -4,6 +4,10 @@ This is a review map for the numbered requirements in [the Station Images plan](
 
 A test file's presence is evidence of a reproducible case, not proof that its latest revision passed. Opt-in Docker/browser tests must run without skips. The final coordinated `pnpm release --dry-run --allow-dirty` passed all 20 packages without skipping checks. The final source-doc synchronization is verified separately below; live publish access is not established by that dry run.
 
+## Review corrections
+
+The review found release blockers after the earlier checks. That earlier package-release recommendation was too broad. Follow [review remediation](STATION-3-REVIEW.md) for fixes and fresh validation; the earlier test totals below describe the original implementation. Production Linux acceptance remains explicitly deferred, and the code must not be described as certified for public multi-tenant deployment.
+
 ## Numbered plan requirements
 
 | Plan item | Implemented behavior and evidence | Remaining requirement or evidence gap |

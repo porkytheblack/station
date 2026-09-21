@@ -14,6 +14,7 @@ export interface DeploymentGeneration {
   bindings?: ImageEnvironmentBindings;
   invocationEnv?: string[];
   sourceGeneration?: string;
+  everActivated?: boolean;
 }
 export interface ImageDeployment {
   id: string;
@@ -28,7 +29,7 @@ export interface ImageDeployment {
 export interface BeaconRollout {
   id: string; sourceInstance: string; sourceName: string; targetInstance: string;
   generation: string; export: string; config: string; stationId?: string;
-  createdAt: string; completedAt?: string;
+  createdAt: string; completedAt?: string; failedAt?: string; error?: string; cancelledAt?: string;
 }
 export interface DeploymentSnapshot { format: 'station.deployments/v1'; identity: string; revision: number; deployments: ImageDeployment[] }
 /** Atomic compare-and-swap must cover all writers sharing this namespace. */
@@ -98,6 +99,8 @@ export class ImageDeployments {
         const operations = new Set<string>();
         for (const rollout of deployment.rollouts) {
           if (!identifier.test(rollout.id) || operations.has(rollout.id) || !generations.has(rollout.generation) || typeof rollout.sourceInstance !== 'string' || !rollout.sourceInstance || typeof rollout.sourceName !== 'string' || !/^rollout-[a-f0-9]{64}$/.test(rollout.targetInstance) || typeof rollout.export !== 'string' || typeof rollout.config !== 'string' || rollout.config.length > 1024 * 1024) throw invalid();
+          for(const field of ['completedAt','failedAt','cancelledAt'] as const)if(rollout[field]!==undefined&&(typeof rollout[field]!=='string'||!Number.isFinite(Date.parse(rollout[field]!))))throw invalid();
+          if(rollout.error!==undefined&&(typeof rollout.error!=='string'||rollout.error.length>1024))throw invalid();
           operations.add(rollout.id);
         }
       }
@@ -108,10 +111,19 @@ export class ImageDeployments {
     if (!aliases || typeof aliases !== 'object' || Array.isArray(aliases) || Object.keys(aliases).length < 1 || Object.keys(aliases).length > 128) throw invalid();
     for (const [alias, target] of Object.entries(aliases)) if (!identifier.test(alias) || ['__proto__', 'constructor', 'prototype'].includes(alias) || !image.manifest.exports.some(e => e.name === target)) throw invalid();
   }
-  private mutate<T>(fn: (state: DeploymentSnapshot) => T): Promise<T> {
+  private mutate<T>(fn: (state: DeploymentSnapshot) => T, allocating: boolean | (() => boolean) = false): Promise<T> {
     const pending = this.queue.then(async () => {
       const state = await this.read(), revision = state.revision;
+      // Preserve rollback eligibility independently of the bounded audit window.
+      for (const deployment of state.deployments) for (const generation of deployment.generations) if (deployment.history.some(h => h.generation === generation.id && (h.action === 'activate' || h.action === 'rollback'))) generation.everActivated = true;
       const result = fn(state); state.revision++;
+      const allocated=typeof allocating==='function'?allocating():allocating;
+      for (const deployment of state.deployments) deployment.history = deployment.history.slice(-512);
+      // Audit is bounded globally too; immutable execution identities are never evicted.
+      let auditBudget=4096;
+      for(const deployment of [...state.deployments].reverse()){deployment.history=deployment.history.slice(-Math.min(auditBudget,deployment.history.length));if(auditBudget===0)deployment.history=[];auditBudget-=deployment.history.length;}
+      if(!allocated&&Buffer.byteLength(JSON.stringify(state))>maxBytes)for(const deployment of state.deployments)deployment.history=[];
+      if (allocated && Buffer.byteLength(JSON.stringify(state)) > maxBytes - 512 * 1024) throw new ImageError('deployment_limit', 'Retained deployment capacity reached; control-plane reserve preserved');
       if (!await this.storage.compareAndSwap(revision, state)) throw new ImageError('revision_conflict', 'Deployment changed; refresh before retrying');
       return structuredClone(result);
     });
@@ -133,19 +145,26 @@ export class ImageDeployments {
         return previous;
       }
       if (deployment.revision !== expectedRevision) throw new ImageError('revision_conflict', 'Deployment changed; refresh before retrying');
-      if ((deployment.rollouts?.length ?? 0) >= 256 || deployment.rollouts?.some(r => r.sourceInstance === rollout.sourceInstance && !r.completedAt)) throw new ImageError('rollout_conflict', 'A replacement is pending or retained rollout capacity is reached');
+      if ((deployment.rollouts?.length ?? 0) >= 256 || deployment.rollouts?.some(r => r.sourceInstance === rollout.sourceInstance && !r.completedAt && !r.failedAt && !r.cancelledAt)) throw new ImageError('rollout_conflict', 'A replacement is pending or retained rollout capacity is reached');
       (deployment.rollouts ??= []).push(structuredClone(rollout)); deployment.revision++;
       return rollout;
-    });
+    }, true);
   }
   completeRollout(id: string, rolloutId: string) {
     return this.mutate(state => {
       const deployment = state.deployments.find(d => d.id === id);
       const rollout = deployment?.rollouts?.find(r => r.id === rolloutId);
       if (!deployment || !rollout) throw new ImageError('not_found', 'Rollout not found');
+      if (rollout.cancelledAt || rollout.failedAt) throw new ImageError('rollout_cancelled', 'Rollout is no longer pending');
       if (!rollout.completedAt) { rollout.completedAt = new Date().toISOString(); deployment.revision++; }
       return rollout;
     });
+  }
+  failRollout(id: string, rolloutId: string, error: string) {
+    return this.mutate(state => { const deployment=state.deployments.find(d=>d.id===id);const rollout=deployment?.rollouts?.find(r=>r.id===rolloutId);if(!rollout||!deployment)throw new ImageError('not_found','Rollout not found');if(!rollout.completedAt&&!rollout.cancelledAt){rollout.failedAt=new Date().toISOString();rollout.error=error.slice(0,1024);deployment.revision++;}return rollout; });
+  }
+  cancelRollout(id: string, rolloutId: string, expectedRevision: number) {
+    return this.mutate(state=>{const deployment=state.deployments.find(d=>d.id===id);if(!deployment)throw new ImageError('not_found','Deployment not found');if(deployment.revision!==expectedRevision)throw new ImageError('revision_conflict','Deployment changed; refresh before retrying');const rollout=deployment.rollouts?.find(r=>r.id===rolloutId);if(!rollout)throw new ImageError('not_found','Rollout not found');if(rollout.completedAt)throw new ImageError('rollout_conflict','Completed rollout cannot be cancelled');if(!rollout.cancelledAt){rollout.cancelledAt=new Date().toISOString();deployment.revision++;}return rollout;});
   }
   stage(name: string, image: ImageRecord, aliases?: Record<string, string>, stationId?: string, environment?: ImageEnvironmentBindings, invocationEnv?: string[]): Promise<ImageDeployment> {
     if (typeof name !== 'string' || !identifier.test(name) || stationId !== undefined && (typeof stationId !== 'string' || stationId.length < 1 || stationId.length > 255)) throw invalid();
@@ -158,25 +177,33 @@ export class ImageDeployments {
         if (state.deployments.length >= 1024) throw new ImageError('deployment_limit', 'Deployment capacity reached');
         deployment = { id: randomUUID(), name, revision: 0, generations: [], history: [] }; state.deployments.push(deployment);
       }
-      if (deployment.generations.length >= 256) throw new ImageError('deployment_limit', 'Retained generation capacity reached');
+      if (deployment.generations.filter(g => !g.sourceGeneration).length >= 128) throw new ImageError('deployment_limit', 'Retained generation capacity reached');
       deployment.generations.push(generation); deployment.revision++;
       deployment.history.push({ action: 'stage', generation: generation.id, revision: deployment.revision, at: new Date().toISOString() });
       return deployment;
-    });
+    }, true);
   }
   invocation(id: string, expectedRevision: number, sourceGeneration: string, bindings: ImageEnvironmentBindings): Promise<DeploymentGeneration> {
+    let allocated=false;
     return this.mutate(state => {
       const deployment = state.deployments.find(d => d.id === id);
       if (!deployment) throw new ImageError('not_found', 'Deployment not found');
       if (deployment.revision !== expectedRevision || deployment.activeGeneration !== sourceGeneration) throw new ImageError('revision_conflict', 'Deployment changed before invocation');
       const source = deployment.generations.find(g => g.id === sourceGeneration)!;
       if (Object.keys(bindings).some(key => !source.invocationEnv?.includes(key))) throw new ImageError('environment_denied', 'Invocation override is not granted by this deployment');
-      if (deployment.generations.length >= 256) throw new ImageError('deployment_limit', 'Retained generation capacity reached');
-      const generation = { ...structuredClone(source), id: randomUUID(), sourceGeneration, bindings: { ...source.bindings, ...structuredClone(bindings) }, createdAt: new Date().toISOString() };
-      deployment.generations.push(generation); deployment.revision++;
-      deployment.history.push({ action: 'invoke', generation: generation.id, revision: deployment.revision, at: generation.createdAt });
+      const merged={...source.bindings,...structuredClone(bindings)};
+      const canonical=(value:ImageEnvironmentBindings)=>JSON.stringify(Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([key,entry])=>[key,Object.entries(entry).sort(([a],[b])=>a.localeCompare(b))]));
+      let generation=deployment.generations.find(g=>g.sourceGeneration===sourceGeneration&&canonical(g.bindings??{})===canonical(merged));
+      if(!generation){
+        allocated=true;
+        if (deployment.generations.filter(g => g.sourceGeneration).length >= 128) throw new ImageError('deployment_limit', 'Retained generation capacity reached');
+        generation={ ...structuredClone(source), id: randomUUID(), sourceGeneration, bindings: merged, createdAt: new Date().toISOString() };
+        deployment.generations.push(generation);
+      }
+      deployment.revision++;
+      deployment.history.push({ action: 'invoke', generation: generation.id, revision: deployment.revision, at: new Date().toISOString() });
       return generation;
-    });
+    }, ()=>allocated);
   }
   change(id: string, expectedRevision: number, action: 'activate' | 'rollback' | 'drain', generation?: string): Promise<ImageDeployment> {
     if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) throw invalid();
@@ -186,8 +213,9 @@ export class ImageDeployments {
       if (deployment.revision !== expectedRevision) throw new ImageError('revision_conflict', 'Deployment changed; refresh before retrying');
       if (action !== 'drain') {
         if (!deployment.generations.some(g => g.id === generation)) throw invalid();
-        if (action === 'rollback' && !deployment.history.some(h => (h.action === 'activate' || h.action === 'rollback') && h.generation === generation)) throw new ImageError('invalid_rollback', 'Rollback requires a previously activated generation');
+        if (action === 'rollback' && !deployment.generations.find(g => g.id === generation)?.everActivated && !deployment.history.some(h => (h.action === 'activate' || h.action === 'rollback') && h.generation === generation)) throw new ImageError('invalid_rollback', 'Rollback requires a previously activated generation');
       }
+      if (action !== 'drain') deployment.generations.find(g => g.id === generation)!.everActivated = true;
       deployment.activeGeneration = action === 'drain' ? undefined : generation;
       deployment.revision++;
       deployment.history.push({ revision: deployment.revision, action, generation, at: new Date().toISOString() });

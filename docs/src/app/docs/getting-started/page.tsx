@@ -146,7 +146,7 @@ export default defineConfig({
       </p>
 
       <Code>{`# Run in another terminal; the dashboard has its own lifecycle
-STATION_DAEMON_URL=http://127.0.0.1:4400 PORT=4401 HOSTNAME=127.0.0.1 pnpm exec station-dashboard`}</Code>
+STATION_DAEMON_URL=http://127.0.0.1:4400 PORT=4401 STATION_DASHBOARD_HOST=127.0.0.1 pnpm exec station-dashboard`}</Code>
       <p>Open <code>http://127.0.0.1:4401</code>. A remote daemon uses the same dashboard with a different <code>STATION_DAEMON_URL</code>.</p>
       <table className="api-table">
         <thead>

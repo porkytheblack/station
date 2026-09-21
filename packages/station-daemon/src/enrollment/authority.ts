@@ -1,7 +1,10 @@
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { mkdir, open, rename, unlink } from 'node:fs/promises';
+import { mkdir, open, rename, unlink, lstat, readFile, rm } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { hostname } from 'node:os';
+import { dirname, resolve, join } from 'node:path';
 
 export class EnrollmentError extends Error {
   constructor(readonly code: string, readonly status: 400 | 401 | 409 | 413 | 503, message = code) { super(message); }
@@ -41,21 +44,47 @@ export class EnrollmentAuthority {
       return { version: 1, networkId: this.networkId, invitations: [], members: [] };
     } finally { await file?.close(); }
   }
+  private async acquireLock(): Promise<{close:()=>Promise<void>}> {
+    const token=randomUUID(),path=`${this.path}.lock`,temporary=`${path}.${token}.pending`;
+    const birth=await processBirth(process.pid);
+    if(!birth)throw new EnrollmentError('enrollment_busy',503,'Cannot verify enrollment writer identity');
+    const owner={version:2,pid:process.pid,host:hostname(),birth,token};
+    await mkdir(temporary,{mode:0o700});
+    const file=await open(join(temporary,'owner.json'),'wx',0o600);
+    try{await file.writeFile(JSON.stringify(owner));await file.sync();}finally{await file.close();}
+    const deadline=Date.now()+1000;
+    try{
+      for(;;){
+        try{
+          // Publish complete ownership atomically. A crash never leaves an empty lock.
+          // Never replace an existing empty legacy directory. New writers only
+          // publish nonempty directories, so competing new owners are atomic.
+          try { await lstat(path); throw Object.assign(new Error('Lock exists'),{code:'EEXIST'}); } catch(error) { if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error; }
+          await rename(temporary,path);
+          return {close:async()=>{const saved=JSON.parse(await readFile(join(path,'owner.json'),'utf8'));if(saved.token!==token)throw new EnrollmentError('enrollment_busy',503,'Enrollment lock ownership changed');await rm(path,{recursive:true});}};
+        }catch(error){if(!['EEXIST','ENOTEMPTY','ENOTDIR','EISDIR'].includes((error as NodeJS.ErrnoException).code??''))throw error;}
+        try{
+          const stat=await lstat(join(path,'owner.json'));
+          if(!stat.isFile()||stat.isSymbolicLink()||stat.size>1024)throw new Error('Invalid owner');
+          const previous=JSON.parse(await readFile(join(path,'owner.json'),'utf8'));
+          if(previous.version!==2||previous.host!==hostname()||!Number.isSafeInteger(previous.pid)||previous.pid<1||typeof previous.birth!=='string'||!previous.birth||!/^[-a-f0-9]{36}$/.test(previous.token))throw new Error('Invalid owner');
+          if(await processBirth(previous.pid)!==previous.birth){
+            // Retain a nonempty tombstone per nonce: a second stale reader cannot
+            // rename a newly acquired lock over this retired owner's directory.
+            try{await rename(path,`${path}.retired-${previous.token}`);}catch(error){if(!['ENOENT','EEXIST','ENOTEMPTY'].includes((error as NodeJS.ErrnoException).code??''))throw error;}
+          }
+        }catch{/* Missing or unknown metadata fails closed at the bounded deadline. */}
+        if(Date.now()>=deadline)throw new EnrollmentError('enrollment_busy',503,`Enrollment writer is live or lock ${path} has unverifiable ownership; inspect owners before manually moving legacy locks aside`);
+        await new Promise(resolve=>setTimeout(resolve,10));
+      }
+    }finally{await rm(temporary,{recursive:true,force:true});}
+  }
   private async transaction<T>(work: (state: State) => T, write = true): Promise<T> {
     // Atomic replacement means readers observe either complete snapshot without
     // contending with heartbeats/revocation. Never mutate a read-only snapshot.
     if (!write) return work(await this.readState());
     await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
-    let lock;
-    const deadline = Date.now() + 1000;
-    for (;;) {
-      try { lock = await open(`${this.path}.lock`, 'wx', 0o600); break; }
-      catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-        if (Date.now() >= deadline) throw new EnrollmentError('enrollment_busy', 503);
-        await new Promise(resolve => setTimeout(resolve, 10));
-      }
-    }
+    const lock = await this.acquireLock();
     let temporary: string | undefined;
     try {
       const state = await this.readState();
@@ -73,7 +102,7 @@ export class EnrollmentAuthority {
       return result;
     } finally {
       if (temporary) await unlink(temporary).catch(() => {});
-      await lock.close(); await unlink(`${this.path}.lock`);
+      await lock.close();
     }
   }
   async issue(stationId: string, ttlMs = 300_000) {
@@ -120,4 +149,11 @@ export class EnrollmentAuthority {
     await this.transaction(state => this.revokeState(state, stationId));
   }
   async list(): Promise<EnrollmentMember[]> { return this.transaction(state => state.members.map(publicMember), false); }
+}
+
+async function processBirth(pid:number):Promise<string|undefined>{
+ if(process.platform==='linux'){
+  try{const [stat,boot]=await Promise.all([readFile(`/proc/${pid}/stat`,'utf8'),readFile('/proc/sys/kernel/random/boot_id','utf8')]);const start=stat.slice(stat.lastIndexOf(')')+2).split(/\s+/)[19];if(!start||!/^\d+$/.test(start)||!boot.trim())throw new Error('Invalid process identity');return `${boot.trim()}:${start}`;}catch(error){if(['ENOENT','ESRCH'].includes((error as NodeJS.ErrnoException).code??''))return undefined;throw error;}
+ }
+ try{return (await promisify(execFile)('/bin/ps',['-p',String(pid),'-o','lstart='],{maxBuffer:8192,env:{...process.env,TZ:'UTC',LC_ALL:'C'}})).stdout.trim()||undefined;}catch(error){if((error as {code?:number;stdout?:string}).code===1&&!(error as {stdout?:string}).stdout?.trim())return undefined;throw error;}
 }

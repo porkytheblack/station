@@ -15,10 +15,12 @@ import type { StationNetworkAdapter, StationRole } from "station-network";
 
 /** Execution backends with separate operator and optional dedicated-tenant gateways. */
 export interface ExecutionConfig {
-  /** Separate shared worker secret, at least 32 characters. Never expose to workload processes. */
+  /** This worker's inbound secret, at least 32 characters. Never share between tenant workers. */
   token: string;
   /** Dedicated private worker tenant. Immutable for the lifetime of its persistent adapter data. */
   tenantId?: string;
+  /** Operator-pinned worker destinations and unique inbound credentials. Required for tenant routing. */
+  targets?: Record<string, { endpoint: string; token: string; tenantId?: string }>;
   /** Headquarters-only: verified execution-only API key IDs mapped to tenant IDs. */
   tenants?: {
     apiKeyTenants: Record<string, string>;
@@ -32,6 +34,8 @@ export interface AuthConfig {
   username: string;
   password: string;
   sessionTtlMs?: number;
+  /** Secure cookies by default, including behind TLS termination. Disable only for local HTTP development. */
+  secureCookies?: boolean;
   /**
    * Pluggable storage backend for API keys. Defaults to a JSON file at
    * `<dataDir>/station-keys.json` (no native dependencies required).
@@ -72,7 +76,7 @@ export interface StationNetworkConfig {
   heartbeatIntervalMs?: number;
   leaseDurationMs?: number;
   /** Optional authenticated fleet admission. Shared queue adapters are configured separately. */
-  enrollment?: { authority: true } | { url: string; credential: string };
+  enrollment?: { authority: true } | { url: string; credential: string; timeoutMs?: number; renewalGraceMs?: number };
 }
 
 /**
@@ -154,6 +158,8 @@ export interface StationConfig {
   runRunners: boolean;
   logLevel: "debug" | "info" | "warn" | "error";
   auth?: AuthConfig;
+  /** Exact ingress IP addresses trusted to append X-Forwarded-For. Empty by default. */
+  trustedProxies?: string[];
   deploy?: DeployConfig;
   execution?: ExecutionConfig;
   /** Operator-owned image storage, served only to authenticated admin clients. */
@@ -260,6 +266,7 @@ export function resolveConfig(input: StationUserConfig): StationConfig {
     runRunners: input.runRunners ?? (role !== "headquarters"),
     logLevel: input.logLevel ?? DEFAULTS.logLevel,
     auth,
+    trustedProxies: input.trustedProxies ? [...input.trustedProxies] : undefined,
     deploy: input.deploy,
     execution: input.execution,
     registry: input.registry,

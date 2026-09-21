@@ -50,7 +50,7 @@ test('nested registry publication, install, invoke and deployment activation/rol
     return send({error:'not_found'},404);
   });
   const daemonPort=await listen(daemon);const reservation=http.createServer();const port=await listen(reservation);await new Promise(r=>reservation.close(r));
-  const child=spawn(process.execPath,[`${root}/packages/station-dashboard/bin/station-dashboard.mjs`],{cwd:root,env:{...process.env,STATION_DAEMON_URL:`http://127.0.0.1:${daemonPort}`,PORT:String(port),HOSTNAME:'127.0.0.1'},stdio:['ignore','pipe','pipe']});let output='';child.stdout.on('data',b=>output+=b);child.stderr.on('data',b=>output+=b);let browser; let page;
+  const child=spawn(process.execPath,[`${root}/packages/station-dashboard/bin/station-dashboard.mjs`],{cwd:root,env:{...process.env,STATION_DAEMON_URL:`http://127.0.0.1:${daemonPort}`,PORT:String(port),STATION_DASHBOARD_HOST:'127.0.0.1'},stdio:['ignore','pipe','pipe']});let output='';child.stdout.on('data',b=>output+=b);child.stderr.on('data',b=>output+=b);let browser; let page;
   try{
     for(let n=0;;n++){try{const r=await fetch(`http://127.0.0.1:${port}/`);if(r.ok)break;}catch{}if(n>80)throw new Error(output);await new Promise(r=>setTimeout(r,100));}
     browser=await chromium.launch({headless:true});page=await browser.newPage({viewport:{width:1280,height:900}});page.setDefaultTimeout(10000);const browserErrors=[];page.on('pageerror',e=>browserErrors.push(e.message));

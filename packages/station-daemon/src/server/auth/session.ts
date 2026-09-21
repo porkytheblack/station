@@ -6,6 +6,7 @@ export interface SessionConfig {
   username: string;
   password: string;
   sessionTtlMs?: number;
+  secureCookies?: boolean;
 }
 
 /**
@@ -72,4 +73,10 @@ export function verifyCredentials(username: string, password: string, config: Se
   const userMatch = safeEqual(username, config.username);
   const passMatch = safeEqual(password, config.password);
   return userMatch && passMatch;
+}
+
+/** Explicit configuration handles TLS-terminating proxies without trusting request headers. */
+export function sessionCookie(token: string, config?: SessionConfig): string {
+  const ttl = token ? Math.floor((config?.sessionTtlMs ?? SESSION_TTL_MS) / 1000) : 0;
+  return `station_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${ttl}${config?.secureCookies === false ? "" : "; Secure"}`;
 }

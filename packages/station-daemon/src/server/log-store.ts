@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { appendFile } from "node:fs/promises";
+import { mkdirSync, createReadStream } from "node:fs";
+import { appendFile, stat, rename } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { LogEntry } from "./log-buffer.js";
 
@@ -41,102 +41,87 @@ export interface LogStorageAdapter {
 
 export interface FileLogStorageOptions {
   filePath: string;
-  /**
-   * Called when a background write to the underlying file fails. Use
-   * this to surface persistence problems (disk full, permission denied,
-   * etc.) to your monitoring system. If unset, write failures are
-   * silently dropped — acceptable for local dev, NOT for production.
-   */
   onError?: (err: unknown) => void;
+  /** Rotate newly written segments at this size (default64MiB). A legacy oversized segment is retained once as previous. */
+  maxFileBytes?: number;
+  /** Bounded asynchronous write backlog. Default 4 MiB. Overflow invokes onError. */
+  maxPendingBytes?: number;
+  /** Latest matching entries returned by get(). Default 10000 / 4 MiB. */
+  maxQueryEntries?: number;
+  maxQueryBytes?: number;
 }
 
-/**
- * File-backed log storage using append-only JSONL framing. Each line is
- * a JSON-serialized `LogEntry`; existing entries are loaded into memory
- * on construction; appends are serialized through an async write queue
- * so concurrent writers can't interleave bytes within one process.
- *
- * No native dependencies — works on any Node 18+ install.
- *
- * **Production caveats** (in order of severity):
- *
- * 1. **Single-process only.** Two Node processes appending to the same
- *    file WILL interleave bytes once individual JSON lines exceed the
- *    OS pipe buffer (4 KB on Linux), corrupting the file.
- * 2. **Best-effort durability.** Writes are queued and flushed via
- *    `fs.appendFile`; on `SIGKILL` / OOM kill, in-flight writes are lost.
- *    Set `onError` to surface fs failures.
- * 3. **Unbounded memory on replay.** The whole file is loaded into a
- *    Map on startup. For high-volume deployments (gigabytes of logs)
- *    use a database-backed adapter instead.
- *
- * For multi-process, distributed, or high-durability deployments,
- * implement `LogStorageAdapter` against Postgres / MySQL / Redis / S3.
- */
+/** Single-process JSONL store. No startup replay/index; reads stream two bounded
+ * segments and retain only a bounded result. Pending writes and individual lines
+ * are bounded too. Rotation retains one previous segment. Not a distributed log. */
 export class FileLogStorage implements LogStorageAdapter {
   private path: string;
-  private byRunId = new Map<string, LogEntry[]>();
   private writeQueue: Promise<void> = Promise.resolve();
   private onError: (err: unknown) => void;
+  private pendingBytes = 0;
+  private readonly maxFileBytes: number;
+  private readonly maxPendingBytes: number;
+  private readonly maxQueryEntries: number;
+  private readonly maxQueryBytes: number;
+  private readonly maxLineBytes: number;
 
   constructor(options: FileLogStorageOptions) {
-    // Backwards compat: callers used to pass `.db` paths for the sqlite store.
-    // Transparently swap to `.jsonl` so existing config files keep working.
-    this.path = options.filePath.endsWith(".db")
-      ? options.filePath.replace(/\.db$/, ".jsonl")
-      : options.filePath;
+    this.path = options.filePath.endsWith(".db") ? options.filePath.replace(/\.db$/, ".jsonl") : options.filePath;
     this.onError = options.onError ?? (() => {});
+    this.maxFileBytes = options.maxFileBytes ?? 64 * 1024 * 1024;
+    this.maxPendingBytes = options.maxPendingBytes ?? 4 * 1024 * 1024;
+    this.maxQueryEntries = options.maxQueryEntries ?? 10000;
+    this.maxQueryBytes = options.maxQueryBytes ?? 4 * 1024 * 1024;
+    if ([this.maxFileBytes, this.maxPendingBytes, this.maxQueryEntries, this.maxQueryBytes].some(n => !Number.isSafeInteger(n) || n < 1 || n > 1024 * 1024 * 1024)) throw new Error("Invalid file log storage bounds.");
+    this.maxLineBytes = Math.min(64 * 1024, this.maxFileBytes, this.maxPendingBytes, this.maxQueryBytes);
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
-    this.replay();
   }
-
-  private replay(): void {
-    if (!existsSync(this.path)) return;
-    let content: string;
-    try {
-      content = readFileSync(this.path, "utf8");
-    } catch (err) {
-      this.onError(err);
-      return;
-    }
-    const lines = content.split("\n");
-    for (const line of lines) {
-      if (!line) continue;
-      try {
-        const entry = JSON.parse(line) as LogEntry;
-        this.indexEntry(entry);
-      } catch {
-        // Skip malformed line; a partial write may have left a truncated tail.
-      }
-    }
-  }
-
-  private indexEntry(entry: LogEntry): void {
-    let entries = this.byRunId.get(entry.runId);
-    if (!entries) {
-      entries = [];
-      this.byRunId.set(entry.runId, entries);
-    }
-    entries.push(entry);
-  }
-
+  private report(error: unknown): void { try { this.onError(error); } catch { /* Monitoring must not wedge writes. */ } }
   add(entry: LogEntry): void {
-    this.indexEntry(entry);
-    const line = JSON.stringify(entry) + "\n";
-    this.writeQueue = this.writeQueue.then(
-      () => appendFile(this.path, line, { mode: 0o600 }).catch((err) => {
-        this.onError(err);
-      }),
-    );
+    const line = JSON.stringify(entry) + "\n", bytes = Buffer.byteLength(line);
+    if (bytes > this.maxLineBytes || this.pendingBytes + bytes > this.maxPendingBytes) {
+      this.report(new Error("File log capacity exceeded; entry dropped.")); return;
+    }
+    this.pendingBytes += bytes;
+    this.writeQueue = this.writeQueue.then(async () => {
+      let size = 0;
+      try { size = (await stat(this.path)).size; } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      if (size + bytes > this.maxFileBytes) await rename(this.path, `${this.path}.previous`);
+      await appendFile(this.path, line, { mode: 0o600 });
+    }).catch(error => this.report(error)).finally(() => { this.pendingBytes -= bytes; });
   }
-
-  get(runId: string): LogEntry[] {
-    return this.byRunId.get(runId) ?? [];
-  }
-
-  async close(): Promise<void> {
+  async get(runId: string): Promise<LogEntry[]> {
     await this.writeQueue;
+    const entries: Array<{ entry: LogEntry; bytes: number }> = []; let total = 0;
+    const consume = (line: Buffer) => {
+      try {
+        const entry = JSON.parse(line.toString("utf8")) as LogEntry;
+        if (entry.runId !== runId || typeof entry.message !== "string" || typeof entry.signalName !== "string" || typeof entry.timestamp !== "string" || !["stdout", "stderr"].includes(entry.level)) return;
+        entries.push({ entry, bytes: line.length }); total += line.length;
+        while (entries.length > this.maxQueryEntries || total > this.maxQueryBytes) total -= entries.shift()!.bytes;
+      } catch { /* Skip malformed/partial records. */ }
+    };
+    for (const path of [`${this.path}.previous`, this.path]) {
+      let pending: Buffer = Buffer.alloc(0); let oversized = false;
+      try {
+        for await (const chunk of createReadStream(path, { highWaterMark: 16 * 1024 })) {
+          const bytes = chunk as Buffer; let offset = 0;
+          while (offset < bytes.length) {
+            const newline = bytes.indexOf(10, offset), end = newline < 0 ? bytes.length : newline;
+            if (!oversized) {
+              if (pending.length + end - offset > this.maxLineBytes) { pending = Buffer.alloc(0); oversized = true; }
+              else pending = Buffer.concat([pending, bytes.subarray(offset, end)]);
+            }
+            if (newline < 0) break;
+            if (!oversized && pending.length) consume(pending);
+            pending = Buffer.alloc(0); oversized = false; offset = newline + 1;
+          }
+        }
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") this.report(error); }
+    }
+    return entries.map(value => value.entry);
   }
+  async close(): Promise<void> { await this.writeQueue; }
 }
 
 // ─── In-memory storage for tests / ephemeral deployments ────────────

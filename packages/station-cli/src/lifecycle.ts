@@ -1,16 +1,17 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer as createHttpServer, request } from "node:http";
 import { createServer as createNetServer } from "node:net";
-import { open, readFile, mkdir, rm } from "node:fs/promises";
+import { open, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { defaultHome, privateDirectory, validateName, writePrivate } from "./store.js";
+import { acquireLaunchLock, adoptLaunchLock, ownerTitle } from "./launch-lock.js";
 export interface LaunchSpec {
   kind: "daemon" | "dashboard"; instance: string; entrypoint: string; args: string[];
   cwd: string; endpoint: string; env?: Record<string, string>; home?: string;
 }
-interface InstanceState { token: string; fingerprint: string; controlPort?: number; pid?: number; status: "starting" | "running" | "stopped" | "failed"; endpoint: string; startedAt: string; exitCode?: number | null }
+interface InstanceState { token: string; lockToken?: string; fingerprint: string; controlPort?: number; pid?: number; status: "starting" | "running" | "stopped" | "failed"; endpoint: string; startedAt: string; exitCode?: number | null }
 export interface LocalStatus { instance: string; kind: string; status: string; endpoint?: string; apiReady?: boolean; pid?: number; logPath: string }
 function directory(kind: LaunchSpec["kind"], instance: string, home = defaultHome()) { return join(home, "processes", `${kind}-${validateName(instance)}`); }
 function fingerprint(spec: LaunchSpec) { return createHash("sha256").update(JSON.stringify({ entrypoint: spec.entrypoint, args: spec.args, cwd: spec.cwd, endpoint: spec.endpoint, env: spec.env ?? {} })).digest("hex"); }
@@ -61,17 +62,16 @@ export async function startLocal(spec: LaunchSpec): Promise<LocalStatus> {
     if ((await readState(dir))?.fingerprint !== fingerprint(spec)) throw new Error("Instance already runs on a different launch configuration. Stop it before changing configuration.");
     return previous;
   }
-  try { await mkdir(lock, { mode: 0o700 }); }
-  catch { throw new Error("Instance is starting or its controller is unreachable. Inspect status and logs; stale PIDs are never signalled."); }
+  const lockToken = await acquireLaunchLock(lock);
   let launched = false;
   try {
     await assertPortFree(spec.endpoint);
     const token = randomBytes(32).toString("hex");
     await writePrivate(join(dir, "launch.json"), spec);
-    await writePrivate(join(dir, "state.json"), { token, fingerprint: fingerprint(spec), endpoint: spec.endpoint, status: "starting", startedAt: new Date().toISOString() });
+    await writePrivate(join(dir, "state.json"), { token, lockToken, fingerprint: fingerprint(spec), endpoint: spec.endpoint, status: "starting", startedAt: new Date().toISOString() });
     const log = await open(join(dir, "output.log"), "a", 0o600);
     try {
-      const child = spawn(process.execPath, [fileURLToPath(new URL("./supervisor.js", import.meta.url)), dir], { detached: true, stdio: ["ignore", log.fd, log.fd] });
+      const child = spawn(process.execPath, [`--title=${ownerTitle(lockToken)}`, fileURLToPath(new URL("./supervisor.js", import.meta.url)), dir], { detached: true, stdio: ["ignore", log.fd, log.fd] });
       await new Promise<void>((resolve, reject) => { child.once("spawn", resolve); child.once("error", reject); });
       child.unref(); launched = true;
     } finally { await log.close(); }
@@ -102,6 +102,7 @@ export async function stopLocal(kind: LaunchSpec["kind"], instance: string, home
 export async function supervise(dir: string) {
   const spec: LaunchSpec = JSON.parse(await readFile(join(dir, "launch.json"), "utf8"));
   const state = await readState(dir); if (!state) throw new Error("Missing launch state.");
+  if (state.lockToken) await adoptLaunchLock(join(dir, "lock"), state.lockToken);
   await rm(join(dir, "launch.json"), { force: true });
   let child: ChildProcess | undefined; let stopping = false; let exited = false;
   let persistence: Promise<void> = Promise.resolve();
@@ -129,7 +130,7 @@ export async function supervise(dir: string) {
     await rm(join(dir, "lock"), { recursive: true, force: true });
     server.close();
   };
-  child = spawn(process.execPath, [spec.entrypoint, ...spec.args], { cwd: spec.cwd, env: { ...process.env, ...spec.env }, detached: true, stdio: ["ignore", "inherit", "inherit"] });
+  child = spawn(process.execPath, [...(state.lockToken ? [`--title=${ownerTitle(state.lockToken)}`] : []), spec.entrypoint, ...spec.args], { cwd: spec.cwd, env: { ...process.env, ...spec.env }, detached: true, stdio: ["ignore", "inherit", "inherit"] });
   child.once("error", () => { void finish(1); });
   child.once("exit", (code) => { void finish(code); });
   await new Promise<void>((resolve, reject) => { child!.once("spawn", resolve); child!.once("error", reject); });

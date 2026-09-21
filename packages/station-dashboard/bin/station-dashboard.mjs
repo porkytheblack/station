@@ -6,10 +6,11 @@ import { fileURLToPath } from 'node:url';
 import { dashboardProxy, targetURL } from './proxy.mjs';
 
 if (process.argv.includes('--help')) {
-  console.log('station-dashboard\nEnvironment: STATION_DAEMON_URL (http://127.0.0.1:4400), PORT (4401), HOSTNAME (127.0.0.1)');
+  console.log('station-dashboard\nEnvironment: STATION_DAEMON_URL (http://127.0.0.1:4400), PORT (4401), STATION_DASHBOARD_HOST (127.0.0.1)');
   process.exit(0);
 }
 const daemon = targetURL(process.env.STATION_DAEMON_URL ?? 'http://127.0.0.1:4400');
+const host = process.env.STATION_DASHBOARD_HOST?.trim() || '127.0.0.1';
 const port = Number(process.env.PORT ?? '4401');
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid dashboard PORT');
 const entry = fileURLToPath(new URL('../.next/standalone/packages/station-dashboard/server.js', import.meta.url));
@@ -39,6 +40,6 @@ try {
     try { await fetch(`http://127.0.0.1:${internalPort}/`, { signal: AbortSignal.timeout(1000) }); break; }
     catch { if (attempt >= 100) throw new Error('Dashboard renderer startup timed out'); await new Promise((resolve) => setTimeout(resolve, 100)); }
   }
-  await new Promise((resolve, reject) => { proxy.server.once('error', reject); proxy.server.listen(port, process.env.HOSTNAME ?? '127.0.0.1', resolve); });
-  console.log(`[station-dashboard] http://${process.env.HOSTNAME ?? '127.0.0.1'}:${port} → ${daemon.origin}`);
+  await new Promise((resolve, reject) => { proxy.server.once('error', reject); proxy.server.listen(port, host, resolve); });
+  console.log(`[station-dashboard] http://${host}:${port} → ${daemon.origin}`);
 } catch (error) { console.error(error.message); await stop(1); }

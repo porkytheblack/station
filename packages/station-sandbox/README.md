@@ -55,6 +55,24 @@ inaccessible to workload code and customers. Read the
 The adapter does not silently fall back to host processes or restore a live shell
 after worker replacement. VM execution is not an implemented backend.
 
+For container workspaces, cancelling or timing out a command, stopping a running
+service, or closing a live terminal stops the **entire workspace container**. This
+also stops descendants that delete runtime markers or deliberately create another
+process session. Other active commands, terminals and services become interrupted;
+service restart policies do not replay them. Files and installed tools remain in
+the persistent volume. The next file/command/terminal/service operation waits for
+old handles to finish, then starts a fresh container process; restart interrupted
+services explicitly. Other workspaces are unaffected. If containment cannot be
+verified, the workspace stays unavailable. Ordinary completed commands use a
+controller-captured process-session identity for descendant cleanup; guest files
+never determine which processes cancellation owns.
+
+A transient engine launch failure does not disable every workspace. Partial
+resources are removed only after their ownership labels are verified. Failed
+cleanup retains a quarantined intent for reconciliation. Engine errors include a
+bounded category such as `permission_denied` or `resource_exhausted`, never raw
+stderr that could reveal registry credentials or host paths.
+
 ## Host usage
 
 ```ts

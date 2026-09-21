@@ -1,4 +1,5 @@
 import test from "node:test";
+import { randomBytes } from "node:crypto";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -26,14 +27,14 @@ test("tenant registry publication executes only on its fixed dedicated Docker wo
  for(const tenantId of ["a","b"]){
   const source=new ImageRegistry({maxBlobBytes:64*1024,storage:{id:`tenant-source-${tenantId}`,metadata:new MemoryRegistryMetadataAdapter(),blobs:new MemoryRegistryBlobAdapter()}});
   const port=await freePort(),queue=new MemoryAdapter(),workerId=`worker-${tenantId}`;
-  const station=await createStation(resolveConfig({role:"station",host:"127.0.0.1",port,stationDir:workerId,adapter:queue,auth:{username:"operator",password:"fixture-only-password",keyStorage:new MemoryKeyStorage()},runner:{pollIntervalMs:20},network:{stationId:workerId,adapter:new StationNetworkMemoryAdapter(),heartbeatIntervalMs:30},registry:{tenantId,execution:{allowedEnv:["IMAGE_TOKEN"],backend:{kind:"docker",options:{image:image!,rootDir:join(root,`containers-${tenantId}`),executable:process.env.STATION_IMAGE_DOCKER_EXECUTABLE??"/usr/local/bin/docker",target:{os:"linux",arch:process.env.STATION_IMAGE_DOCKER_ARCH==="amd64"?"amd64":"arm64",abi:"glibc",runtimes:{node:22}},seccompProfile:process.env.STATION_IMAGE_DOCKER_SECCOMP,maxRuntimeMs:15_000}}}}}),root);
+  const station=await createStation(resolveConfig({role:"station",host:"127.0.0.1",port,stationDir:workerId,adapter:queue,auth:{username:"operator",password:randomBytes(24).toString("hex"),keyStorage:new MemoryKeyStorage()},runner:{pollIntervalMs:20},network:{stationId:workerId,adapter:new StationNetworkMemoryAdapter(),heartbeatIntervalMs:30},registry:{tenantId,execution:{allowedEnv:["IMAGE_TOKEN"],backend:{kind:"docker",options:{image:image!,rootDir:join(root,`containers-${tenantId}`),executable:process.env.STATION_IMAGE_DOCKER_EXECUTABLE??"/usr/local/bin/docker",target:{os:"linux",arch:process.env.STATION_IMAGE_DOCKER_ARCH==="amd64"?"amd64":"arm64",abi:"glibc",runtimes:{node:22}},seccompProfile:process.env.STATION_IMAGE_DOCKER_SECCOMP,maxRuntimeMs:15_000}}}}}),root);
   stations.push(station);const key=await station.keyStore!.create("worker operator",["admin","read","trigger","cancel"]);await station.start();const url=`http://127.0.0.1:${port}`;
   const env=await fetch(`${url}/api/v1/env`,{method:"POST",headers:{authorization:`Bearer ${key.key}`,"content-type":"application/json"},body:JSON.stringify({key:"IMAGE_TOKEN",value:`approved-${tenantId}`,secret:true})});assert.equal(env.status,201);
   namespaces[tenantId]={registry:source,execution:createTenantRegistryWorkerGateway({tenantId,registry:source,url,token:key.key,stationId:workerId})};workers.set(tenantId,{url,key:key.key,queue});
  }
  const keyStorage=new MemoryKeyStorage(),keys=new KeyStore(keyStorage),a=await keys.create("tenant-a",["registry"]),b=await keys.create("tenant-b",["registry"]),hqPort=await freePort();
  const tenants:TenantImageRegistryConfig={namespaces,apiKeys:{[a.record.id]:{tenantId:"a",permissions:["read","publish","activate","invoke"]},[b.record.id]:{tenantId:"b",permissions:["read","publish","activate","invoke"]}}};
- const hq=await createStation(resolveConfig({role:"headquarters",host:"127.0.0.1",port:hqPort,stationDir:"hq",runRunners:false,auth:{username:"operator",password:"fixture-hq-only",keyStorage},network:{stationId:"hq",adapter:new StationNetworkMemoryAdapter()},registry:{tenants}}),root);stations.push(hq);await hq.start();
+ const hq=await createStation(resolveConfig({role:"headquarters",host:"127.0.0.1",port:hqPort,stationDir:"hq",runRunners:false,auth:{username:"operator",password:randomBytes(24).toString("hex"),keyStorage},network:{stationId:"hq",adapter:new StationNetworkMemoryAdapter()},registry:{tenants}}),root);stations.push(hq);await hq.start();
  const base=`http://127.0.0.1:${hqPort}/api/v1/tenant/registry`;
  async function request(key:string,path:string,method="GET",body?:unknown,expected=200){const response=await fetch(base+path,{method,headers:{authorization:`Bearer ${key}`,"content-type":"application/json"},...(body===undefined?{}:{body:Buffer.isBuffer(body)?new Uint8Array(body):JSON.stringify(body)})});const result=await response.json();assert.equal(response.status,expected,JSON.stringify(result));return result.data;}
  const published=new Map<string,string>();

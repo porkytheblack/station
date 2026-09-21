@@ -224,6 +224,16 @@ Manager operations reject overlapping work on a session with `busy`. Direct adap
 
 Shutdown stops admission, closes late opens, interrupts browsers and releases recording/profile ownership after cleanup. Bun uses an owned POSIX process group and forced termination fallback. Windows process-tree behavior is not validated. Killing the controller abruptly cannot run its JavaScript cleanup; its supervisor must reap remaining processes.
 
+Direct navigation and new-page URLs accept only absolute HTTP(S) URLs without
+embedded credentials, plus `about:blank`. Local files, executable URLs and browser
+internal pages are rejected. Playwright also checks document requests and closes
+unexpected non-web navigations, including popup/frame destinations. Ordinary
+`about:srcdoc` frames and Chromium's internal network-error page are allowed;
+this is not a domain/IP egress firewall. Host Playwright launches Chromium with a
+fresh allowlisted environment and a private temporary home, excluding worker
+secrets and loader overrides. This protection does not turn the host adapter into
+an operating-system security boundary; use isolated workers for untrusted tenants.
+
 Browser processes can reach the worker's network and filesystem permissions. Apply tenant authorization and network policy before exposing control to callers. Persistent profiles contain credentials. This package does not certify untrusted multi-tenant isolation, crash-consistent network filesystems, unrestricted deployment platforms or a Bun speed advantage.
 
 ## Verification

@@ -42,7 +42,7 @@ station images pull|install REFERENCE
 station images run REFERENCE EXPORT [--input JSON|@FILE] [--station ID]
 station images publish MANIFEST --artifacts-dir DIRECTORY
 station images tag NAME --tag TAG --digest SHA256
-station deployments list|inspect|stage|activate|rollback|drain|rollout|run [ID] [--json JSON|@FILE]
+station deployments list|inspect|stage|activate|rollback|drain|rollout|rollout-cancel|run [ID] [--json JSON|@FILE]
 station sandbox upload ID --station ID --file LOCAL --path REMOTE [--parents]
 station sandbox download ID --station ID --path REMOTE --out LOCAL
 station browser upload ID --station ID --file LOCAL --selector CSS [--mime TYPE]
@@ -158,7 +158,7 @@ export async function run(args: ParsedArgs, store = new ContextStore()) {
       launchArgs = ["--host", "127.0.0.1", "--port", String(port), ...(config ? ["--config", resolve(config)] : [])];
     } else {
       const { selected } = await selectedClient(store, args);
-      env.STATION_DAEMON_URL = selected.connection.url; env.PORT = String(port); env.HOSTNAME = "127.0.0.1";
+      env.STATION_DAEMON_URL = selected.connection.url; env.PORT = String(port); env.STATION_DASHBOARD_HOST = "127.0.0.1";
       // The dashboard has its own daemon login. Never inject a CLI token into web assets.
     }
     output(await startLocal({ kind, instance, entrypoint: entrypoint(kind === "daemon" ? "station-daemon" : "station-dashboard"), args: launchArgs, cwd: process.cwd(), endpoint, env, home })); return;
@@ -219,8 +219,13 @@ export async function run(args: ParsedArgs, store = new ContextStore()) {
     if (action === "list") output(await client.request("GET", base));
     else if (action === "inspect") output(await client.request("GET", `${base}/${encodeURIComponent(required(resource, "deployment id"))}`));
     else if (action === "stage") output(await client.request("POST", base, await jsonInput(value(args, "json"))));
+    else if (action === "rollout-cancel") {
+      const body=await jsonInput(value(args,"json"));
+      if(!body||typeof body!=="object"||Array.isArray(body)||typeof body.rolloutId!=="string"||!Number.isSafeInteger(body.expectedRevision)||Object.keys(body).some(k=>!["rolloutId","expectedRevision"].includes(k)))throw new Error("rollout-cancel requires rolloutId and expectedRevision JSON fields.");
+      output(await client.request("POST",`${base}/${encodeURIComponent(required(resource,"deployment id"))}/rollouts/${encodeURIComponent(body.rolloutId)}/cancel`,{expectedRevision:body.expectedRevision}));
+    }
     else if (["activate", "rollback", "drain", "rollout", "run"].includes(action)) output(await client.request("POST", `${base}/${encodeURIComponent(required(resource, "deployment id"))}/${action}`, await jsonInput(value(args, "json"))));
-    else throw new Error("Use deployments list, inspect, stage, activate, rollback, drain, rollout or run.");
+    else throw new Error("Use deployments list, inspect, stage, activate, rollback, drain, rollout, rollout-cancel or run.");
     return;
   }
   if (command === "api") {

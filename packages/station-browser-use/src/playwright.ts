@@ -1,3 +1,4 @@
+import { browserEnvironment, navigationUrl, permittedDocument } from "./navigation.js";
 import { commandLocator, locatorFor, boundedResult, inspect } from "./targeting.js";
 import { PlaywrightTools } from "./playwright-tools.js";
 import { managedSession, validateTimeout } from "./session.js";
@@ -67,7 +68,7 @@ export class PlaywrightBrowserAdapter implements BrowserAdapter {
     let closeProcess: (() => Promise<void>) | undefined;
     try {
       const traceRoot = join(downloadsPath, "traces");
-      const settings = { tracesDir: traceRoot, headless: true, executablePath: this.options.executablePath, timeout: timeoutMs, proxy: this.options.proxy, downloadsPath };
+      const settings = { env: browserEnvironment(downloadsPath), tracesDir: traceRoot, headless: true, executablePath: this.options.executablePath, timeout: timeoutMs, proxy: this.options.proxy, downloadsPath };
       const viewport = options.viewport ?? this.options.viewport ?? { width: 1280, height: 720 };
       const remote = await this.connectRemote(options, downloadsPath);
       if (remote) {
@@ -85,6 +86,13 @@ export class PlaywrightBrowserAdapter implements BrowserAdapter {
       }
       // Let Playwright reject an ordinary missing/blocked target before the outer
       // watchdog treats the operation as a hung browser and closes the session.
+      // Route every document request, including link clicks, popups and redirects.
+      // Chromium also prevents HTTP pages from loading local files; the frame
+      // watcher closes destinations that do not pass through request routing.
+      await context.route("**/*", async route => {
+        if (route.request().isNavigationRequest() && !permittedDocument(route.request().url())) { await route.abort("blockedbyclient"); return; }
+        await route.continue();
+      });
       context.setDefaultTimeout(Math.max(1, Math.floor(timeoutMs * 0.75)));
       const pages = new Map<string, Page>();
       const maxPages = this.options.maxPages ?? 8;
@@ -104,6 +112,8 @@ export class PlaywrightBrowserAdapter implements BrowserAdapter {
       const tools = new PlaywrightTools(context, traceRoot, () => maxBytes - artifactBytes, capacity, addArtifact);
       const register = (page: Page) => {
         if ([...pages.values()].includes(page)) return;
+        if (!permittedDocument(page.url())) { void page.close().catch(() => undefined); return; }
+        page.on("framenavigated", frame => { if (!permittedDocument(frame.url())) void page.close().catch(() => undefined); });
         if (pages.size >= maxPages) { void page.close().catch(() => undefined); return; }
         const id = randomUUID(); pages.set(id, page); selected ||= id; tools.register(page); this.traffic.watch(page);
         page.on("close", () => { pages.delete(id); if (selected === id) selected = pages.keys().next().value ?? ""; });
@@ -150,7 +160,7 @@ export class PlaywrightBrowserAdapter implements BrowserAdapter {
             if (pages.size >= maxPages) throw new BrowserUseError("capacity", "Page capacity reached.");
             const next = await context!.newPage(); register(next);
             selected = [...pages].find(([, value]) => value === next)![0];
-            if (command.url) await next.goto(command.url);
+            if (command.url) await next.goto(navigationUrl(command.url));
             return (await listPages()).find((entry) => entry.id === selected);
           }
           case "selectPage": if (!pages.has(command.pageId)) throw new BrowserUseError("not_found", "Page not found."); selected = command.pageId; return null;
@@ -196,7 +206,7 @@ export class PlaywrightBrowserAdapter implements BrowserAdapter {
       const readonly = new Set(["pages", "selectPage", "closePage", "inspect", "accessibility", "content", "diagnostics", "downloadRead", "downloadDelete", "traceStart", "traceStop"]);
       return managedSession({
         setHumanControl: (active) => { humanControl = active; },
-        navigate: (url) => guarded(async () => { await current().goto(url); }, url), evaluate: (expression) => guarded(() => current().evaluate(expression)), click: (selector) => guarded(() => current().locator(selector).click()),
+        navigate: (url) => guarded(async () => { await current().goto(navigationUrl(url)); }, url), evaluate: (expression) => guarded(() => current().evaluate(expression)), click: (selector) => guarded(() => current().locator(selector).click()),
         type: (text) => guarded(() => current().keyboard.insertText(text)), press: (key) => guarded(() => current().keyboard.press(key)), screenshot: () => current().screenshot({ type: "png" }),
         execute: (input) => { const command = validateBrowserCommand(input); return readonly.has(command.op) ? execute(command) : guarded(() => execute(command), command.op === "newPage" ? command.url : undefined); },
         close: () => closing ??= (async () => { try { await closeProcess!(); } finally { try { await tools.close(); } finally { release?.(); artifacts.clear(); rmSync(downloadsPath, { recursive: true, force: true }); } } })(),

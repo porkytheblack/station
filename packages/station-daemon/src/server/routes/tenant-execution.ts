@@ -13,8 +13,20 @@ const safeBackend = (capabilities: unknown): boolean => {
 export function validateExecutionTenancy(config: Pick<StationConfig, "execution" | "role" | "auth">): void {
   const e = config.execution;
   if (!e) return;
+  if (e.targets !== undefined) {
+    if (config.role !== "headquarters" || !e.targets || typeof e.targets !== "object" || Array.isArray(e.targets) || Object.keys(e.targets).length > 10000) throw new Error("execution.targets requires an operator-owned Headquarters worker map.");
+    const tokens = new Set([e.token]);
+    for (const [worker, target] of Object.entries(e.targets)) {
+      if (!tenantPattern.test(worker) || !target || typeof target.token !== "string" || target.token.length < 32 || tokens.has(target.token)) throw new Error("Execution targets require distinct worker credentials (not the Headquarters token).");
+      tokens.add(target.token);
+      let url: URL; try { url = new URL(target.endpoint); } catch { throw new Error("Invalid execution target endpoint."); }
+      if ((url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))) || url.username || url.password || url.search || url.hash || url.pathname !== "/") throw new Error("Execution target endpoints require HTTPS (loopback HTTP allowed) and no path or credentials.");
+      if (target.tenantId !== undefined && !tenantPattern.test(target.tenantId)) throw new Error("Invalid execution target tenant.");
+    }
+  }
   if (e.tenantId !== undefined) {
     if (typeof e.tenantId !== "string" || !tenantPattern.test(e.tenantId) || config.role !== "station" || e.tenants) throw new Error("execution.tenantId requires a dedicated station worker and a valid tenant ID.");
+    if (!config.auth) throw new Error("Tenant workers require independent authenticated operator APIs.");
     if (!e.sandbox && !e.browser) throw new Error("Tenant workers require an execution backend.");
     if (e.sandbox && (!safeBackend(e.sandbox.capabilities) || typeof e.sandbox.bindTenant !== "function")) throw new Error("Tenant sandbox workers require isolated and networkRestricted capabilities plus persistent tenant binding.");
     if (e.browser && (e.browser.statePersistence !== "disk" || e.browser.recordingPersistence !== "disk")) throw new Error("Tenant browser workers require durable stateRootDir and recordingRootDir storage.");
@@ -22,6 +34,7 @@ export function validateExecutionTenancy(config: Pick<StationConfig, "execution"
   }
   if (e.tenants !== undefined) {
     if (config.role !== "headquarters" || !config.auth || e.sandbox || e.browser) throw new Error("execution.tenants requires authenticated Headquarters with execution on dedicated workers.");
+    if (!e.targets) throw new Error("Tenant execution requires operator-pinned targets with distinct worker credentials.");
     const mappings = e.tenants?.apiKeyTenants;
     if (!mappings || typeof mappings !== "object" || Array.isArray(mappings) || Object.keys(e.tenants).some((key) => !["apiKeyTenants", "limits"].includes(key))) throw new Error("Invalid execution tenant key mapping.");
     if (Object.keys(mappings).length > 10_000) throw new Error("Execution tenant mapping exceeds 10000 keys.");
@@ -43,14 +56,16 @@ function tenantFor(c: Context, mappings: ReadonlyMap<string, string>): string | 
 }
 function eligible(node: StationNode, deps: ExecutionDeps, tenantId: string): boolean {
   const execution = node.definitions.execution;
-  return node.networkId === deps.networkId && node.role === "station" && execution?.tenantId === tenantId
+  const target = Object.hasOwn(deps.execution.targets ?? {}, node.id) ? deps.execution.targets![node.id] : undefined;
+  return target?.tenantId === tenantId && node.networkId === deps.networkId && node.role === "station" && execution?.tenantId === tenantId
     && Boolean(execution.sandbox || execution.browser)
     && (!execution.sandbox || safeBackend(execution.sandbox.capabilities))
     && (!execution.browser || safeBackend(execution.browser.capabilities));
 }
-function reachable(node: StationNode): boolean {
-  if (!node.endpoint) return false;
-  try { const u = new URL(node.endpoint); return ["http:", "https:"].includes(u.protocol) && !u.username && !u.password && !u.search && !u.hash; }
+function reachable(node: StationNode, deps: ExecutionDeps): boolean {
+  const endpoint = deps.execution.targets?.[node.id]?.endpoint;
+  if (!endpoint) return false;
+  try { const u = new URL(endpoint); return ["http:", "https:"].includes(u.protocol) && !u.username && !u.password && !u.search && !u.hash; }
   catch { return false; }
 }
 
@@ -93,7 +108,7 @@ export function tenantExecutionRoutes(deps: ExecutionDeps): Hono {
         capabilities: { sandbox: Boolean(node.definitions.execution?.sandbox), browser: Boolean(node.definitions.execution?.browser) },
         backends: { sandbox: node.definitions.execution?.sandbox?.backend, browser: node.definitions.execution?.browser?.backend },
         features: { sandbox: node.definitions.execution?.sandbox?.capabilities, browser: node.definitions.execution?.browser?.capabilities },
-        available: reachable(node) && node.status !== "offline" && node.leaseExpiresAt.getTime() > Date.now(),
+        available: reachable(node, deps) && node.status !== "offline" && node.leaseExpiresAt.getTime() > Date.now(),
       })) });
     } catch (error) { return failure(c, error); }
   });

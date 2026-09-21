@@ -1481,12 +1481,12 @@ pnpm exec stationd --config path.ts   # Custom config file
 Install `station-dashboard` separately, then start it in another terminal:
 
 ```sh
-STATION_DAEMON_URL=http://127.0.0.1:4400 PORT=4401 HOSTNAME=127.0.0.1 pnpm exec station-dashboard
+STATION_DAEMON_URL=http://127.0.0.1:4400 PORT=4401 STATION_DASHBOARD_HOST=127.0.0.1 pnpm exec station-dashboard
 ```
 
 The dashboard URL is `http://127.0.0.1:4401`. For a remote daemon, configure its
 HTTPS URL instead. Daemon `port` and `host` configure its API listener; dashboard
-`PORT` and `HOSTNAME` configure the independent UI listener. Closing either
+`PORT` and `STATION_DASHBOARD_HOST` configure the independent UI listener. Closing either
 client does not stop the daemon. Do not use the removed daemon `open` setting,
 `--no-open` flag, or a third `nextPort` argument to `createStation`.
 
@@ -1651,7 +1651,11 @@ interface LogStorageAdapter {
 class FileLogStorage implements LogStorageAdapter {
   constructor(options: {
     filePath: string;
-    onError?: (err: unknown) => void;  // surfaces background write failures
+    onError?: (err: unknown) => void;  // surfaces write failures / dropped overflow
+    maxFileBytes?: number;           // 64 MiB per segment; current + previous
+    maxPendingBytes?: number;        // 4 MiB pending writes
+    maxQueryEntries?: number;        // newest 10000 matching records
+    maxQueryBytes?: number;          // newest 4 MiB of matching records
   });
 }
 
@@ -1660,7 +1664,7 @@ class MemoryLogStorage implements LogStorageAdapter {
 }
 ```
 
-`FileLogStorage` is the default — append-only JSONL at `<dataDir>/station-logs.jsonl`, single-process only. The default `onError` (when wired through `createStation`) routes failures to `console.error`. `MemoryLogStorage` is for tests; logs do not survive restart. The legacy SQLite-backed log store has been removed; an old `station-logs.db` triggers a startup warning from `createStation`.
+`FileLogStorage` streams queries without a full-memory startup index, rejects lines over64KiB, bounds pending writes/results and rotates to one previous segment. An existing oversized legacy file may be retained once as the previous segment until the next rotation; reads remain bounded. It is the default — JSONL at `<dataDir>/station-logs.jsonl`, single-process only. The default `onError` (when wired through `createStation`) routes failures to `console.error`. `MemoryLogStorage` is for tests; logs do not survive restart. The legacy SQLite-backed log store has been removed; an old `station-logs.db` triggers a startup warning from `createStation`.
 
 #### Configuring custom storage
 

@@ -37,6 +37,11 @@ export function imageRegistryRoutes(registry: ImageRegistry, source?: ImageSourc
       if (!body || typeof body.alias !== 'string' || Object.keys(body).some(k => !['alias', 'input', 'environment'].includes(k))) return c.json({ error: 'invalid_deployment' }, 400);
       return c.json({ data: await controller.runDeployment(c.req.param('id'), body.alias, body.input ?? {}, body.environment) }, 201);
     });
+    app.post('/registry/deployments/:id/rollouts/:rolloutId/cancel', async c => {
+      const body=await c.req.json();
+      if(!body||!Number.isSafeInteger(body.expectedRevision)||Object.keys(body).some(k=>k!=='expectedRevision'))return c.json({error:'invalid_rollout'},400);
+      return c.json({data:await controller.deployments.cancelRollout(c.req.param('id'),c.req.param('rolloutId'),body.expectedRevision)});
+    });
     app.post('/registry/deployments/:id/rollout', async c => {
       const body = await c.req.json();
       if (!body || typeof body.operationId !== 'string' || typeof body.sourceInstance !== 'string' || typeof body.generation !== 'string' || typeof body.alias !== 'string' || !Number.isSafeInteger(body.expectedRevision) || Object.keys(body).some(k => !['operationId', 'sourceInstance', 'generation', 'alias', 'expectedRevision'].includes(k))) return c.json({ error: 'invalid_rollout' }, 400);

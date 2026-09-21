@@ -45,10 +45,10 @@ import { runRoutes } from "./routes/runs.js";
 import { broadcastRoutes } from "./routes/broadcasts.js";
 import { beaconRoutes } from "./routes/beacons.js";
 import { KeyStore, FileKeyStorage } from "./auth/keys.js";
-import { verifySessionToken, verifyCredentials, createSessionToken, type SessionConfig } from "./auth/session.js";
+import { verifySessionToken, verifyCredentials, createSessionToken, sessionCookie, type SessionConfig } from "./auth/session.js";
 import { authResolver } from "./middleware/auth.js";
 import { requireScope } from "./middleware/scope-guard.js";
-import { rateLimiter } from "./middleware/rate-limit.js";
+import { rateLimiter, validateTrustedProxies } from "./middleware/rate-limit.js";
 import { v1HealthRoutes } from "./routes/v1/health.js";
 import { v1SignalRoutes } from "./routes/v1/signals.js";
 import { v1RunRoutes } from "./routes/v1/runs.js";
@@ -107,7 +107,10 @@ export async function createStation(config: StationConfig, cwd: string): Promise
   // Verify retained ownership and backend readiness before advertising or serving requests.
   let dataDir: string;
   try {
+    validateTrustedProxies(config.trustedProxies);
+    if (config.auth?.secureCookies !== undefined && typeof config.auth.secureCookies !== 'boolean') throw new Error('auth.secureCookies must be boolean');
     validateExecutionTenancy(config);
+    if (config.execution?.targets) config = { ...config, execution: { ...config.execution, targets: structuredClone(config.execution.targets) } };
     if (config.registry?.tenantId !== undefined) {
       const tenantId = config.registry.tenantId;
       if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(tenantId) || config.role !== 'station' || !config.auth || config.registry.execution?.backend.kind !== 'docker' || config.registry.tenants) throw new Error('Tenant image workers require a dedicated authenticated Station with Docker image execution');
@@ -170,6 +173,7 @@ export async function createStation(config: StationConfig, cwd: string): Promise
       username: config.auth.username,
       password: config.auth.password,
       sessionTtlMs: config.auth.sessionTtlMs,
+      secureCookies: config.auth.secureCookies,
     };
   }
 
@@ -269,7 +273,7 @@ export async function createStation(config: StationConfig, cwd: string): Promise
       networkId: config.network.id,
       stationLabels: config.network.labels,
       canClaim,
-      canRenew: admission?.canClaim,
+      canRenew: admission?.canRenew,
     });
 
     if (broadcastsDir || broadcastAdapter) {
@@ -311,7 +315,7 @@ export async function createStation(config: StationConfig, cwd: string): Promise
         stationLabels: config.network.labels,
         leaseDurationMs: config.network.leaseDurationMs,
         canClaim,
-        canRenew: admission?.canClaim,
+        canRenew: admission?.canRenew,
       });
     }
   }
@@ -347,7 +351,7 @@ export async function createStation(config: StationConfig, cwd: string): Promise
   });
 
   // Brute-force protection for the dashboard login (the v1 login is limited below).
-  app.use("/api/auth/login", rateLimiter({ windowMs: 60_000, max: 10 }));
+  app.use("/api/auth/login", rateLimiter({ trustedProxies: config.trustedProxies, windowMs: 60_000, max: 10 }));
 
   // ── Dashboard auth routes (always accessible) ──────────────────────
   app.get("/api/auth/check", async (c) => {
@@ -377,13 +381,12 @@ export async function createStation(config: StationConfig, cwd: string): Promise
       return c.json({ error: "unauthorized", message: "Invalid credentials." }, 401);
     }
     const token = createSessionToken(sessionConfig);
-    const ttlSeconds = Math.floor((sessionConfig.sessionTtlMs ?? 86_400_000) / 1000);
-    c.header("Set-Cookie", `station_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${ttlSeconds}`);
+    c.header("Set-Cookie", sessionCookie(token, sessionConfig));
     return c.json({ data: { ok: true } });
   });
 
   app.post("/api/auth/logout", async (c) => {
-    c.header("Set-Cookie", "station_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
+    c.header("Set-Cookie", sessionCookie("", sessionConfig));
     return c.json({ data: { ok: true } });
   });
 
@@ -417,7 +420,7 @@ export async function createStation(config: StationConfig, cwd: string): Promise
   // Public v1 routes (no auth required)
   app.route("/api/v1", v1HealthRoutes({ signalAdapter, broadcastAdapter }));
   if (enrollmentAuthority) {
-    for (const path of ['join', 'admission', 'leave']) app.use(`/api/v1/network/${path}`, rateLimiter({ windowMs: 60_000, max: path === 'admission' ? 6000 : 30 }));
+    for (const path of ['join', 'admission', 'leave']) app.use(`/api/v1/network/${path}`, rateLimiter({ trustedProxies: config.trustedProxies, windowMs: 60_000, max: path === 'admission' ? 6000 : 30 }));
     app.route('/api/v1', v1EnrollmentWorkerRoutes(enrollmentAuthority));
   }
 
@@ -425,7 +428,7 @@ export async function createStation(config: StationConfig, cwd: string): Promise
   // is scoped to /auth/* — a "/*" limiter here would run for every /api/v1
   // route mounted after this app and throttle the whole API to 10 req/min.
   const authApp = new Hono();
-  authApp.use("/auth/*", rateLimiter({ windowMs: 60_000, max: 10 }));
+  authApp.use("/auth/*", rateLimiter({ trustedProxies: config.trustedProxies, windowMs: 60_000, max: 10 }));
   authApp.route("/", v1AuthRoutes({ sessionConfig }));
   app.route("/api/v1", authApp);
 
@@ -560,7 +563,7 @@ export async function createStation(config: StationConfig, cwd: string): Promise
 
   v1.route("/", executionCatalogRoutes({
     adapter: networkAdapter, networkId: config.network.id, stationId: config.network.stationId,
-    role: config.role, enabled: Boolean(config.execution),
+    role: config.role, enabled: Boolean(config.execution), targets: config.execution?.targets,
   }));
   if (config.execution) {
     const executionDeps = {
@@ -639,7 +642,7 @@ export async function createStation(config: StationConfig, cwd: string): Promise
     if (heartbeating) return;
     heartbeating = true;
     try {
-      if (admission && !await admission.canClaim()) {
+      if (admission && !await admission.canRenew()) {
         await networkAdapter.heartbeat(config.network.stationId, stationSnapshot('offline'));
         return;
       }

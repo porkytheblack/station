@@ -1,3 +1,4 @@
+import { navigationUrl } from "./navigation.js";
 export interface BrowserViewport { width: number; height: number }
 export interface BrowserOpenOptions { profileId?: string; viewport?: BrowserViewport; idleTimeoutMs?: number }
 export interface BrowserProfile { id: string; inUse: boolean }
@@ -81,7 +82,7 @@ export function validateBrowserCommand(input: unknown): BrowserCommand {
   if (value.op === "check" && typeof value.checked !== "boolean") return invalid();
   if (value.op === "scroll" && [value.x, value.y].some((n) => typeof n !== "number" || !Number.isFinite(n) || Math.abs(n) > 10_000_000)) return invalid();
   if (value.op === "waitFor" && value.state !== undefined && !["attached", "detached", "visible", "hidden"].includes(value.state as string)) return invalid();
-  if (value.op === "newPage" && value.url !== undefined && !text(value.url)) return invalid();
+  if (value.op === "newPage" && value.url !== undefined) { if (!text(value.url)) return invalid(); navigationUrl(value.url); }
   if (keys.includes("pageId") && !identifier(value.pageId)) return invalid();
   if (keys.includes("artifactId") && !identifier(value.artifactId)) return invalid();
   if (value.op === "upload") {

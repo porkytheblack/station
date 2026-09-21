@@ -52,7 +52,7 @@ const number = (input: number | undefined, fallback: number, max = 2_147_483_647
   if (!Number.isSafeInteger(value) || value < 1 || value > max) fail("invalid_input", "Container limits must be positive bounded integers.");
   return value;
 };
-const JOB = `printf '%s' "$$" > "/tmp/station-$1.pid"; if [ -e "/tmp/station-$1.cancel" ]; then exit 130; fi; cd -- "$2" || exit 127; exec /bin/bash --noprofile --norc -c "$3"`;
+const JOB = `printf 'station-session:%s\\n' "$$"; cd -- "$2" || exit 127; exec /bin/bash --noprofile --norc -c "$3"`;
 
 
 /** Linux container isolation on an operator-managed engine. No host-process fallback. */
@@ -84,6 +84,9 @@ export class ContainerSandboxAdapter implements SandboxAdapter {
   private readonly creations = new Set<Promise<Sandbox>>();
   private closed = false;
   private broken = false;
+  private readonly leaders = new Map<string, number>();
+  private readonly terminations = new Map<string, Promise<void>>();
+  private readonly recoveries = new Map<string, Promise<void>>();
   private closing?: Promise<void>;
 
   constructor(private readonly options: ContainerSandboxOptions) {
@@ -244,7 +247,23 @@ export class ContainerSandboxAdapter implements SandboxAdapter {
     if (this.closed || this.broken) fail("unavailable", "Container controller is unavailable.");
     const workspace = this.workspaces.get(id);
     if (!uuid.test(id) || !workspace) return fail("not_found", "Sandbox not found.");
-    if (admission && workspace.unavailable) fail("unavailable", "Workspace stopped after a cleanup failure. Restart its controller to reconcile it.");
+    if (admission && workspace.unavailable && this.terminations.has(id)) {
+      let recovery = this.recoveries.get(id);
+      if (!recovery) {
+        recovery = (async () => {
+          await this.terminations.get(id);
+          await Promise.all([...this.active.values()].filter((entry) => entry.run.sandboxId === id).map((entry) => entry.done));
+          await Promise.all([...this.terminalStates.values()].filter((state) => state.meta.sandboxId === id).map((state) => state.done));
+          if (this.closed) fail("unavailable", "Container controller is closed.");
+          await this.provision(workspace);
+          this.terminations.delete(id);
+        })();
+        this.recoveries.set(id, recovery);
+        void recovery.finally(() => this.recoveries.delete(id)).catch(() => {});
+      }
+      await recovery;
+    }
+    if (admission && workspace.unavailable) fail("unavailable", "Workspace stopped for cancellation or containment. Restart its controller to reconcile it.");
     return workspace;
   }
   private public(workspace: Workspace): Sandbox { return { id: workspace.id, createdAt: workspace.createdAt, backend: workspace.backend }; }
@@ -266,8 +285,12 @@ export class ContainerSandboxAdapter implements SandboxAdapter {
       this.workspaces.set(id, workspace);
       return this.public(workspace);
     } catch (error) {
-      // Retain the intent record so a restarted controller can reconcile partial provisioning.
-      this.broken = true;
+      // Engine launch errors are local to this workspace. Remove only verified owned resources;
+      // if cleanup is unavailable, retain a quarantined intent for explicit reconciliation.
+      workspace.unavailable = true;
+      this.workspaces.set(id, workspace);
+      try { await this.destroy(id); }
+      catch { this.write(join(this.root, id, "workspace.json"), workspace); }
       throw error;
     } finally { this.creating--; }
   }
@@ -280,7 +303,7 @@ export class ContainerSandboxAdapter implements SandboxAdapter {
     if (container) { this.checkOwner(container, workspace); await this.call(["rm", "-f", workspace.container]); }
     const volume = await this.inspect("volume", workspace.volume);
     if (volume) { this.checkOwner(volume, workspace, true); await this.call(["volume", "rm", workspace.volume]); }
-    rmSync(join(this.root, id), { recursive: true }); this.workspaces.delete(id);
+    rmSync(join(this.root, id), { recursive: true }); this.workspaces.delete(id); this.terminations.delete(id); this.recoveries.delete(id);
     for (const [key, state] of this.serviceStates) if (state.meta.sandboxId === id) this.serviceStates.delete(key);
     for (const [key, state] of this.terminalStates) if (state.meta.sandboxId === id) this.terminalStates.delete(key);
   }
@@ -303,14 +326,40 @@ export class ContainerSandboxAdapter implements SandboxAdapter {
     if (path !== "/home/node/workspace" && !path.startsWith("/home/node/workspace/")) fail("invalid_input", "cwd must be inside the workspace.");
     return path;
   }
-  private async cleanup(workspace: Workspace, runId: string) {
-    try { await this.call(["exec", workspace.container, "/usr/local/bin/node", "-e", STOP_SCRIPT, runId]); }
-    catch {
-      // Disconnecting docker exec does not kill the guest command. Fail closed at the workspace boundary.
-      workspace.unavailable = true;
-      this.write(join(this.root, workspace.id, "workspace.json"), workspace);
-      await this.call(["kill", workspace.container]);
+  private terminateWorkspace(workspace: Workspace): Promise<void> {
+    const existing = this.terminations.get(workspace.id);
+    if (existing) return existing;
+    workspace.unavailable = true;
+    this.write(join(this.root, workspace.id, "workspace.json"), workspace);
+    for (const entry of this.active.values()) if (entry.run.sandboxId === workspace.id && entry.run.status === "running") entry.run.status = "interrupted";
+    for (const state of this.serviceStates.values()) if (state.meta.sandboxId === workspace.id) {
+      clearTimeout(state.timer); state.timer = undefined; if (!this.closed) state.desired = false;
+      state.meta.status = "interrupted"; this.saveService(state);
     }
+    for (const state of this.terminalStates.values()) if (state.meta.sandboxId === workspace.id && state.meta.status === "running") {
+      state.meta.status = "interrupted"; this.persistTerminal(state);
+    }
+    const operation = (async () => {
+      const container = await this.inspect("container", workspace.container);
+      if (container) {
+        this.checkOwner(container, workspace);
+        if (container.State?.Running) await this.call(["kill", workspace.container]);
+        const stopped = await this.inspect("container", workspace.container);
+        if (stopped?.State?.Running) fail("unavailable", "Workspace containment could not be verified.");
+      }
+    })();
+    this.terminations.set(workspace.id, operation);
+    return operation;
+  }
+  private async cleanup(workspace: Workspace, runId: string) {
+    if (this.terminations.has(workspace.id)) return this.terminations.get(workspace.id);
+    const leader = this.leaders.get(runId);
+    this.leaders.delete(runId);
+    // Session IDs come from a trusted wrapper before workload code starts, never guest files.
+    try {
+      if (!leader) throw new Error("No trusted session identity");
+      await this.call(["exec", workspace.container, "/usr/local/bin/node", "-e", STOP_SCRIPT, String(leader)]);
+    } catch { await this.terminateWorkspace(workspace); }
   }
   async exec(id: string, input: CommandInput): Promise<CommandRun> { return this.startCommand(id, input); }
   private async startCommand(id: string, input: CommandInput, service = false): Promise<CommandRun> {
@@ -321,7 +370,7 @@ export class ContainerSandboxAdapter implements SandboxAdapter {
     if (this.active.size >= this.maxConcurrent) fail("capacity", "Worker command capacity reached.");
     const run: CommandRun = { id: randomUUID(), sandboxId: id, status: "running", stdout: "", stderr: "", truncated: false, exitCode: null, startedAt: new Date().toISOString() };
     this.writeRun(run);
-    const child = spawn(this.executable, ["exec", workspace.container, "/usr/bin/setsid", "--wait", "/bin/bash", "-c", JOB, "station-job", run.id, cwd, input.command], { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(this.executable, ["exec", workspace.container, "/usr/bin/setsid", "--wait", "/bin/bash", "--noprofile", "--norc", "-p", "-c", JOB, "station-job", run.id, cwd, input.command], { stdio: ["ignore", "pipe", "pipe"] });
     let bytes = 0;
     let dirty = false;
     const buffers = { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
@@ -334,14 +383,27 @@ export class ContainerSandboxAdapter implements SandboxAdapter {
       dirty = true;
       if (retained.length < chunk.length) run.truncated = true;
     };
-    child.stdout!.on("data", (chunk: Buffer) => append("stdout", chunk));
+    let header = Buffer.alloc(0);
+    let identified = false;
+    child.stdout!.on("data", (chunk: Buffer) => {
+      if (identified) { append("stdout", chunk); return; }
+      header = Buffer.concat([header, chunk]);
+      const end = header.indexOf(10);
+      if (end < 0 && header.length <= 64) return;
+      const match = end >= 0 && /^station-session:([1-9][0-9]*)$/.exec(header.subarray(0, end).toString("ascii"));
+      if (!match || !Number.isSafeInteger(Number(match[1])) || Number(match[1]) <= 1) {
+        void stop("interrupted").catch(() => { this.broken = true; }); return;
+      }
+      this.leaders.set(run.id, Number(match[1])); identified = true;
+      append("stdout", header.subarray(end + 1)); header = Buffer.alloc(0);
+    });
     child.stderr!.on("data", (chunk: Buffer) => append("stderr", chunk));
     let finish!: () => void;
     const done = new Promise<void>((resolveDone) => { finish = resolveDone; });
     let stopping: Promise<void> | undefined;
     const stop = (status: CommandRun["status"]) => stopping ??= (async () => {
       if (run.status === "running") run.status = status;
-      try { await this.cleanup(workspace, run.id); }
+      try { await this.terminateWorkspace(workspace); }
       finally { child.kill("SIGKILL"); }
     })();
     const entry: Active = { run, child, done, finish, stop };
@@ -362,7 +424,7 @@ export class ContainerSandboxAdapter implements SandboxAdapter {
         if (run.status === "running") run.status = code === 0 ? "completed" : "failed";
         run.finishedAt = new Date().toISOString();
         try { this.writeRun(run); this.prune(id); } catch { this.broken = true; }
-        this.active.delete(run.id); finish();
+        this.leaders.delete(run.id); this.active.delete(run.id); finish();
       })().catch(() => { this.broken = true; this.active.delete(run.id); finish(); });
     });
     return { ...run };
@@ -426,7 +488,7 @@ export class ContainerSandboxAdapter implements SandboxAdapter {
         state.runId = undefined;
         Object.assign(state.meta, { stdout: completed.stdout, stderr: completed.stderr, truncated: completed.truncated, exitCode: completed.exitCode, finishedAt: completed.finishedAt });
         const attempt = state.meta.history.at(-1); if (attempt) { attempt.finishedAt = completed.finishedAt; attempt.exitCode = completed.exitCode; }
-        if (this.closed) state.meta.status = "interrupted";
+        if (this.closed || this.workspaces.get(state.meta.sandboxId)?.unavailable) state.meta.status = "interrupted";
         else if (state.desired && state.meta.restartCount < state.meta.restart.maxRestarts && (state.meta.restart.policy === "always" || (state.meta.restart.policy === "on-failure" && completed.exitCode !== 0))) {
           state.meta.restartCount++; state.meta.status = "restarting";
           state.timer = setTimeout(() => { state.timer = undefined; void this.launchService(state); }, state.meta.restart.delayMs);
@@ -482,8 +544,8 @@ export class ContainerSandboxAdapter implements SandboxAdapter {
     const entries = [...this.terminalStates.values()].filter((state) => state.meta.sandboxId === id && state.meta.status === "running");
     if (entries.length >= (this.options.maxTerminalsPerSandbox ?? 4)) fail("capacity", "Terminal capacity reached.");
     const terminalId = randomUUID();
-    const script = `printf '%s' "$$" > "/tmp/station-$1.pid"; if [ -e "/tmp/station-$1.cancel" ]; then exit 130; fi; cd -- "$2" || exit 127; exec /bin/bash --noprofile --norc -i`;
-    const terminal = this.pty!.spawn(this.executable, ["exec", "-it", "--env", "TERM=xterm-256color", workspace.container, "/bin/bash", "-c", script, "station-terminal", terminalId, this.cwd(input.cwd)], { name: "xterm-256color", cols, rows, cwd: this.root, env: process.env });
+    const script = `cd -- "$2" || exit 127; exec /bin/bash --noprofile --norc -i`;
+    const terminal = this.pty!.spawn(this.executable, ["exec", "-it", "--env", "TERM=xterm-256color", workspace.container, "/bin/bash", "--noprofile", "--norc", "-p", "-c", script, "station-terminal", terminalId, this.cwd(input.cwd)], { name: "xterm-256color", cols, rows, cwd: this.root, env: process.env });
     let finish!: () => void;
     const state: TerminalState = { meta: { id: terminalId, sandboxId: id, status: "running", cols, rows, startedAt: new Date().toISOString(), exitCode: null }, process: terminal, data: Buffer.alloc(0), startOffset: 0, nextOffset: 0, done: new Promise<void>((resolveDone) => { finish = resolveDone; }) };
     this.terminalStates.set(terminalId, state); this.persistTerminal(state);
@@ -504,7 +566,7 @@ export class ContainerSandboxAdapter implements SandboxAdapter {
     terminal.onExit(({ exitCode }) => {
       clearInterval(checkpoint);
       void this.cleanup(workspace, terminalId).catch(() => { this.broken = true; }).finally(() => {
-        state.meta.status = this.closed ? "interrupted" : "exited"; state.meta.exitCode = exitCode; state.meta.finishedAt = new Date().toISOString(); state.process = undefined;
+        state.meta.status = this.closed || workspace.unavailable ? "interrupted" : "exited"; state.meta.exitCode = exitCode; state.meta.finishedAt = new Date().toISOString(); state.process = undefined;
         try {
           this.persistTerminal(state);
           const history = [...this.terminalStates.values()].filter((item) => item.meta.sandboxId === id && item.meta.status !== "running").sort((a, b) => a.meta.startedAt.localeCompare(b.meta.startedAt));
@@ -531,7 +593,7 @@ export class ContainerSandboxAdapter implements SandboxAdapter {
   }
   async closeTerminal(id: string, terminalId: string) {
     const workspace = await this.check(id); const state = await this.terminalState(id, terminalId);
-    if (state.process) { await this.cleanup(workspace, terminalId); state.process.kill(); await state.done; }
+    if (state.process) { await this.terminateWorkspace(workspace); state.process.kill(); await state.done; }
   }
   close() {
     return this.closing ??= (async () => {

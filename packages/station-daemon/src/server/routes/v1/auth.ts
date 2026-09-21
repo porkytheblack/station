@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { verifyCredentials, createSessionToken, type SessionConfig } from "../../auth/session.js";
+import { verifyCredentials, createSessionToken, sessionCookie, type SessionConfig } from "../../auth/session.js";
 
 export interface V1AuthRouteDeps {
   sessionConfig?: SessionConfig;
@@ -25,20 +25,14 @@ export function v1AuthRoutes(deps: V1AuthRouteDeps) {
     }
 
     const token = createSessionToken(deps.sessionConfig);
-    const ttlSeconds = Math.floor(
-      (deps.sessionConfig.sessionTtlMs ?? 86_400_000) / 1000,
-    );
-    c.header(
-      "Set-Cookie",
-      `station_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${ttlSeconds}`,
-    );
+    c.header("Set-Cookie", sessionCookie(token, deps.sessionConfig));
     return c.json({ data: { ok: true } });
   });
 
   app.post("/auth/logout", async (c) => {
     c.header(
       "Set-Cookie",
-      "station_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0",
+      sessionCookie("", deps.sessionConfig),
     );
     return c.json({ data: { ok: true } });
   });

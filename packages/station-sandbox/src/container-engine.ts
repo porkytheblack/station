@@ -6,16 +6,27 @@ export async function engineCall(executable: string, args: string[], options: { 
     const child = spawn(executable, args, { stdio: ["pipe", "pipe", "pipe"] });
     const chunks: Buffer[] = [];
     let bytes = 0;
+    let diagnostic = "";
     let failed = false;
     const max = options.maxBytes ?? 2 * 1024 * 1024;
     const timer = setTimeout(() => { failed = true; child.kill("SIGKILL"); }, options.timeoutMs ?? 30_000);
     child.stdout.on("data", (chunk: Buffer) => { bytes += chunk.length; if (bytes > max) { failed = true; child.kill("SIGKILL"); } else chunks.push(chunk); });
     // Engine stderr often includes host paths or registry credentials; never return it to workloads.
-    child.stderr.resume();
+    child.stderr.on("data", (chunk: Buffer) => {
+      if (diagnostic.length < 8192) diagnostic += chunk.toString("utf8").slice(0, 8192 - diagnostic.length);
+    });
     child.on("error", () => { clearTimeout(timer); reject(new SandboxError("unavailable", "The container engine could not be started.")); });
     child.on("close", (code) => {
       clearTimeout(timer);
-      if (failed || code !== 0) reject(new SandboxError("unavailable", "The container engine operation failed or exceeded its limit."));
+      if (failed || code !== 0) {
+        // Classify bounded stderr; never echo arbitrary engine output, argv, credentials or paths.
+        const reason = failed ? "operation_limit" : /permission denied|access denied|unauthorized|denied:/.test(diagnostic.toLowerCase()) ? "permission_denied"
+          : /no space left|out of memory|cannot allocate|resource temporarily unavailable/.test(diagnostic.toLowerCase()) ? "resource_exhausted"
+          : /no such image|manifest unknown|pull access denied/.test(diagnostic.toLowerCase()) ? "image_unavailable"
+          : /cannot connect|connection refused|daemon is not running/.test(diagnostic.toLowerCase()) ? "engine_unreachable"
+          : /already in use|conflict/.test(diagnostic.toLowerCase()) ? "resource_conflict" : "engine_error";
+        reject(new SandboxError("unavailable", `Container engine operation failed (exit ${code ?? "unknown"}: ${reason}).`));
+      }
       else resolve(Buffer.concat(chunks).toString("utf8"));
     });
     child.stdin.on("error", () => {});
@@ -61,9 +72,7 @@ try {
 `;
 
 export const STOP_SCRIPT = String.raw`
-const fs=require('node:fs');const id=process.argv[1];
-fs.writeFileSync('/tmp/station-'+id+'.cancel','');
-let leader;try{leader=Number(fs.readFileSync('/tmp/station-'+id+'.pid','utf8'));}catch(e){if(e.code==='ENOENT')process.exit(0);throw e;}
+const fs=require('node:fs');const leader=Number(process.argv[1]);
 if(!Number.isSafeInteger(leader)||leader<=1)throw new Error('Invalid process session');
 function stop(signal){for(const name of fs.readdirSync('/proc')){if(!/^\d+$/.test(name))continue;try{const stat=fs.readFileSync('/proc/'+name+'/stat','utf8');const fields=stat.slice(stat.lastIndexOf(')')+2).split(' ');if(Number(fields[3])===leader)process.kill(Number(name),signal);}catch(e){if(!['ESRCH','ENOENT'].includes(e.code))throw e;}}}
 stop('SIGTERM');setTimeout(()=>stop('SIGKILL'),150);

@@ -40,7 +40,9 @@ test('rollout renews authority before source mutation and after slow preparation
     const controller = new ImageController({ registry: new FileImageRegistry(join(root, `registry-${phase}`)), signalRunner: new SignalRunner({ adapter: new MemoryAdapter(), maxConcurrent: 0 }), backend, stateDir: join(root, `state-${phase}`), beaconAdapter: adapter as any, rolloutCoordinator: {
       acquireControllerLease: async () => true, renewControllerLease: async () => lease, releaseControllerLease: async () => { releases++; return true; },
     } as any });
-    (controller.deployments as any).list = async () => [{ id: 'deployment', generations: [{ id: generationId, image: { digest } }], rollouts: [{ id: 'operation', sourceInstance: 'source', sourceName: 'old', generation: generationId, export: 'watch', targetInstance: 'target', config: '{}' }] }];
+    const deployment = { id: 'deployment', generations: [{ id: generationId, image: { digest } }], rollouts: [{ id: 'operation', sourceInstance: 'source', sourceName: 'old', generation: generationId, export: 'watch', targetInstance: 'target', config: '{}' }] };
+    (controller.deployments as any).list = async () => [structuredClone(deployment)];
+    (controller.deployments as any).get = async (id: string) => { assert.equal(id, deployment.id); return structuredClone(deployment); };
     (controller.deployments as any).completeRollout = async () => { mutations++; };
     (controller as any).runtime.installGeneration = async () => { lease = false; return {}; };
     (controller as any).wire = async () => {};

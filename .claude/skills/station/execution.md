@@ -1,6 +1,6 @@
 # Sandbox, Browser Use and process runtimes
 
-Station 2.4.0 provides separate server execution primitives. `station-browser` instead runs Station signals/DAGs/beacons inside a browser worker; it does not supply Bash or control server browsers.
+Station 3.0.0 provides separate server execution primitives. `station-browser` instead runs Station signals/DAGs/beacons inside a browser worker; it does not supply Bash or control server browsers.
 
 ## Agent browser integration
 
@@ -68,7 +68,7 @@ Methods:
 
 Commands, terminals and services use workspace `node_modules/.bin` then `HOME/.local/bin` on PATH. npm global prefix defaults to `HOME/.local`. A dependency-free custom CLI tarball can be uploaded and installed using `npm install --global --offline --ignore-scripts --no-audit --no-fund ./tool.tgz`, then invoked by name in later commands/terminals/services. Persist the workspace volume to retain installation. Registry installs need a permitted network route. Image tools/native dependencies must be prepared by the operator.
 
-One active manager owns a root; a second owner fails. Interrupted commands are not automatically replayed. Live PTYs are interrupted on worker restart. Host services require an explicit restart; container services with retained desired-running state relaunch automatically after initialization. Stop a container service explicitly if it must remain stopped after recovery. Host terminal rings are memory-only; container terminals checkpoint a bounded output tail, without restoring the live shell. Container services share command execution slots. Host processes deliberately escaping groups remain outside host-adapter containment. Container cleanup can stop the whole container when process cleanup cannot be confirmed.
+One active manager owns a root; a second owner fails. Interrupted commands are not automatically replayed. Live PTYs are interrupted on worker restart. Host services require an explicit restart; container services with retained desired-running state relaunch automatically after initialization. Stop a container service explicitly if it must remain stopped after recovery. Host terminal rings are memory-only; container terminals checkpoint a bounded output tail, without restoring the live shell. Container services share command execution slots. Host processes deliberately escaping groups remain outside host-adapter containment. For container workspaces, cancelling/timing out a command, stopping a running service or closing a live terminal always stops the entire workspace container, including escaped process sessions. Other active commands, terminals and services become interrupted and are not automatically replayed by service policies. Files and installed tools persist; the next file/command/terminal/service operation waits for old handles and starts a fresh container. Restart interrupted services explicitly. Other workspaces are unaffected. Failed containment leaves the workspace unavailable. Ordinary completed-command cleanup uses controller-captured process identity, never workload-writable markers.
 
 ## Persistent account workflows and media
 
@@ -94,6 +94,8 @@ await browsers.close();
 ```
 
 Basic actions are navigate/evaluate/click/type/press/screenshot. Type targets the focused element. Evaluate JSON-compatible values; use an IIFE for multi-statement Bun expressions. PNG responses contain mimeType and base64. Concurrent actions on one session fail `busy`. Never automatically repeat a timed-out mutation.
+
+Direct navigation and new pages accept absolute HTTP(S) URLs without embedded credentials, plus `about:blank`. Reject local files, executable schemes and browser-internal URLs. Playwright also guards document requests and closes unexpected non-web popup/frame navigations; normal `about:srcdoc` frames and Chromium network-error pages are allowed. These checks do not enforce domain/IP egress policy. Host Playwright launches Chromium with an allowlisted environment and private temporary home, excluding worker credentials and loader overrides. This is not an OS boundary; untrusted tenants still require isolated workers.
 
 `execute(id, command)` supports fill, select, check, hover, scroll, waitFor, content, back/forward/reload, pages/newPage/selectPage/closePage, upload, download/downloadRead/downloadDelete. Read exported `BrowserCommand` for exact fields. Upload bytes are bounded base64, not host paths; downloads return a session-owned artifact ID then bounded bytes. Download artifacts expire with the session. Profile IDs are validated logical names; no arbitrary host path. `listProfiles/deleteProfile` manage saved profiles and reject active deletion/concurrent opens. Manager idle eviction defaults to 15 minutes; recording ticks do not extend activity. Audit metadata is bounded; configure `stateRootDir` for durable sequence-numbered action history and explicit checkpoints. It is not an immutable compliance ledger.
 
@@ -172,3 +174,10 @@ a successful agent test.
 ## Container seccomp admission
 
 Both `ContainerSandboxAdapter` and `ContainerBrowserAdapter` require enforced seccomp. For engines with an unconfined default, set `seccompProfile` to an absolute operator-reviewed deny-default JSON file; the adapter validates and stages a private copy. Unsafe or missing policy fails admission, without falling back to host execution. Seccomp does not replace tenant egress restrictions, storage quotas or dedicated worker ownership.
+
+
+### Review hardening contracts
+
+Tenant Headquarters must configure `execution.targets: {workerId: {endpoint, token, tenantId}}` with a distinct credential for every worker (different from the HQ token), fixed HTTPS origins and operator-owned tenant mappings. Never authorize tenant ownership or credential destinations from heartbeats. Tenant workers require independent `auth`, isolated/restricted adapters and all three internal tenant/worker/network assertions; do not distribute fleet tokens to workloads. The operator-only shared-token transport remains for trusted fleets; never use it for tenant routing.
+
+Session cookies default Secure; `auth.secureCookies:false` is local HTTP only. `trustedProxies` lists exact trusted ingress IPs; no implicit X-Forwarded-For trust. FileLogStorage streams disk reads and retains current and previous segments, each capped at 64 MiB by default. Default pending writes are bounded to 4 MiB, and queries keep the newest 10,000 matching entries or 4 MiB. Oversized/overflow writes are dropped with onError notification. These configurable operational limits are not full audit retention or distributed storage; use an appropriate custom store for those requirements. Dashboard uses `STATION_DASHBOARD_HOST`, default127.0.0.1.

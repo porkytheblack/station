@@ -18,7 +18,7 @@ export interface ExecutionDeps {
 }
 
 /** Dashboard discovery uses advertised capabilities, never guesses from labels. */
-export function executionCatalogRoutes(deps: Omit<ExecutionDeps, "execution"> & { enabled: boolean }): Hono {
+export function executionCatalogRoutes(deps: Omit<ExecutionDeps, "execution"> & { enabled: boolean; targets?: ExecutionConfig["targets"] }): Hono {
   const app = new Hono();
   app.get("/execution", requireScope("admin"), async (c) => {
     if (!deps.enabled) return c.json({ data: [] });
@@ -29,9 +29,10 @@ export function executionCatalogRoutes(deps: Omit<ExecutionDeps, "execution"> & 
       .filter((node) => node.definitions.execution?.sandbox || node.definitions.execution?.browser)
       .map((node) => {
         let reachable = node.id === deps.stationId;
-        if (!reachable && node.endpoint) {
+        const endpoint = Object.hasOwn(deps.targets ?? {}, node.id) ? deps.targets![node.id].endpoint : node.endpoint;
+        if (!reachable && endpoint) {
           try {
-            const url = new URL(node.endpoint);
+            const url = new URL(endpoint);
             reachable = ["http:", "https:"].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash;
           } catch { /* An invalid registered endpoint is unavailable. */ }
         }
@@ -165,7 +166,8 @@ export function internalExecutionRoutes(deps: ExecutionDeps): Hono {
   }, limit(), async (c) => {
     try {
       const tenantId = c.req.header("x-station-execution-tenant");
-      if (tenantId !== undefined && (!deps.execution.tenantId || tenantId !== deps.execution.tenantId)) return c.json({ error: "not_found" }, 404);
+      if (tenantId !== deps.execution.tenantId) return c.json({ error: "not_found" }, 404);
+      if (deps.execution.tenantId && (c.req.header("x-station-execution-worker") !== deps.stationId || c.req.header("x-station-execution-network") !== deps.networkId)) return c.json({ error: "not_found" }, 404);
       const body = await readBody(c);
       assertAvailable(await deps.adapter.getStation(deps.stationId), deps.networkId, c.req.param("primitive"), body);
       return c.json({ data: await dispatch(deps.execution, c.req.param("primitive"), body) });
@@ -190,7 +192,7 @@ export function publicExecutionRoutes(deps: ExecutionDeps): Hono {
       const node = await deps.adapter.getStation(owner);
       if (!node || node.networkId !== deps.networkId || node.role !== "station") return c.json({ error: "not_found" }, 404);
       assertAvailable(node, deps.networkId, c.req.param("primitive"), body);
-      return await forwardExecution(c, deps, node, body);
+      return await forwardExecution(c, deps, node, body, deps.execution.targets?.[node.id]?.tenantId);
     } catch (error) { return failure(c, error); }
   });
   return app;
@@ -198,8 +200,12 @@ export function publicExecutionRoutes(deps: ExecutionDeps): Hono {
 
 /** Shared bounded transport; tenant identity is supplied only by authenticated Headquarters routing. */
 export async function forwardExecution(c: Context, deps: ExecutionDeps, node: StationNode, body: RequestBody, tenantId?: string) {
-  if (!node.endpoint) return c.json({ error: "unavailable" }, 503);
-  const endpoint = new URL(node.endpoint);
+  const target = Object.hasOwn(deps.execution.targets ?? {}, node.id) ? deps.execution.targets![node.id] : undefined;
+  // Heartbeats are discovery data, never an authority for tenant ownership or credential destinations.
+  if (deps.execution.tenants && !target || tenantId && (!target || target.tenantId !== tenantId)) return c.json({ error: "not_found" }, 404);
+  const destination = target?.endpoint ?? node.endpoint;
+  if (!destination) return c.json({ error: "unavailable" }, 503);
+  const endpoint = new URL(destination);
   if (!["http:", "https:"].includes(endpoint.protocol) || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) return c.json({ error: "unavailable" }, 503);
   endpoint.pathname = `/internal/execution/${c.req.param("primitive")}`;
   const unknownFailure = () => c.json({ error: "execution_failed", message: "Worker outcome is unknown. Inspect resource state before repeating a mutation.", outcome: "unknown" }, 503);
@@ -208,7 +214,7 @@ export async function forwardExecution(c: Context, deps: ExecutionDeps, node: St
   try {
     const response = await fetch(endpoint, {
       method: "POST", redirect: "error", signal: controller.signal,
-      headers: { "content-type": "application/json", authorization: `Bearer ${deps.execution.token}`, ...(tenantId ? { "x-station-execution-tenant": tenantId } : {}) },
+      headers: { "content-type": "application/json", authorization: `Bearer ${target?.token ?? deps.execution.token}`, "x-station-execution-worker": node.id, "x-station-execution-network": deps.networkId, ...(tenantId ? { "x-station-execution-tenant": tenantId } : {}) },
       body: JSON.stringify(body),
     });
     // Error envelopes are small and never forwarded verbatim. Successful frame

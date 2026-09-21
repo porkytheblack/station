@@ -229,3 +229,33 @@ test("FileLogStorage creates dir/file with restrictive modes (POSIX only)", asyn
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("FileLogStorage bounds reads, write backlog and disk segments without indexing all logs", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "station-bounded-logs-"));
+  const errors: unknown[] = [];
+  try {
+    const path = join(dir, 'logs.jsonl');
+    const storage = new FileLogStorage({ filePath: path, maxFileBytes: 600, maxPendingBytes: 300, maxQueryEntries: 2, onError: error => errors.push(error) });
+    for (let i = 0; i < 15; i++) { storage.add(entry('r', String(i))); await storage.close(); }
+    assert.deepEqual((await storage.get('r')).map(e => e.message), ['13', '14']);
+    assert.ok(statSync(path).size <= 600);
+    assert.ok(statSync(`${path}.previous`).size <= 600);
+    const reopened = new FileLogStorage({ filePath: path, maxFileBytes: 600, maxQueryEntries: 2 });
+    assert.deepEqual((await reopened.get('r')).map(e => e.message), ['13', '14']);
+    storage.add(entry('r', 'x'.repeat(301)));
+    for (let i = 0; i < 20; i++) storage.add(entry('r', 'burst'));
+    await storage.close(); assert.ok(errors.length > 1);
+    assert.ok((await storage.get('r')).length <= 2);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("FileLogStorage streams past oversized or malformed existing lines", async () => {
+  const { writeFileSync } = await import('node:fs');
+  const dir = mkdtempSync(join(tmpdir(), "station-bounded-replay-"));
+  try {
+    const path = join(dir, 'logs.jsonl');
+    writeFileSync(path, 'x'.repeat(1024 * 1024) + '\nmalformed\n' + JSON.stringify(entry('r', 'valid')) + '\n');
+    const storage = new FileLogStorage({ filePath: path });
+    assert.deepEqual((await storage.get('r')).map(e => e.message), ['valid']);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

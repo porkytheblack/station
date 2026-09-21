@@ -36,17 +36,18 @@ test('public tenant keys control real isolated containers through Headquarters w
     rmSync(root, { recursive: true, force: true });
   });
   const engine = executable.includes('podman') ? 'podman' : 'docker';
+  const targets = {};
   for (const tenantId of ['a', 'b']) {
     const port = await freePort();
     const sandbox = new ContainerSandboxAdapter({ rootDir: join(root, tenantId, 'sandbox'), tenantId, executable, engine, seccompProfile: process.env.STATION_CONTAINER_SECCOMP, image: process.env.STATION_CONTAINER_IMAGE ?? 'docker.io/library/node:22-bookworm-slim', network: 'none', maxEnvironments: 1, maxConcurrent: 1, enablePty: false });
     adapters.push(sandbox);
     const browser = new BrowserSessionManager(new ContainerBrowserAdapter({ rootDir: join(root, tenantId, 'browser'), tenantId, executable, engine, seccompProfile: process.env.STATION_CONTAINER_SECCOMP, image: browserImage, network: 'none', workerPath: '/opt/station/container-fixture.mjs' }), 1, { recordingRootDir: join(root, tenantId, 'recordings'), stateRootDir: join(root, tenantId, 'browser-state'), tenantId });
     managers.push(browser);
-    const station = await createStation(resolveConfig({ role: 'station', name: tenantId, host: '127.0.0.1', port,  runRunners: false, network: { id: 'public-test', stationId: tenantId, adapter: network, endpoint: `http://127.0.0.1:${port}` }, execution: { token, tenantId, sandbox, browser } }), join(root, tenantId));
+    const station = await createStation(resolveConfig({ role: 'station', auth: { username: 'operator', password: randomBytes(24).toString('hex') }, name: tenantId, host: '127.0.0.1', port,  runRunners: false, network: { id: 'public-test', stationId: tenantId, adapter: network, endpoint: `http://127.0.0.1:${port}` }, execution: { token: (targets[tenantId] = { tenantId, token: randomBytes(32).toString('hex'), endpoint: `http://127.0.0.1:${port}` }).token, tenantId, sandbox, browser } }), join(root, tenantId));
     stations.push(station); await station.start();
   }
   const port = await freePort();
-  const hq = await createStation(resolveConfig({ role: 'headquarters', host: '127.0.0.1', port,  runRunners: false, network: { id: 'public-test', stationId: 'hq', adapter: network }, auth: { username: 'operator', password: randomBytes(20).toString('hex'), keyStorage }, execution: { token, tenants: { apiKeyTenants: { [a.record.id]: 'a', [b.record.id]: 'b' } } } }), join(root, 'hq'));
+  const hq = await createStation(resolveConfig({ role: 'headquarters', host: '127.0.0.1', port,  runRunners: false, network: { id: 'public-test', stationId: 'hq', adapter: network }, auth: { username: 'operator', password: randomBytes(20).toString('hex'), keyStorage }, execution: { token, targets, tenants: { apiKeyTenants: { [a.record.id]: 'a', [b.record.id]: 'b' } } } }), join(root, 'hq'));
   stations.push(hq); await hq.start();
   const url = `http://127.0.0.1:${port}/api/v1`;
   const call = (key, owner, primitive, body, extra = {}) => fetch(`${url}/tenant/stations/${owner}/execution/${primitive}`, { method: 'POST', headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json', ...extra }, body: JSON.stringify(body) });
@@ -93,7 +94,7 @@ test('public tenant keys control real isolated containers through Headquarters w
   await recovered.ready();
   assert.equal((await recovered.get(one.id)).id, one.id);
   // Matching constructor owner with a mismatched Station owner also refuses admission.
-  await assert.rejects(createStation(resolveConfig({ role: 'station',  runRunners: false, execution: { token, tenantId: 'b', sandbox: recovered } }), join(root, 'new-station-directory')), /tenant|ownership/i);
+  await assert.rejects(createStation(resolveConfig({ role: 'station', auth: { username: 'operator', password: randomBytes(24).toString('hex') }, runRunners: false, execution: { token, tenantId: 'b', sandbox: recovered } }), join(root, 'new-station-directory')), /tenant|ownership/i);
   const cleanup = new ContainerSandboxAdapter({ rootDir: join(root, 'a', 'sandbox'), tenantId: 'a', executable, engine, seccompProfile: process.env.STATION_CONTAINER_SECCOMP, image: process.env.STATION_CONTAINER_IMAGE ?? 'docker.io/library/node:22-bookworm-slim', network: 'none', enablePty: false });
   adapters.push(cleanup); await cleanup.ready();
   console.log('[tenant-e2e] real Headquarters, two tenant workers, offline custom install, file isolation, browser screenshot, cross-tenant denial, capacity and key revocation passed');

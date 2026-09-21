@@ -59,7 +59,7 @@ pnpm exec stationd
 Start the dashboard separately in another terminal:
 
 ```bash
-STATION_DAEMON_URL=http://127.0.0.1:4400 PORT=4401 HOSTNAME=127.0.0.1 pnpm exec station-dashboard
+STATION_DAEMON_URL=http://127.0.0.1:4400 PORT=4401 STATION_DASHBOARD_HOST=127.0.0.1 pnpm exec station-dashboard
 ```
 
 Open `http://127.0.0.1:4401`. Closing the dashboard does not stop the daemon or

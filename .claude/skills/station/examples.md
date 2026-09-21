@@ -919,7 +919,7 @@ pnpm exec stationd
 In another terminal, start the independent dashboard:
 
 ```sh
-STATION_DAEMON_URL=http://127.0.0.1:4400 PORT=4401 HOSTNAME=127.0.0.1 pnpm exec station-dashboard
+STATION_DAEMON_URL=http://127.0.0.1:4400 PORT=4401 STATION_DASHBOARD_HOST=127.0.0.1 pnpm exec station-dashboard
 ```
 
 Deploy to production:

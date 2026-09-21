@@ -54,3 +54,8 @@ test("container file helper emits typed sanitized failures without leaking files
     assert.ok(!output.includes("private"));
   }
 });
+
+test("engine failures preserve classified diagnostics without raw stderr secrets", async () => {
+  const { engineCall } = await import('../src/container-engine.js');
+  await assert.rejects(engineCall(process.execPath, ['-e', `process.stderr.write('permission denied /private/secret-token');process.exit(125)`]), (error: any) => error.code === 'unavailable' && error.message.includes('exit 125: permission_denied') && !error.message.includes('secret-token'));
+});

@@ -56,7 +56,7 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
-    "test:browsers": "pnpm run build && node --import tsx --test test/browser.integration.ts test/advanced.integration.ts test/interaction.integration.ts",
+    "test:browsers": "pnpm run build && node --import tsx --test test/browser.integration.ts test/advanced.integration.ts test/interaction.integration.ts test/navigation.integration.ts",
     "test:containers": "pnpm run build && node --import tsx --test test/container.integration.ts",
     "test:remote": "pnpm run build && node --import tsx --test test/remote.integration.ts",
     "test:provider:live": "pnpm run build && node --import tsx test/provider.live.ts"

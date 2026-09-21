@@ -121,6 +121,17 @@ await sandboxes.close();`}</Code>
         escaped process groups are outside this backend&apos;s guarantees.
       </p>
 
+      <p>Container workspaces use a stronger cancellation boundary: cancelling or timing
+        out a command, stopping a running service, or closing a live terminal stops the
+        entire workspace container, including escaped process sessions. Other active
+        commands, terminals and services become interrupted; their restart policies do
+        not replay them. Files and installed tools remain on the persistent volume.
+        The next file, command, terminal or service operation waits for old handles to
+        finish and starts a fresh container; restart interrupted services explicitly.
+        Other workspaces are unaffected. Failed containment leaves this workspace
+        unavailable. Ordinary completed commands use controller-captured process identity
+        for descendant cleanup; workload-written files never establish ownership.</p>
+
       <h3>Install tools into a workspace</h3>
       <Code>{`npm install --global --ignore-scripts --no-audit --no-fund /data/custom-tool.tgz
 # After installation succeeds, run its binary by name in a new command:
@@ -280,6 +291,15 @@ const browsers = new BrowserSessionManager(
         sandbox; they do not establish production isolation, Railway deployment
         support, or a throughput/memory advantage.
       </p>
+
+      <p>Direct navigation and new-page URLs accept absolute HTTP(S) addresses without
+        embedded credentials, plus <code>about:blank</code>. Local files, executable URLs
+        and internal browser pages are rejected. Playwright also guards document requests
+        and closes unexpected non-web popup or frame navigations. Ordinary
+        <code> about:srcdoc</code> frames and Chromium network-error pages are allowed.
+        These checks are not a domain or IP egress firewall. Host Playwright launches
+        Chromium with an allowlisted environment and private temporary home, excluding
+        worker secrets and loader overrides; this is credential hygiene, not OS isolation.</p>
 
       <h3>Profiles, page tools and durable recordings</h3>
       <Code>{`const browsers = new BrowserSessionManager(
@@ -511,14 +531,32 @@ execution: { token: process.env.STATION_EXECUTION_TOKEN!, sandbox: sandboxes }
         the worker check ownership, and tenant mode refuses host or unrestricted-network
         backends. Persisted owner bindings prevent reusing a data root for a different tenant.</p>
       <Code>{`// Headquarters: operator-owned configuration
-execution: { token: serviceSecret, tenants: {
-  apiKeyTenants: { "VERIFIED_KEY_RECORD_ID": "customer-a" },
-} }
+execution: { token: hqSecret,
+  targets: { "worker-a": {
+    endpoint: "https://worker-a.internal", token: workerASecret, tenantId: "customer-a",
+  } },
+  tenants: { apiKeyTenants: { "VERIFIED_KEY_RECORD_ID": "customer-a" } },
+}
 // Dedicated private worker, with an isolated/restricted adapter:
-execution: { token: serviceSecret, tenantId: "customer-a", sandbox }
+execution: { token: workerASecret, tenantId: "customer-a", sandbox }
 // Customer endpoints:
 // GET /api/v1/tenant/execution
 // POST /api/v1/tenant/stations/:stationId/execution/:primitive`}</Code>
+      <p>Configure independent operator authentication on each tenant worker. Headquarters pins
+        the endpoint, tenant and distinct worker credential in execution.targets; heartbeat
+        advertisements cannot change those grants or redirect credentials. Tenant workers
+        reject missing tenant, worker or network assertions. Use HTTPS for private remote targets.</p>
+      <p>Session cookies default to Secure, including behind TLS termination. Set
+        auth.secureCookies to false only for local HTTP development. The trustedProxies
+        configuration accepts explicit ingress IP addresses; untrusted forwarded headers
+        cannot change rate-limit buckets. Dashboard binding uses STATION_DASHBOARD_HOST
+        with a loopback default, ignoring ambient container HOSTNAME.</p>
+      <p>The default daemon FileLogStorage streams disk reads and keeps a current and
+        previous segment, each bounded to 64 MiB by default. Pending writes are limited
+        to 4 MiB; queries retain at most the newest 10,000 matching entries or 4 MiB.
+        Oversized or over-capacity writes are dropped and reported through onError.
+        These configurable limits provide bounded operational logs, not a complete
+        audit archive or distributed log. Use a suitable custom store for that requirement.</p>
       <p>ContainerBrowserAdapter from station-browser-use/container runs each Playwright
         session inside a separately constrained Linux container with an immutable image worker.
         Profile volumes and recordings retain their tenant ownership. Default networking is

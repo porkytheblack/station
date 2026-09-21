@@ -80,8 +80,10 @@ export class ImageRuntime {
     }
   }
   private async saveState(state: RuntimeState) {
+    const bytes = JSON.stringify(state);
+    if (Buffer.byteLength(bytes) > 1024 * 1024) throw new ImageError("activation_limit", "Retained activation state exceeds 1 MiB; existing activations were preserved");
     const temp = join(this.root, `${randomUUID()}.tmp`);
-    try { await writeFile(temp, JSON.stringify(state), { mode: 0o600, flag: "wx" }); await rename(temp, join(this.root, "active.json")); }
+    try { await writeFile(temp, bytes, { mode: 0o600, flag: "wx" }); await rename(temp, join(this.root, "active.json")); }
     finally { await rm(temp, { force: true }); }
   }
   install(reference: string): Promise<InstalledImage> {

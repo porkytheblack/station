@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { randomBytes } from "node:crypto";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
@@ -39,6 +40,7 @@ async function getFreePort(): Promise<number> {
 }
 
 test("Headquarters and two stations route, bound, and place real signal processes", async (t) => {
+  const fixturePassword = randomBytes(24).toString("hex");
   const dir = mkdtempSync(join(tmpdir(), "station-network-e2e-"));
   const queuePath = join(dir, "queue.db");
   const networkPath = join(dir, "network.db");
@@ -88,9 +90,9 @@ test("Headquarters and two stations route, bound, and place real signal processe
       role: "headquarters",
       adapter: hqQueue,
       scheduleAdapter,
-      auth: { username: "e2e", password: "correct horse battery staple" },
+      auth: { username: "e2e", password: fixturePassword },
       stationDir: "hq",
-      network: { id: "e2e", stationId: "hq", adapter: hqNetwork, heartbeatIntervalMs: 50, leaseDurationMs: 250 },
+      network: { id: "e2e", stationId: "hq", adapter: hqNetwork, heartbeatIntervalMs: 250, leaseDurationMs: 10_000 },
     }), dir));
     stations.push(await createStation(resolveConfig({
       ...common,
@@ -98,7 +100,7 @@ test("Headquarters and two stations route, bound, and place real signal processe
       adapter: stationAQueue,
       stationDir: "station-a",
       subscribers: { signal: [subscriber("station-a")] },
-      network: { id: "e2e", stationId: "station-a", adapter: stationANetwork, labels: { gpu: "true" }, heartbeatIntervalMs: 50, leaseDurationMs: 250 },
+      network: { id: "e2e", stationId: "station-a", adapter: stationANetwork, labels: { gpu: "true" }, heartbeatIntervalMs: 250, leaseDurationMs: 10_000 },
     }), dir));
     stations.push(await createStation(resolveConfig({
       ...common,
@@ -106,7 +108,7 @@ test("Headquarters and two stations route, bound, and place real signal processe
       adapter: stationBQueue,
       stationDir: "station-b",
       subscribers: { signal: [subscriber("station-b")] },
-      network: { id: "e2e", stationId: "station-b", adapter: stationBNetwork, labels: { gpu: "false" }, heartbeatIntervalMs: 50, leaseDurationMs: 250 },
+      network: { id: "e2e", stationId: "station-b", adapter: stationBNetwork, labels: { gpu: "false" }, heartbeatIntervalMs: 250, leaseDurationMs: 10_000 },
     }), dir));
     for (const station of stations) await station.start();
 
@@ -119,7 +121,7 @@ test("Headquarters and two stations route, bound, and place real signal processe
     const loginResponse = await fetch(`${apiBase}/auth/login`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "e2e", password: "correct horse battery staple" }),
+      body: JSON.stringify({ username: "e2e", password: fixturePassword }),
     });
     assert.equal(loginResponse.status, 200);
     const cookie = loginResponse.headers.get("set-cookie")?.split(";", 1)[0];

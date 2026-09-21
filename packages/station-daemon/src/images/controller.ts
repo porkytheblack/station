@@ -111,7 +111,7 @@ export class ImageController {
   }
   async generations() {
     const deployments = await this.deployments.list();
-    return deployments.flatMap(d => d.generations.filter(g => d.history.some(h => h.generation === g.id && (h.action === 'activate' || h.action === 'rollback' || h.action === 'invoke'))).map(g => ({ digest: g.image.digest, generation: { id: g.id, bindings: g.bindings }, stationId: g.stationId })));
+    return deployments.flatMap(d => d.generations.filter(g => g.everActivated || Boolean(g.sourceGeneration) || d.history.some(h => h.generation === g.id && (h.action === 'activate' || h.action === 'rollback' || h.action === 'invoke'))).map(g => ({ digest: g.image.digest, generation: { id: g.id, bindings: g.bindings }, stationId: g.stationId })));
   }
   async syncGenerations(records: { digest: string; generation: ImageExecutionGeneration; stationId?: string }[]) {
     for (const record of records) {
@@ -167,7 +167,7 @@ export class ImageController {
       const selected = deployment.generations.find(g => g.id === generation);
       if (!selected) throw new ImageError('invalid_deployment', 'Generation not found');
       // Preparation may fail, but can never replace the active alias pointer.
-      if (action === 'rollback' && !deployment.history.some(h => (h.action === 'activate' || h.action === 'rollback') && h.generation === generation)) throw new ImageError('invalid_rollback', 'Rollback requires a previously activated generation');
+      if (action === 'rollback' && !selected.everActivated && !deployment.history.some(h => (h.action === 'activate' || h.action === 'rollback') && h.generation === generation)) throw new ImageError('invalid_rollback', 'Rollback requires a previously activated generation');
       await this.wire(await this.runtime.installGeneration(selected.image.digest, { id: selected.id, bindings: selected.bindings }));
     }
     return this.deployments.change(id, revision, action, generation);
@@ -193,7 +193,7 @@ export class ImageController {
     const deployment = await this.deployments.get(id), generation = deployment.generations.find(g => g.id === request.generation);
     const targetExport = generation?.aliases[request.alias];
     const definition = generation?.image.manifest.exports.find(e => e.name === targetExport && e.kind === 'beacon');
-    if (!generation || !definition || !deployment.history.some(h => h.generation === generation.id && (h.action === 'activate' || h.action === 'rollback'))) throw new ImageError('invalid_rollout', 'Select a previously activated beacon generation');
+    if (!generation || !definition || !generation.everActivated && !deployment.history.some(h => h.generation === generation.id && (h.action === 'activate' || h.action === 'rollback'))) throw new ImageError('invalid_rollout', 'Select a previously activated beacon generation');
     const source = await adapter.getInstance(request.sourceInstance);
     if (!source || !deployment.generations.some(g => g.image.manifest.exports.some(e => e.kind === 'beacon' && source.beaconName === imageSignalName(g.image.digest, e.name, { id: g.id })))) throw new ImageError('invalid_rollout', 'Source instance does not belong to this deployment');
     validateValue(definition.configSchema, JSON.parse(source.config ?? '{}'));
@@ -225,20 +225,22 @@ export class ImageController {
         if (!acquired) return;
       }
       for (const deployment of await this.deployments.list()) for (const rollout of deployment.rollouts ?? []) {
-        if (rollout.completedAt) continue;
+        if (rollout.completedAt || rollout.failedAt || rollout.cancelledAt) continue;
+        const ensureActive=async()=>{await ensureLease();const current=(await this.deployments.get(deployment.id)).rollouts?.find(r=>r.id===rollout.id);if(!current||current.cancelledAt||current.failedAt||current.completedAt)throw new ImageError('rollout_cancelled','Rollout is no longer pending');};
+        try {
         const source = await adapter.getInstance(rollout.sourceInstance);
-        if (!source || source.beaconName !== rollout.sourceName) throw new ImageError('rollout_conflict', 'Retain the source instance until replacement completes');
-        if (source.desiredState !== 'stopped') { await ensureLease(); await adapter.updateInstance(source.id, { desiredState: 'stopped', updatedAt: new Date() }); }
-        if (this.options.beaconRunner) { await ensureLease(); await this.options.beaconRunner.stopInstance(source.id); }
+        if (!source || source.beaconName !== rollout.sourceName) { await ensureActive(); await this.deployments.failRollout(deployment.id, rollout.id, 'Source instance is missing or its identity changed'); continue; }
+        if (source.desiredState !== 'stopped') { await ensureActive(); await adapter.updateInstance(source.id, { desiredState: 'stopped', updatedAt: new Date() }); }
+        if (this.options.beaconRunner) { await ensureActive(); await this.options.beaconRunner.stopInstance(source.id); }
         if (source.status !== 'stopped') continue;
         const generation = deployment.generations.find(g => g.id === rollout.generation)!;
-        await ensureLease();
+        await ensureActive();
         await this.wire(await this.runtime.installGeneration(generation.image.digest, { id: generation.id, bindings: generation.bindings }));
         const name = imageSignalName(generation.image.digest, rollout.export, { id: generation.id });
         const existing = await adapter.getInstance(rollout.targetInstance);
         if (existing && (existing.beaconName !== name || existing.config !== rollout.config || existing.requiredStationId !== rollout.stationId)) throw new ImageError('rollout_conflict', 'Replacement instance identity conflicts');
         if (!existing) {
-          await ensureLease();
+          await ensureActive();
           if (this.options.beaconRunner) await this.options.beaconRunner.createInstance(name, { id: rollout.targetInstance, config: JSON.parse(rollout.config), start: true, requiredStationId: rollout.stationId });
           else {
             const now = new Date();
@@ -246,7 +248,8 @@ export class ImageController {
           }
         }
         const replacement = await adapter.getInstance(rollout.targetInstance);
-        if (replacement?.readyAt && replacement.status === 'running') { await ensureLease(); await this.deployments.completeRollout(deployment.id, rollout.id); }
+        if (replacement?.readyAt && replacement.status === 'running') { await ensureActive(); await this.deployments.completeRollout(deployment.id, rollout.id); }
+        } catch(error) { if(error instanceof ImageError&&error.code==='rollout_cancelled')continue;throw error; }
       }
     } finally {
       try { if (coordinator && acquired) await coordinator.releaseControllerLease(lease.name, lease.holderId, lease.token); }

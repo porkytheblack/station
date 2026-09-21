@@ -6,7 +6,7 @@ The standalone Station 3 web client. It contains the packaged Next.js applicatio
 
 ```sh
 pnpm add station-dashboard
-STATION_DAEMON_URL=http://127.0.0.1:4400 PORT=4401 HOSTNAME=127.0.0.1 pnpm exec station-dashboard
+STATION_DAEMON_URL=http://127.0.0.1:4400 PORT=4401 STATION_DASHBOARD_HOST=127.0.0.1 pnpm exec station-dashboard
 ```
 
 The daemon must already be running. Open `http://127.0.0.1:4401` and log in with its credentials. For an existing remote Headquarters, configure `STATION_DAEMON_URL=https://hq.example.com` instead. The target must be an HTTP(S) origin without URL credentials, a path, query or fragment. HTTPS is required for every nonloopback target, including private network addresses; HTTP is allowed only for `localhost`, `127.0.0.1` and `[::1]`.
@@ -15,7 +15,7 @@ The daemon must already be running. Open `http://127.0.0.1:4401` and log in with
 | --- | --- | --- |
 | `STATION_DAEMON_URL` | `http://127.0.0.1:4400` | Fixed trusted daemon/Headquarters origin |
 | `PORT` | `4401` | Public dashboard listener port |
-| `HOSTNAME` | `127.0.0.1` | Dashboard bind address |
+| `STATION_DASHBOARD_HOST` | `127.0.0.1` | Dashboard bind address |
 
 The renderer runs on a separately allocated loopback port; the public listener sends `/api/*` and the event WebSocket to the selected daemon. API requests retain the user's authentication. The target never comes from a browser request, and browser cross-origin API mutations/event connections are rejected. For a shared hosted deployment, configure TLS and access control deliberately; this package does not provision them.
 
@@ -46,3 +46,5 @@ Publication uses checksum-verified chunks, accepted-byte progress, Pause and Res
 Deployment pages support staged generations, alias inspection, environment bindings, activation, rollback, drain, invocation and history. The bindings editor accepts environment-store key references for credentials and literals only after explicit non-secret confirmation. Generation details show reference names and literal presence; the dashboard does not fetch resolved secret values. Changes carry the displayed revision and reject concurrent modifications; refresh to review before retrying. Existing runs and beacon instances retain their original generation.
 
 From the source checkout, build the dashboard and run `pnpm --filter station-dashboard test:registry:browser` with the repository’s browser dependencies installed. This launches real Chromium against a deterministic local HTTP API fixture and covers nested navigation, invalid/valid publication, installation, private registry routing, worker pins, interrupted chunk resumption, reference/non-secret bindings, revision conflicts, activation, rollback and drain. It does not replace the daemon’s real image-execution integration tests.
+
+The outer dashboard ignores the ambient `HOSTNAME` variable, which container hosts often populate. Set `STATION_DASHBOARD_HOST` explicitly to expose the dashboard beyond loopback. The internal Next renderer always binds to loopback.

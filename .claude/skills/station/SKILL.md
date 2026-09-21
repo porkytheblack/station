@@ -36,7 +36,7 @@ embedded/headless runtime or a focused test that cannot use `station-daemon`.
 Station 3.0 retires `station-kit` outright. `station-runtime-cli` owns `station`; the
 daemon executable is `stationd`. Install and start `station-dashboard` separately
 with `STATION_DAEMON_URL` pointing to the local or remote daemon and `PORT` /
-`HOSTNAME` selecting the dashboard listener. Never add Next.js or dashboard
+`STATION_DASHBOARD_HOST` selecting the dashboard listener. Never add Next.js or dashboard
 startup to a headless worker. Closing clients must not stop the daemon.
 The removed `open`, `--no-open`, and `createStation` third `nextPort` argument
 have no compatibility mode. See [api-reference.md](api-reference.md#7-station-daemon).
