@@ -1,11 +1,11 @@
 import type { ImageController } from "../../../images/controller.js";
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
-import { FileImageRegistry, ImageError, validateManifest, assertDigest, type ImageManifest, importImage, type ImageSource } from 'station-images';
+import { type ImageRegistry, ImageError, validateManifest, assertDigest, type ImageManifest, importImage, type ImageSource } from 'station-images';
 import { requireScope } from '../../middleware/scope-guard.js';
 
 /** Registry is operator-only. Tenant execution keys never grant artifact access. */
-export function imageRegistryRoutes(registry: FileImageRegistry, source?: ImageSource, controller?: ImageController) {
+export function imageRegistryRoutes(registry: ImageRegistry, source?: ImageSource, controller?: ImageController) {
   const app = new Hono();
   app.use('/registry/*', requireScope('admin'));
   app.use('/registry/*', bodyLimit({ maxSize: registry.maxBlobBytes, onError: c => c.json({ error: 'payload_too_large' }, 413) }));

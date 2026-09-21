@@ -1,6 +1,6 @@
 import type { DaemonImageExecution } from "../images/controller.js";
 import type { RegistryUpstream } from "../registry/source.js";
-import type { RegistryOptions } from "station-images";
+import type { RegistryOptions, RegistryStorage } from "station-images";
 import type { SignalQueueAdapter, SignalSubscriber } from "station-signal";
 import type { BroadcastQueueAdapter, BroadcastSubscriber } from "station-broadcast";
 import type { BeaconStateAdapter, BeaconSubscriber } from "station-beacon";
@@ -152,7 +152,7 @@ export interface StationConfig {
   deploy?: DeployConfig;
   execution?: ExecutionConfig;
   /** Operator-owned image storage, served only to authenticated admin clients. */
-  registry?: RegistryOptions & { rootDir?: string; upstream?: RegistryUpstream; execution?: DaemonImageExecution; activate?: string[] };
+  registry?: RegistryOptions & { rootDir?: string; storage?: RegistryStorage; cacheDir?: string; upstream?: RegistryUpstream; execution?: DaemonImageExecution; activate?: string[] };
 }
 
 export type StationUserConfig = Partial<Omit<StationConfig, "runner" | "broadcastRunner" | "network">> & {

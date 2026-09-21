@@ -6,7 +6,7 @@ import type { Readable, Writable } from "node:stream";
 import { selectArtifact, resolveImageEnvironment, validateArtifactBytes } from "./manifest.js";
 import { validateValue } from "./schema.js";
 import { validateBroadcastPlan, validateTerminalFrame, type TerminalFrame } from "./protocol.js";
-import { FileImageRegistry } from "./registry.js";
+import type { ImageRegistry } from "./registry.js";
 import { fail, ImageError, PROCESS_PROTOCOL, type HostTarget, type ImageArtifact, type ImageRecord } from "./types.js";
 export type ImageIsolation = "trusted-host" | "container" | "vm";
 export interface ImageProcessSpec {
@@ -35,7 +35,7 @@ export interface ImageProcessBackend {
   spawn(spec: ImageProcessSpec): Promise<ImageProcessBoundary>;
 }
 export interface ExecuteImageOptions {
-  registry: FileImageRegistry;
+  registry: ImageRegistry;
   reference: string;
   exportName: string;
   input: unknown;

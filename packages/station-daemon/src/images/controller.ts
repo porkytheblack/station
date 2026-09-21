@@ -3,14 +3,15 @@ import { join } from 'node:path';
 import type { SignalRunner } from 'station-signal';
 import type { BroadcastRunner } from 'station-broadcast';
 import type { BeaconRunner } from 'station-beacon';
-import { importImage, ImageError, selectArtifact, type FileImageRegistry, type ImageSource, type ImageRecord, type ImageExport } from 'station-images';
+import { importImage, ImageError, selectArtifact, type ImageRegistry, type ImageSource, type ImageRecord, type ImageExport } from 'station-images';
 import { ImageRuntime, imageSignalName, type ImageRuntimeOptions, type InstalledImage } from './runtime.js';
 import { createImageBackend } from './shim.js';
 import { createImageBeacon } from './beacon-shim.js';
 
 export type DaemonImageExecution = Pick<ImageRuntimeOptions, 'backend' | 'allowedEnv'>;
 export interface ImageControllerOptions extends DaemonImageExecution {
-  registry: FileImageRegistry;
+  registry: ImageRegistry;
+  cacheDir?: string;
   source?: ImageSource;
   signalRunner: SignalRunner;
   broadcastRunner?: BroadcastRunner;
@@ -31,7 +32,7 @@ export class ImageController {
       const source = this.exports.get(request.beaconName);
       const dependency = source?.image.manifest.dependencies?.[request.alias];
       if (!source || !dependency) throw new ImageError('dependency_denied', 'Undeclared image dependency');
-      const target = await options.registry.resolve(dependency.image);
+      const target = await this.runtime.cache.resolve(dependency.image);
       const name = imageSignalName(target.digest, dependency.export);
       const key = `beacon:${request.instanceId}:${request.incarnation}:${request.requestId}`;
       if (dependency.kind === 'signal') return options.signalRunner.triggerSignal(name, request.input, undefined, { idempotencyKey: key });
@@ -58,13 +59,13 @@ export class ImageController {
   }
   async restore(): Promise<void> { for (const installation of await this.runtime.restore()) await this.wire(installation); }
   async install(reference: string) {
-    try { await this.options.registry.resolve(reference); }
+    let installed: InstalledImage;
+    try { installed = await this.runtime.install(reference); }
     catch (error) {
       if (!(error instanceof ImageError) || error.code !== 'not_found' || !this.options.source) throw error;
       const pulled = await importImage(this.options.registry, reference, this.options.source);
-      reference = pulled.digest;
+      installed = await this.runtime.install(pulled.digest);
     }
-    const installed = await this.runtime.install(reference);
     await this.wire(installed);
     return { image: installed.image, exports: installed.image.manifest.exports.map(definition => ({ ...definition, registeredName: imageSignalName(installed.image.digest, definition.name) })) };
   }
@@ -77,13 +78,13 @@ export class ImageController {
         for (const local of image.manifest.exports) if (local.kind === "signal") dependencies[local.name] = imageSignalName(image.digest, local.name);
         for (const [alias, dep] of Object.entries(image.manifest.dependencies ?? {})) {
           if (dep.kind !== 'signal') continue;
-          const target = await this.options.registry.resolve(dep.image);
+          const target = await this.runtime.cache.resolve(dep.image);
           dependencies[alias] = imageSignalName(target.digest, dep.export);
         }
         this.options.broadcastRunner.registerPlanner(name, { signalName: name, dependencies });
       }
       if (definition.kind === 'beacon' && this.options.beaconRunner && !this.beacons.has(name)) {
-        const config = { registryRoot: this.options.registry.root, digest: image.digest, name, definition, backend: this.options.backend, allowedEnv: [...(this.options.allowedEnv ?? [])] };
+        const config = { registryRoot: this.runtime.cache.root, digest: image.digest, name, definition, backend: this.options.backend, allowedEnv: [...(this.options.allowedEnv ?? [])] };
         const path = join(this.options.stateDir, `${name}-beacon.mjs`);
         await mkdir(this.options.stateDir, { recursive: true, mode: 0o700 });
         const extension = import.meta.url.endsWith('.ts') ? '.ts' : '.js';

@@ -123,6 +123,44 @@ The registry path is resolved under the daemon's data directory. A registry-only
 
 Registry endpoints remain admin-only even when the rest of a loopback daemon runs without authentication. Configure auth and supply an operator key or authenticated operator session. There is no anonymous registry or tenant-customer publishing grant.
 
+## Registry storage adapters
+
+Registry storage has two independent adapters: metadata (manifests, immutable versions and tags) and executable blobs. The `ImageRegistry` service owns manifest/schema validation, digests, dependency checks and publication rules. Storage selection does not change the HTTP API, CLI or execution backend.
+
+```ts
+import { defineConfig } from "station-daemon";
+import {
+  FileRegistryMetadataAdapter, FileRegistryBlobAdapter,
+} from "station-images";
+
+export default defineConfig({
+  registry: {
+    storage: {
+      id: "production-images-v1",
+      metadata: new FileRegistryMetadataAdapter("/data/catalog"),
+      blobs: new FileRegistryBlobAdapter("/data/artifacts"),
+    },
+    cacheDir: "image-cache",
+    maxBlobBytes: 64 * 1024 * 1024,
+    maxTotalBytes: 1024 * 1024 * 1024,
+    // Add registry.execution and authentication as shown in the surrounding sections.
+  },
+});
+```
+
+Use either `rootDir` for the default filesystem registry or `storage` for explicit adapters. `cacheDir` is a local execution cache resolved under the daemon's data directory; it defaults to `images/cache` for custom storage. The standalone library equivalent is `new ImageRegistry({ storage, maxBlobBytes, maxTotalBytes })`. Existing `FileImageRegistry` callers and on-disk registries keep working.
+
+| Interface | Built-ins | Required backend behavior |
+| --- | --- | --- |
+| `RegistryMetadataAdapter` | `FileRegistryMetadataAdapter`, `MemoryRegistryMetadataAdapter` | Bounded reads; atomic create-if-absent for manifests/versions; atomic tag replacement; complete bounded version listing |
+| `RegistryBlobAdapter` | `FileRegistryBlobAdapter`, `MemoryRegistryBlobAdapter` | Bounded reads; immutable create-if-absent and atomic total-byte admission across all writers |
+
+Memory adapters are for tests or explicitly ephemeral registries. Clients share memory only by sharing adapter instances. PostgreSQL metadata and S3-compatible blob providers can implement these interfaces, but no PostgreSQL/S3 registry drivers are bundled. The existing Station database queue adapters are separate contracts.
+
+Custom metadata providers must support unique conditional writes and read-after-write consistency. Blob providers must enforce the namespace's byte limit across concurrent writers; an object-store conditional PUT by itself does not implement total quota accounting. Keep all writers' namespace limits consistent. Provider clients, credentials and connection cleanup are operator-owned, not image fields or customer API inputs. There is no implicit namespace migration or garbage collection.
+
+Before execution, the daemon copies and verifies the image and dependency closure into its private local cache. Child processes receive the cache path, never registry adapter objects or backend credentials. Complete cached digest-pinned activations can restart while remote storage is unavailable; moving tags still require authoritative resolution. Corrupt cached content fails verification. `storage.id` is a stable non-secret namespace identity, not an authorization boundary; changing it invalidates saved activation configuration until the operator explicitly reconciles it. Registry endpoints remain operator-only.
+
 ## Choose an execution backend
 
 Set `registry.execution` to register image exports into the runners. The backend configuration is operator-owned and never accepted from an uploaded manifest.

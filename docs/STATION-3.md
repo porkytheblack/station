@@ -144,6 +144,8 @@ station images run acme/tools@1.0.0 resize --input @request.json
 
 Registry publication, import and execution are distinct operations. Enable `registry` for storage/API access and `registry.execution` for runtime registration. A worker with a configured Headquarters upstream periodically imports and installs compatible images, verifies blobs and advertises immutable definitions. Shared queues and membership still supply network execution; a registry by itself is not a scheduler.
 
+Registry storage is pluggable through separate metadata and blob adapters. File and memory implementations are included; custom providers implement `RegistryMetadataAdapter` and `RegistryBlobAdapter`. Configure `registry.storage` and an optional private `registry.cacheDir`; image processes receive verified local artifacts rather than provider credentials. PostgreSQL/S3 registry drivers are not bundled.
+
 All registry APIs currently require operator `admin` authorization. Public customer image upload and tenant-scoped registry grants are **not** available. The trusted-local backend is explicitly unsafe for untrusted code. The Docker backend has passed five real-engine integration checks for JavaScript/native execution, enforced isolation settings, timeout cleanup and independent expiry reaping on Docker Desktop’s Linux arm64 engine. Other deployment configurations still require validation. This implementation is not a completed public multi-tenant platform.
 
 See [Station Images: authoring and operation](STATION-IMAGES.md) for configuration, protocol, environment grants, Headquarters synchronization, API routes and limitations.

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { SignalRunner } from "station-signal";
-import { FileImageRegistry, type ImageManifest } from "station-images";
+import { FileImageRegistry, ImageRegistry, MemoryRegistryBlobAdapter, MemoryRegistryMetadataAdapter, type ImageManifest } from "station-images";
 import { ImageRuntime, imageSignalName, type ImageBackendConfig } from "../../src/images/runtime.js";
 const report = process.report.getReport() as { header?: { glibcVersionRuntime?: string } };
 const abi = process.platform === "linux" ? report.header?.glibcVersionRuntime ? "glibc" as const : "musl" as const : "none" as const;
@@ -97,4 +97,42 @@ test("cancelling an image run terminates its external process boundary", { timeo
     assert.equal(alive, false, "external executable reaped after cancellation");
     assert.equal((await runner.getRun(id))?.status, "cancelled");
   } finally { await runner.stop(); await started; }
+});
+
+
+test("custom registry storage stages verified local artifacts and recovers pinned activations offline", { timeout: 15_000 }, async t => {
+  const { root, registry: original, manifest } = await setup(t);
+  const metadata = new MemoryRegistryMetadataAdapter(), blobs = new MemoryRegistryBlobAdapter();
+  Object.assign(metadata, { privateCredential: "do-not-copy-adapter-secret" });
+  const registry = new ImageRegistry({ storage: { id: "remote-test-registry", metadata, blobs } });
+  await registry.putBlob(await original.getBlob(manifest.artifacts[0]!.digest));
+  const image = await registry.publish(manifest);
+  await registry.setTag(manifest.name, "latest", image.digest);
+  const stateDir = join(root, "custom-runtime"), cacheDir = join(root, "verified-cache");
+  const firstRunner = new SignalRunner({ maxConcurrent: 0 });
+  const runtime = new ImageRuntime({ registry, signalRunner: firstRunner, stateDir, cacheDir, backend, allowedEnv: ["IMAGE_ALLOWED"] });
+  await runtime.install(`${manifest.name}@latest`);
+  const name = imageSignalName(image.digest, "echo");
+  assert.equal((await new FileImageRegistry(cacheDir).getManifest(image.digest)).digest, image.digest);
+  const shim = await readFile(join(stateDir, `${name}.mjs`), "utf8");
+  assert.ok(shim.includes(cacheDir));
+  assert.ok(!shim.includes("do-not-copy-adapter-secret"));
+  assert.ok(!shim.includes("remote-test-registry"));
+  metadata.read = async () => { throw new Error("storage unavailable"); };
+  blobs.read = async () => { throw new Error("storage unavailable"); };
+  const runner = new SignalRunner({ pollIntervalMs: 20, envProvider: { resolveFor: async () => ({ IMAGE_ALLOWED: "cached" }) } });
+  const restored = new ImageRuntime({ registry, signalRunner: runner, stateDir, cacheDir, backend, allowedEnv: ["IMAGE_ALLOWED"] });
+  assert.equal((await restored.restore()).length, 1);
+  await restored.install(image.digest);
+  await restored.install(`${manifest.name}@${image.digest}`);
+  await assert.rejects(restored.install(`${manifest.name}@latest`), /storage unavailable/);
+  const loop = runner.start();
+  try {
+    const id = await runner.triggerSignal(name, { message: "offline" });
+    const run = await runner.waitForRun(id, { timeoutMs: 10_000 });
+    assert.equal(run?.status, "completed", run?.error);
+    assert.equal(JSON.parse(run!.output!).value, "cached");
+  } finally { await runner.stop(); await loop; }
+  const changed = new ImageRuntime({ registry: new ImageRegistry({ storage: { id: "different-authority", metadata, blobs } }), signalRunner: firstRunner, stateDir, cacheDir, backend, allowedEnv: ["IMAGE_ALLOWED"] });
+  await assert.rejects(changed.restore(), { code: "incompatible_state" });
 });

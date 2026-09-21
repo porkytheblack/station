@@ -48,7 +48,7 @@ The schema subset supports `type`, `properties`, `required`, boolean `additional
 
 ## Registry and Headquarters imports
 
-`FileImageRegistry` provides:
+`ImageRegistry` supplies shared validation and publication rules over independently configurable metadata and blob adapters. `FileImageRegistry` is its filesystem convenience wrapper and preserves the existing directory layout. Both provide:
 
 - `putBlob(bytes, expectedDigest?)`, `getBlob(digest)`.
 - `publish(manifest)`, `getManifest(digest)`, `resolve(reference)`, `list()`.
@@ -59,6 +59,27 @@ References are a digest alone or `name@version`, `name@tag`, `name@sha256:…`. 
 `importImage(destination, reference, source)` recursively copies the exact dependency closure and verifies its digests/sizes before publication. `source` supplies async `resolve(reference)` and `getBlob(digest)` methods. The transport must use an operator-approved fixed origin, authenticate tenant reads, bound response bodies before buffering, and apply its own timeout/cancellation. This library never follows a URL from an uploaded manifest. Imports do not execute or activate an image. A mutable tag is resolved only for that import; callers retain the returned digest.
 
 Registry directories must be private and operator-owned. Sharing one `FileImageRegistry` across tenants without API authorization is unsafe. Registry upload admission uses a filesystem lock across processes; concurrent upload receives `registry_busy` and should retry. A crash can leave `upload.lock`; after confirming no publisher owns it, an operator removes the stale lock. No automatic process-identity guessing or garbage collection is performed.
+
+### Storage adapters
+
+```ts
+import {
+  ImageRegistry, FileRegistryMetadataAdapter, FileRegistryBlobAdapter,
+} from "station-images";
+
+const storage = {
+  id: "production-images-v1", // Stable namespace identity, never a credential.
+  metadata: new FileRegistryMetadataAdapter("/data/image-catalog"),
+  blobs: new FileRegistryBlobAdapter("/data/image-artifacts"),
+};
+const registry = new ImageRegistry({ storage });
+```
+
+Built-ins are `FileRegistryMetadataAdapter`, `FileRegistryBlobAdapter`, `MemoryRegistryMetadataAdapter` and `MemoryRegistryBlobAdapter`. Memory adapters are volatile and share data only when clients reuse the same adapter instances. Mix the two layers independently. Custom providers implement `RegistryMetadataAdapter` and `RegistryBlobAdapter` from this package; PostgreSQL/S3 drivers are **not bundled**, and Station's existing queue database adapters do not implement these contracts.
+
+Metadata adapters implement bounded `read`, atomic `create` for manifests/versions, atomic `writeTag`, and complete bounded `listVersions`. Blob adapters implement bounded `read` and atomic `create(digest, bytes, maxTotalBytes)`. Creation returns false when a key exists and must never overwrite it. Blob quota admission must be atomic across all writers to the same namespace; a process-local counter is insufficient for distributed storage. The shared registry checks schemas, digests, sizes, dependency closure, immutable version conflicts and committed manifests. Commit a version only after its manifest and blobs are readable; custom backends need read-after-write consistency. Interrupted publication may leave unreferenced objects, which must not become runnable manifests.
+
+Daemon configuration accepts `registry.storage: storage` instead of `registry.rootDir`, plus optional `registry.cacheDir`. Custom registries stage verified artifacts and dependencies into a private local execution cache. Only its path and immutable identities enter child-process shims; adapter objects and storage credentials stay in the daemon. Pinned activations can recover offline from a complete cache, while moving tags resolve through the authoritative registry. Change `storage.id` when replacing a namespace: saved activations reject identity changes until explicitly reconciled. Adapter connection/client lifecycle is owned by the operator; Station does not close externally supplied clients.
 
 ## External signal protocol
 

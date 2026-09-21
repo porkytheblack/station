@@ -3,11 +3,13 @@ import { join, resolve } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { type SignalRunner, type AnySignal, isReservedEnvKey } from "station-signal";
-import { FileImageRegistry, ImageError, selectArtifact, type Digest, type ImageRecord } from "station-images";
+import { FileImageRegistry, ImageError, selectArtifact, importImage, type ImageRegistry, type Digest, type ImageRecord } from "station-images";
 import { createImageBackend, createImageSignal, type ImageBackendConfig, type ImageSignalConfig } from "./shim.js";
 export { createImageBackend, createImageSignal, type ImageBackendConfig, type ImageSignalConfig } from "./shim.js";
 export interface ImageRuntimeOptions {
-  registry: FileImageRegistry;
+  registry: ImageRegistry;
+  /** Private verified cache used by child processes; storage credentials stay in the daemon. */
+  cacheDir?: string;
   signalRunner: SignalRunner;
   stateDir: string;
   /** No implicit host backend: trusted-local must explicitly acknowledge its trust boundary. */
@@ -28,6 +30,7 @@ export function imageSignalName(digest: Digest, exportName: string): string {
 }
 /** Serialized install/restore; immutable wrappers preserve queued work across activation of later versions. */
 export class ImageRuntime {
+  readonly cache: FileImageRegistry;
   private readonly root: string;
   private readonly configuration: string;
   private readonly allowedEnv: string[];
@@ -37,11 +40,12 @@ export class ImageRuntime {
   private queue: Promise<unknown> = Promise.resolve();
   constructor(private readonly options: ImageRuntimeOptions) {
     this.root = resolve(options.stateDir);
+    this.cache = options.registry instanceof FileImageRegistry && !options.cacheDir ? options.registry : new FileImageRegistry(options.cacheDir ?? join(this.root, "cache"), { maxBlobBytes: options.registry.maxBlobBytes, maxTotalBytes: options.registry.maxTotalBytes });
     this.backend = structuredClone(options.backend);
     createImageBackend(this.backend); // reject malformed policy before registering any definitions
     this.allowedEnv = [...new Set(options.allowedEnv ?? [])].sort();
     for (const key of this.allowedEnv) if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || isReservedEnvKey(key)) throw new ImageError("invalid_environment", "Image environment grant contains a reserved or invalid key");
-    this.configuration = createHash("sha256").update(JSON.stringify({ backend: this.backend, allowedEnv: this.allowedEnv, registryRoot: options.registry.root })).digest("hex");
+    this.configuration = createHash("sha256").update(JSON.stringify({ backend: this.backend, allowedEnv: this.allowedEnv, registryRoot: this.cache.root, ...(this.cache === options.registry ? {} : { storageIdentity: options.registry.identity }) })).digest("hex");
   }
   private serialized<T>(operation: () => Promise<T>): Promise<T> {
     const current = this.queue.then(operation); this.queue = current.catch(() => {}); return current;
@@ -90,22 +94,34 @@ export class ImageRuntime {
     });
   }
   private async prepare(reference: string): Promise<InstalledImage> {
-    const image = await this.options.registry.resolve(reference), cached = this.installed.get(image.digest);
+    // A digest-pinned activation can recover from a complete verified local cache
+    // during a remote-storage outage. Moving tags always resolve at the authority.
+    let image: ImageRecord | undefined;
+    if (this.cache !== this.options.registry && (reference.startsWith("sha256:") || reference.includes("@sha256:"))) {
+      try { image = await this.cache.resolve(reference); }
+      catch (error) {
+        if (!(error instanceof ImageError) || error.code !== "not_found") throw error;
+      }
+    }
+    image ??= this.cache === this.options.registry
+      ? await this.cache.resolve(reference)
+      : await importImage(this.cache, reference, this.options.registry);
+    const cached = this.installed.get(image.digest);
     if (cached) return cached;
-    const images = [image, ...await this.options.registry.validateDependencies(image.manifest)];
+    const images = [image, ...await this.cache.validateDependencies(image.manifest)];
     const unique = [...new Map(images.map(record => [record.digest, record])).values()];
     const target = createImageBackend(this.backend).target;
     const signals: Record<string, AnySignal> = Object.create(null);
     for (const record of unique) {
       const artifact = selectArtifact(record.manifest, target);
-      if ((await this.options.registry.getBlob(artifact.digest)).byteLength !== artifact.size) throw new ImageError("size_mismatch", "Image artifact size mismatch");
+      if ((await this.cache.getBlob(artifact.digest)).byteLength !== artifact.size) throw new ImageError("size_mismatch", "Image artifact size mismatch");
       for (const definition of record.manifest.exports) {
         const requiredKeys = [...(definition.requiredEnv ?? []), ...Object.keys(record.manifest.env ?? {})];
         if (requiredKeys.some(key => !this.allowedEnv.includes(key))) throw new ImageError("environment_denied", "Image requires an environment key outside its operator grant");
         if (definition.kind === "beacon") continue;
         const name = imageSignalName(record.digest, definition.name);
         if (this.options.signalRunner.hasSignal(name) && !this.registered.has(name)) throw new ImageError("definition_conflict", "An existing definition conflicts with an immutable image export");
-        const config: ImageSignalConfig = { registryRoot: this.options.registry.root, digest: record.digest, name, definition, backend: this.backend, allowedEnv: this.allowedEnv };
+        const config: ImageSignalConfig = { registryRoot: this.cache.root, digest: record.digest, name, definition, backend: this.backend, allowedEnv: this.allowedEnv };
         signals[name] = createImageSignal(config);
         // Generate from controlled data; never import an uploaded artifact into the daemon.
         const helper = pathToFileURL(fileURLToPath(new URL(import.meta.url.endsWith(".ts") ? "./shim.ts" : "./shim.js", import.meta.url))).href;

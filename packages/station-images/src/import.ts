@@ -1,5 +1,5 @@
 import { manifestDigest, validateManifest } from "./manifest.js";
-import { FileImageRegistry } from "./registry.js";
+import type { ImageRegistry } from "./registry.js";
 import { fail, type Digest, type ImageRecord } from "./types.js";
 export interface ImageSource {
   /** Transport MUST enforce fixed approved origin, authentication, tenant and response byte limits. */
@@ -7,7 +7,7 @@ export interface ImageSource {
   getBlob(digest: Digest): Promise<Uint8Array>;
 }
 /** Copy and verify a pinned dependency closure. No activation or execution; interrupted imports are safe to retry. */
-export async function importImage(registry: FileImageRegistry, reference: string, source: ImageSource): Promise<ImageRecord> {
+export async function importImage(registry: ImageRegistry, reference: string, source: ImageSource): Promise<ImageRecord> {
   const imported = new Map<Digest, ImageRecord>();
   const pending = new Set<Digest>();
   const copy = async (ref: string, depth: number): Promise<ImageRecord> => {

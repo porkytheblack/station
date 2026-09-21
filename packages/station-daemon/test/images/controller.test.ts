@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { MemoryAdapter } from 'station-signal';
 import { BroadcastMemoryAdapter } from 'station-broadcast';
-import { digestBytes, type ImageManifest, type ImageRecord } from 'station-images';
+import { MemoryRegistryMetadataAdapter, MemoryRegistryBlobAdapter, digestBytes, type ImageManifest, type ImageRecord } from 'station-images';
 import { createStation } from '../../src/server/index.js';
 import { resolveConfig } from '../../src/config/schema.js';
 import { imageSignalName, type ImageBackendConfig } from '../../src/images/runtime.js';
@@ -30,11 +30,11 @@ function jsManifest(name: string, bytes: Buffer, exports: ImageManifest['exports
   return { format: 'station.image/v1', protocol: 'station.process/v1', name, version: '1.0.0', artifacts: [{ digest: digestBytes(bytes), size: bytes.length, entrypoint: 'app.mjs', platform: { os: 'any', arch: 'any' }, runtime: 'node', runtimeMajor: 20 }], exports, ...(dependencies ? { dependencies } : {}) };
 }
 
-test('daemon HTTP image publishing runs JS/native signals, a persisted DAG and a managed beacon', { timeout: 45000 }, async t => {
+for (const customStorage of [false, true]) test(`daemon HTTP image publishing runs JS/native signals, a persisted DAG and a managed beacon (${customStorage ? 'adapter storage' : 'filesystem'})`, { timeout: 45000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'station-images-http-')); t.after(() => rm(root, { recursive: true, force: true }));
   const adapter = new MemoryAdapter(), broadcastAdapter = new BroadcastMemoryAdapter();
   const servicePort = await port();
-  const station = await createStation(resolveConfig({ host: '127.0.0.1', port: servicePort, stationDir: 'daemon', auth: { username: 'test', password: 'test-only-password' }, adapter, broadcastAdapter, runner: { pollIntervalMs: 15 }, broadcastRunner: { pollIntervalMs: 15 }, network: { stationId: 'image-http', heartbeatIntervalMs: 30 }, registry: { execution: { backend, allowedEnv: ['IMAGE_TOKEN'] } } }), root);
+  const station = await createStation(resolveConfig({ host: '127.0.0.1', port: servicePort, stationDir: 'daemon', auth: { username: 'test', password: 'test-only-password' }, adapter, broadcastAdapter, runner: { pollIntervalMs: 15 }, broadcastRunner: { pollIntervalMs: 15 }, network: { stationId: 'image-http', heartbeatIntervalMs: 30 }, registry: { ...(customStorage ? { storage: { id: 'http-adapter-test', metadata: new MemoryRegistryMetadataAdapter(), blobs: new MemoryRegistryBlobAdapter() } } : {}), execution: { backend, allowedEnv: ['IMAGE_TOKEN'] } } }), root);
   t.after(() => station.stop());
   const key = await station.keyStore!.create('test operator', ['admin', 'read', 'trigger']);
   await station.start();
@@ -80,7 +80,7 @@ test('daemon HTTP image publishing runs JS/native signals, a persisted DAG and a
   assert.equal(nativeRun.status, 'completed', nativeRun.error); assert.deepEqual(JSON.parse(nativeRun.output!), { native: true });
 });
 
-test('Headquarters publication becomes executable on both cold network workers without per-worker install', { timeout: 45000 }, async t => {
+test('Adapter-backed Headquarters publication becomes executable on both cold network workers without per-worker install', { timeout: 45000 }, async t => {
   const { SqliteAdapter } = await import('station-adapter-sqlite');
   const { StationNetworkSqliteAdapter } = await import('station-adapter-sqlite/network');
   const { FileImageRegistry } = await import('station-images');
@@ -88,7 +88,7 @@ test('Headquarters publication becomes executable on both cold network workers w
   const queuePath = join(root, 'queue.db'), networkPath = join(root, 'network.db');
   const hqQueue = new SqliteAdapter({ dbPath: queuePath }), hqNetwork = new StationNetworkSqliteAdapter({ dbPath: networkPath });
   const hqPort = await port();
-  const hq = await createStation(resolveConfig({ role: 'headquarters', host: '127.0.0.1', port: hqPort, stationDir: 'hq', auth: { username: 'test', password: 'test-password' }, adapter: hqQueue, network: { id: 'image-network', stationId: 'hq', adapter: hqNetwork, heartbeatIntervalMs: 40, leaseDurationMs: 3000 }, registry: { execution: { backend } }, runner: { pollIntervalMs: 20 } }), root);
+  const hq = await createStation(resolveConfig({ role: 'headquarters', host: '127.0.0.1', port: hqPort, stationDir: 'hq', auth: { username: 'test', password: 'test-password' }, adapter: hqQueue, network: { id: 'image-network', stationId: 'hq', adapter: hqNetwork, heartbeatIntervalMs: 40, leaseDurationMs: 3000 }, registry: { storage: { id: 'headquarters-adapters', metadata: new MemoryRegistryMetadataAdapter(), blobs: new MemoryRegistryBlobAdapter() }, execution: { backend } }, runner: { pollIntervalMs: 20 } }), root);
   const key = await hq.keyStore!.create('worker catalog access', ['admin', 'read', 'trigger']);
   const active = new Map<string, Awaited<ReturnType<typeof createStation>>>(); active.set('hq', hq);
   t.after(async () => { for (const [id, station] of [...active].reverse()) { await station.stop(); active.delete(id); } });

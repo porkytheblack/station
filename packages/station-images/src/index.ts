@@ -7,3 +7,6 @@ export * from "./execution.js";
 export * from "./import.js";
 export * from "./beacon.js";
 export * from "./docker.js";
+export * from "./storage.js";
+export * from "./storage-file.js";
+export * from "./storage-memory.js";

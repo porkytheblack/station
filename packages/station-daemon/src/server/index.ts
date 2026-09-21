@@ -1,6 +1,6 @@
 import { ImageController } from "../images/controller.js";
 import { registrySource } from "../registry/source.js";
-import { FileImageRegistry } from "station-images";
+import { FileImageRegistry, ImageRegistry } from "station-images";
 import { imageRegistryRoutes } from "./routes/v1/registry.js";
 import { bindStationTenant } from "./tenant-binding.js";
 import { Hono } from "hono";
@@ -298,12 +298,15 @@ export async function createStation(config: StationConfig, cwd: string): Promise
   // Build Hono app
   const app = new Hono();
 
-  const imageRegistry = config.registry ? new FileImageRegistry(resolve(dataDir, config.registry.rootDir ?? "registry"), config.registry) : undefined;
+  if (config.registry?.storage && config.registry.rootDir !== undefined) throw new Error("Registry storage and rootDir are alternatives; use cacheDir for a local execution cache");
+  const imageRegistry = config.registry ? config.registry.storage
+    ? new ImageRegistry({ ...config.registry, storage: config.registry.storage })
+    : new FileImageRegistry(resolve(dataDir, config.registry.rootDir ?? "registry"), config.registry) : undefined;
 
   const imageSource = config.registry?.upstream ? registrySource(config.registry.upstream) : undefined;
   if (imageRegistry && config.registry?.execution && signalRunner) {
     if (config.execution?.tenantId && config.registry.execution.backend.kind === "trusted-local") throw new Error("Tenant image execution requires isolation");
-    images = new ImageController({ registry: imageRegistry, source: imageSource, signalRunner, broadcastRunner, beaconRunner, stateDir: resolve(dataDir, "images"), stationId: config.role === "headquarters" ? undefined : config.network.stationId,
+    images = new ImageController({ registry: imageRegistry, cacheDir: config.registry.cacheDir ? resolve(dataDir, config.registry.cacheDir) : undefined, source: imageSource, signalRunner, broadcastRunner, beaconRunner, stateDir: resolve(dataDir, "images"), stationId: config.role === "headquarters" ? undefined : config.network.stationId,
       canTarget: async (id, name) => { const node = await networkAdapter.getStation(id); return Boolean(node && node.networkId === config.network.id && node.role !== "headquarters" && node.status === "online" && node.leaseExpiresAt > new Date() && node.definitions.signals.includes(name)); },
       ...config.registry.execution });
   }

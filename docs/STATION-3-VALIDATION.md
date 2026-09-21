@@ -19,12 +19,13 @@ The checks below exercise real behavior where stated; passing a simulated engine
 
 | Area | Evidence |
 | --- | --- |
-| Daemon | 109 tests passed, including authenticated registry APIs and execution ownership |
-| Image integration | 9 tests passed: JavaScript/native execution, granted environment variables, persisted broadcast plans, supervised beacon dependency triggers and Headquarters distribution |
+| Daemon | 111 tests passed, including authenticated registry APIs and execution ownership |
+| Image integration | 11 tests passed: JavaScript/native execution, granted environment variables, persisted broadcast plans, supervised beacon dependency triggers and Headquarters distribution |
 | Placement | Shared SQLite workers exercised signal retries, owner-only execution, beacon restart and expired-lease recovery; broadcast tests verify planner and child placement persistence |
 | Broadcasts | 27 tests passed, including cancellation races, durable planning and partial-write recovery |
 | Beacons | 58 tests passed |
 | SQLite adapters | 40 tests passed, including additive placement migrations |
+| Registry storage adapters | 38 image tests passed, including all four file/memory combinations, concurrent immutable publication, quota admission, corruption checks and upload snapshots; daemon tests include adapter-backed Headquarters and offline cache recovery |
 | Image Docker backend | Five live Docker tests passed: isolation settings, JavaScript execution, compiled Go execution, timeout cleanup and independent reaping |
 | Sandbox Docker backend | Three live tests passed with an explicit seccomp profile: custom npm install persistence, files, terminals, services, cancellation, default network denial and killed-controller recovery |
 | Browser Docker backend | Live named-volume integration passed: active kernel seccomp, isolation/resource flags, separate cookies, persistent profile restart, page controls, uploads/downloads, screenshots, trace ZIPs, recording recovery and cancellation |
@@ -41,6 +42,7 @@ The live image, sandbox and browser tests used Docker Desktop's Linux arm64 engi
 
 ## Remaining limits
 
+- Registry storage has file/memory adapters and extension interfaces; PostgreSQL/S3 registry drivers are not bundled.
 - Image registry operations currently require operator privileges. Customer-scoped image publication, tenant registry namespaces and the complete public deployment authorization model are not implemented.
 - The CLI has explicit commands and generic API access. Its TUI is read-only; interactive provisioning, terminal attachment and full image deployment/dashboard workflows remain future work.
 - No VM backend, automatic network enrollment, deployment generation/rollback manager or registry garbage collector is implemented.
