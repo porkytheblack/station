@@ -1,0 +1,19 @@
+TAP version 13
+# [station] Running on http://127.0.0.1:49342
+# [station] Running on http://127.0.0.1:49343
+# Subtest: agent toolset and image bridge use authenticated Headquarters and a real Playwright worker
+ok 1 - agent toolset and image bridge use authenticated Headquarters and a real Playwright worker
+  ---
+  duration_ms: 797.87425
+  type: 'test'
+  ...
+# Real HTTP/browser integration; protocol observer performs no model inference and reads no provider credentials.
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1134.542791

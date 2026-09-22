@@ -92,7 +92,7 @@ export class MemoryAdapter implements SignalQueueAdapter {
     if (run) {
       const rec = run as unknown as Record<string, unknown>;
       for (const [key, value] of Object.entries(patch)) {
-        if (key === "__proto__" || key === "constructor" || key === "prototype") continue;
+        if (key === "__proto__" || key === "constructor" || key === "prototype" || key === "requiredStationId") continue;
         if (value === undefined) {
           delete rec[key];
         } else {
@@ -105,7 +105,7 @@ export class MemoryAdapter implements SignalQueueAdapter {
   async claimRun(id: string, claim: RunClaim): Promise<Run | null> {
     const run = this.runs.get(id);
     const now = claim.claimedAt;
-    if (!run || run.status !== "pending" || (run.nextRunAt && run.nextRunAt > now)) return null;
+    if (!run || run.status !== "pending" || (run.nextRunAt && run.nextRunAt > now) || (run.requiredStationId !== undefined && run.requiredStationId !== claim.stationId)) return null;
     Object.assign(run, claim, {
       status: "running" as const,
       startedAt: now,

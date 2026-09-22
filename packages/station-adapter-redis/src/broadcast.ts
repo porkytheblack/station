@@ -76,30 +76,20 @@ export class BroadcastRedisAdapter implements BroadcastQueueAdapter {
     const hash = broadcastRunToHash(run);
     const hashKey = broadcastRunHashKey(this.prefix, run.id);
 
-    const pipeline = this.redis.multi();
-
-    // Store run data as a hash
-    pipeline.hset(hashKey, hash);
-
-    // Index by status for scheduling
-    if (run.status === "pending") {
-      pipeline.zadd(pendingBroadcastRunsKey(this.prefix), String(dateToScore(run.nextRunAt)), run.id);
-    } else if (run.status === "running") {
-      pipeline.zadd(runningBroadcastRunsKey(this.prefix), String(dateToScore(run.startedAt)), run.id);
-    }
-
-    // Index by broadcast name (score = createdAt timestamp)
-    pipeline.zadd(broadcastNameRunsKey(this.prefix, run.broadcastName), String(run.createdAt.getTime()), run.id);
-
-    // Index by broadcast name + status (set for hasBroadcastRunWithStatus)
-    pipeline.sadd(broadcastStatusRunsKey(this.prefix, run.broadcastName, run.status), run.id);
-
-    // Track completedAt for purge support
-    if (run.completedAt) {
-      pipeline.zadd(completedAtBroadcastRunsKey(this.prefix), String(run.completedAt.getTime()), run.id);
-    }
-
-    await pipeline.exec();
+    const inserted = await this.redis.eval(`
+      if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end
+      local values = cjson.decode(ARGV[8])
+      for key, value in pairs(values) do redis.call('HSET', KEYS[1], key, value) end
+      if ARGV[3] == 'pending' then redis.call('ZADD', KEYS[2], ARGV[4], ARGV[1]) end
+      if ARGV[3] == 'running' then redis.call('ZADD', KEYS[3], ARGV[5], ARGV[1]) end
+      redis.call('ZADD', KEYS[4], ARGV[6], ARGV[1])
+      redis.call('SADD', KEYS[5], ARGV[1])
+      if ARGV[7] ~= '' then redis.call('ZADD', KEYS[6], ARGV[7], ARGV[1]) end
+      return 1
+    `, 6, hashKey, pendingBroadcastRunsKey(this.prefix), runningBroadcastRunsKey(this.prefix),
+      broadcastNameRunsKey(this.prefix, run.broadcastName), broadcastStatusRunsKey(this.prefix, run.broadcastName, run.status), completedAtBroadcastRunsKey(this.prefix),
+      run.id, run.broadcastName, run.status, String(dateToScore(run.nextRunAt)), String(dateToScore(run.startedAt)), String(run.createdAt.getTime()), run.completedAt ? String(run.completedAt.getTime()) : "", JSON.stringify(hash));
+    if (Number(inserted) !== 1) throw new Error(`Broadcast run with id "${run.id}" already exists`);
   }
 
   async getBroadcastRun(id: string): Promise<BroadcastRun | null> {

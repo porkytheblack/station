@@ -1,0 +1,24 @@
+
+> @ test:execution:tenants /Users/don/Documents/dev/simple-signal
+> node --import tsx --test packages/station-kit/test/e2e/tenants.mjs
+
+TAP version 13
+# [station] Running on http://127.0.0.1:64261
+# [station] Running on http://127.0.0.1:64288
+# [station] Running on http://127.0.0.1:64313
+# [tenant-e2e] real Headquarters, two tenant workers, offline custom install, file isolation, browser screenshot, cross-tenant denial, capacity and key revocation passed
+# Subtest: public tenant keys control real isolated containers through Headquarters without cross-tenant access
+ok 1 - public tenant keys control real isolated containers through Headquarters without cross-tenant access
+  ---
+  duration_ms: 28654.498584
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 29089.107625

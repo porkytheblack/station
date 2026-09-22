@@ -17,6 +17,7 @@ const { toColumn, toField } = createColumnMapper({
   completedAt: "completed_at",
   createdAt: "created_at",
   stationId: "station_id",
+  requiredStationId: "required_station_id",
   leaseToken: "lease_token",
   leaseExpiresAt: "lease_expires_at",
   claimedAt: "claimed_at",
@@ -34,7 +35,9 @@ const { toColumn: toStepColumn, toField: toStepField } = createColumnMapper({
 const STEP_DATE_FIELDS = new Set(["startedAt", "completedAt"]);
 
 function rowToRun(row: Record<string, unknown>): Run {
-  return rowToObject<Run>(row, toField, DATE_FIELDS);
+  const run = rowToObject<Run>(row, toField, DATE_FIELDS);
+  run.requiredStationId = typeof row.required_station_id === "string" ? row.required_station_id : undefined;
+  return run;
 }
 function rowToStep(row: Record<string, unknown>): Step {
   return rowToObject<Step>(row, toStepField, STEP_DATE_FIELDS);
@@ -95,6 +98,7 @@ export class PostgresAdapter implements SerializableAdapter {
         output        TEXT,
         error         TEXT,
         station_id    TEXT,
+        required_station_id TEXT,
         lease_token   TEXT,
         lease_expires_at TIMESTAMPTZ,
         claimed_at    TIMESTAMPTZ,
@@ -105,6 +109,7 @@ export class PostgresAdapter implements SerializableAdapter {
     `);
 
     await this.pool.query(`ALTER TABLE ${this.tableName} ADD COLUMN IF NOT EXISTS station_id TEXT`);
+    await this.pool.query(`ALTER TABLE ${this.tableName} ADD COLUMN IF NOT EXISTS required_station_id TEXT`);
     await this.pool.query(`ALTER TABLE ${this.tableName} ADD COLUMN IF NOT EXISTS lease_token TEXT`);
     await this.pool.query(`ALTER TABLE ${this.tableName} ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ`);
     await this.pool.query(`ALTER TABLE ${this.tableName} ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ`);
@@ -177,10 +182,10 @@ export class PostgresAdapter implements SerializableAdapter {
         (id, signal_name, kind, input, status, attempts, max_attempts,
          timeout, interval, next_run_at, last_run_at, started_at,
          completed_at, created_at, output, error, station_id, lease_token,
-         lease_expires_at, claimed_at, schedule_id, scheduled_for, idempotency_key)
+         lease_expires_at, claimed_at, schedule_id, scheduled_for, idempotency_key, required_station_id)
        VALUES
         ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
-         $17, $18, $19, $20, $21, $22, $23)`,
+         $17, $18, $19, $20, $21, $22, $23, $24)`,
       [
         run.id,
         run.signalName,
@@ -205,6 +210,7 @@ export class PostgresAdapter implements SerializableAdapter {
         run.scheduleId ?? null,
         run.scheduledFor ?? null,
         run.idempotencyKey ?? null,
+        run.requiredStationId ?? null,
       ],
     );
   }
@@ -294,6 +300,7 @@ export class PostgresAdapter implements SerializableAdapter {
            lease_expires_at = $4, claimed_at = $5, started_at = $5,
            last_run_at = $5, attempts = attempts + 1
        WHERE id = $1 AND status = 'pending'
+         AND (required_station_id IS NULL OR required_station_id = $2)
          AND (next_run_at IS NULL OR next_run_at <= $5)
        RETURNING *`,
       [id, claim.stationId, claim.leaseToken, claim.leaseExpiresAt, claim.claimedAt],

@@ -3,14 +3,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "hq": "station --config station.hq.config.ts --no-open",
-    "worker": "station --config station.worker.config.ts --no-open"
+    "hq": "stationd --config station.hq.config.ts",
+    "worker": "stationd --config station.worker.config.ts"
   },
   "dependencies": {
     "station-adapter-sqlite": "workspace:*",
     "station-beacon": "workspace:*",
     "station-broadcast": "workspace:*",
-    "station-kit": "workspace:*",
+    "station-daemon": "workspace:*",
     "station-signal": "workspace:*"
   },
   "devDependencies": {

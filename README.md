@@ -11,14 +11,16 @@ Type-safe background jobs, recurring tasks, and DAG workflows for TypeScript.
 - **Station Networks** — Scale stateless work across a fleet with atomic leases, per-station and fleet-wide concurrency, placement labels, draining, and a Headquarters control plane
 - **Calendar schedules** — Five-field cron expressions with IANA timezones, overlap policy, and explicit misfire handling
 - **Four adapter backends** — SQLite, PostgreSQL, MySQL, Redis (or bring your own)
-- **`station-kit`** — The entry point: one config file and `npx station` wire the runners, a real-time dashboard with auth and WebSocket updates, and an authenticated REST API
+- **Separate daemon and clients** — `station-daemon` runs jobs and the API; `station-runtime-cli` and `station-dashboard` independently connect to local or remote daemons
+- **Compiled Station Images** — Publish native or bundled JavaScript signals, broadcast planners and beacons to an operator registry; distribute compatible images across Headquarters workers with explicit environment grants and optional worker pins. See the [complete guide](docs/STATION-IMAGES.md) and [site reference](https://station.dterminal.net/docs/images).
 - **Remote triggers** — `configure({ endpoint, apiKey })` to trigger jobs from any service over HTTP
 - **Claude Code skill** — AI assistant that knows the full API
 
 ## Quick start
 
 ```bash
-pnpm add station-signal station-kit
+pnpm add station-signal station-daemon station-adapter-sqlite
+pnpm add -D station-runtime-cli station-dashboard
 ```
 
 Define a signal:
@@ -40,7 +42,7 @@ Configure and run it:
 
 ```ts
 // station.config.ts
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 import { SqliteAdapter } from "station-adapter-sqlite";
 
 export default defineConfig({
@@ -50,11 +52,23 @@ export default defineConfig({
 ```
 
 ```bash
-npx station
+pnpm exec stationd
 ```
 
-`station-kit` is the entry point: one config file and one command wire the
-runners, the dashboard, and the authenticated v1 API. The `SignalRunner` /
+`stationd` runs the configured runners and authenticated v1 API in the foreground.
+Start the dashboard separately in another terminal:
+
+```bash
+STATION_DAEMON_URL=http://127.0.0.1:4400 PORT=4401 STATION_DASHBOARD_HOST=127.0.0.1 pnpm exec station-dashboard
+```
+
+Open `http://127.0.0.1:4401`. Closing the dashboard does not stop the daemon or
+jobs. For a remote daemon, set its URL instead. Station 3.0 retires `station-kit`
+without compatibility exports; configuration imports now come from
+`station-daemon`. The `station` executable belongs to `station-runtime-cli`. See the
+[Station 3.0 breaking changes](docs/STATION-3.md) for the complete startup split.
+
+The `SignalRunner` /
 `BroadcastRunner` / `BeaconRunner` classes are exported too, but constructing
 them by hand is an escape hatch — for embedding Station in a process you already
 own, headless workers, or tests.
@@ -80,12 +94,20 @@ await sendEmail.trigger({
 | [`station-beacon`](./packages/station-beacon) | Long-running supervised processes — servers, pollers, clients |
 | [`station-env`](./packages/station-env) | Runtime-managed environment variables injected into signal/beacon runs |
 | [`station-schedules`](./packages/station-schedules) | Runtime interval/cron schedules with atomic occurrence claims |
+| [`station-browser`](./packages/station-browser) | Experimental Station execution in Web Workers/service workers with IndexedDB |
+| [`station-sandbox`](./packages/station-sandbox) | Persistent workspaces, terminals and services with host/container adapters |
+| [`station-browser-use`](./packages/station-browser-use) | Browser sessions, live takeover, inspection, traces and durable screenshot playback |
+| [`station-expressions`](./packages/station-expressions) | Pure expression AST, validation and workflow mappings |
+| [`station-tauri`](./packages/station-tauri) | Local Station sidecar integration for Tauri applications |
 | [`station-network`](./packages/station-network) | Fleet membership, capacity reporting, draining, and distributed controller leases |
 | [`station-adapter-sqlite`](./packages/station-adapter-sqlite) | SQLite adapter (better-sqlite3) |
 | [`station-adapter-postgres`](./packages/station-adapter-postgres) | PostgreSQL adapter (pg) |
 | [`station-adapter-mysql`](./packages/station-adapter-mysql) | MySQL adapter (mysql2) |
 | [`station-adapter-redis`](./packages/station-adapter-redis) | Redis adapter (ioredis) |
-| [`station-kit`](./packages/station-kit) | **The entry point** — `defineConfig` + `npx station`: runners, dashboard, v1 API, deploy |
+| [`station-daemon`](./packages/station-daemon) | Headless runtime, configuration, authenticated API and `stationd` |
+| [`station-client`](./packages/station-client) | Shared authenticated client transport |
+| [`station-runtime-cli`](./packages/station-cli) | `station` command, local process management and remote operations |
+| [`station-dashboard`](./packages/station-dashboard) | Independently started dashboard for a local or remote daemon |
 
 ## Documentation
 
@@ -101,6 +123,46 @@ and [the agent reference](.claude/skills/station/browser.md) provides worker
 patterns and the supported API. The docs build includes both browser guides in
 `llms.txt` and `llms-full.txt`.
 
+### Server execution primitives
+
+`station-sandbox` supplies persistent workspaces, Bash commands, interactive terminals,
+supervised services and file transfer through host or Docker/Podman adapters.
+`station-browser-use` independently manages browser sessions, semantic/iframe targeting,
+live viewing and human takeover, DOM/accessibility inspection, diagnostics/trace exports,
+profiles, uploads/downloads and screenshot playback. Headquarters routes each
+operation to its owning private worker. See the
+[execution guide](https://station.dterminal.net/docs/execution),
+[network example](./examples/18-execution-network) and
+[agent reference](.claude/skills/station/execution.md).
+
+Agents can mount `createBrowserAgentTools` from `station-browser-use/agent` against
+an authenticated Headquarters connection. Tools scope sessions and profile grants
+to a workflow, provide DOM/ARIA observations and image screenshots, and respect
+human takeover. The [Foundry agent example](examples/19-foundry-browser) includes
+the tool and native-image bridge plus an opt-in real-model verification harness.
+
+The operator dashboard exposes `/sandboxes` and `/browser-use`. Custom npm tools
+persist with workspace storage and are available in later commands, terminals
+and services. Playwright profiles and five-second screenshot recordings can use
+persistent storage; live shells and browser tabs are interrupted on worker restart.
+Explicit checkpoints reopen saved page URLs/profile options in a new session; durable
+action journals record started/finished outcomes without automatically replaying work.
+Bun supports basic browser actions; native terminals require a Node controller.
+
+Host adapters are for trusted workloads. Public customer execution uses separate
+tenant-scoped authorization and dedicated workers with isolated, network-restricted
+container backends. The included [Linux browser deployment profile](scripts/execution-container/enforced/README.md)
+provides an HTTPS proxy, host deny rules and XFS quotas with protected quota metadata.
+Operators must deploy and verify those controls on their host; these primitives do not implement customer onboarding, billing, automatic placement
+or distributed failover. Node stays the default signal/beacon runtime;
+`BunProcessRuntime` independently selects Bun child processes.
+
+Run `pnpm test:execution:dashboard` for real dashboard/private-worker workflows,
+`pnpm test:execution:containers` for engine integration and
+`pnpm test:browser-use` for browser controls and persistence.
+`pnpm test:execution:policy` checks the browser egress proxy and deployment verifier. Release preflight
+checks every package before uploads; cloud deployment still needs target validation.
+
 [station-docs](https://github.com/porkytheblack/station) — Getting started, API reference, examples.
 
 ## Claude Code skill
@@ -113,8 +175,9 @@ Teaches Claude how to build with every Station package. Covers signals, broadcas
 
 ## Releasing to npm
 
-All 14 public packages, including experimental `station-browser`, share version
-2.3.0. Use Node.js 22 or later with the pinned pnpm version. With dependencies
+All 16 public packages, including experimental `station-browser`,
+`station-sandbox` and `station-browser-use`, share version
+2.4.0. Use Node.js 22 or later with the pinned pnpm version. With dependencies
 installed, a clean committed checkout, and npm publish access, run:
 
 ```bash
@@ -128,6 +191,13 @@ Chromium; the preflight installs Playwright's matching browser if it is missing
 (the first run needs a download). Linux hosts need Chromium's system libraries;
 use `pnpm --filter example-17-browser exec playwright install --with-deps chromium`
 on a fresh CI machine.
+
+Release preflight includes local browser-agent tool and image-bridge checks and
+does not require a model-provider key. The optional `pnpm test:browser-use:agent`
+test exercises a real Foundry agent through OpenRouter using the
+[Foundry example setup](examples/19-foundry-browser/README.md). It incurs provider
+usage and is separate from package publication. Passing local browser/protocol
+tests does not by itself verify a model completing a browser task.
 
 Preview the same release without uploads:
 

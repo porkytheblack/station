@@ -25,7 +25,7 @@ STATION_ID=worker-ke-1 STATION_NAME="Kenya GPU" STATION_PORT=5610 STATION_GPU=tr
 STATION_ID=worker-ke-2 STATION_NAME="Kenya CPU" STATION_PORT=5620 STATION_GPU=false pnpm worker
 ```
 
-Open `http://127.0.0.1:5600` and sign in with `admin` / `station`. Headquarters
+Open `http://127.0.0.1:5601` and sign in with `admin` / `station`. Headquarters
 accepts requests and reconciles schedules/broadcasts; the workers execute signal
 runs and supervise beacons.
 
@@ -43,3 +43,15 @@ can only run on `worker-ke-1`.
   those endpoints at the network boundary.
 - Tune heartbeat and lease durations for real database/network jitter.
 - Drain stations before deployment and wait for active work to finish.
+
+## Independent dashboard (Station 3.0)
+
+Build and run the dashboard separately from the repository root:
+
+```sh
+pnpm --filter station-dashboard build
+STATION_DAEMON_URL=http://127.0.0.1:5600 PORT=5601 HOSTNAME=127.0.0.1 pnpm --filter station-dashboard exec station-dashboard
+```
+
+Open `http://127.0.0.1:5601`. The daemon API stays on port 5600.
+Stopping the dashboard does not stop Headquarters or the workers.

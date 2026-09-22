@@ -1,5 +1,5 @@
 /** What kind of runnable an env var can be scoped to. */
-export type EnvTargetKind = "signal" | "beacon";
+export type EnvTargetKind = "signal" | "broadcast" | "beacon";
 
 /** A specific signal or beacon an env var is fed into. */
 export interface EnvTarget {
@@ -103,8 +103,8 @@ export function validateEnvTargets(targets: unknown): string | null {
   for (const t of targets) {
     if (!t || typeof t !== "object") return "each target must be an object";
     const { kind, name } = t as Partial<EnvTarget>;
-    if (kind !== "signal" && kind !== "beacon") {
-      return `target kind must be "signal" or "beacon"`;
+    if (kind !== "signal" && kind !== "broadcast" && kind !== "beacon") {
+      return `target kind must be "signal", "broadcast" or "beacon"`;
     }
     if (typeof name !== "string" || name.length === 0) {
       return "target name is required";

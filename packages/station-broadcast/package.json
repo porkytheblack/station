@@ -1,12 +1,15 @@
 {
   "name": "station-broadcast",
-  "version": "2.3.0",
-  "description": "Workflow orchestration for station-signal — connect signals into DAGs",
+  "version": "3.0.0",
+  "description": "Workflow orchestration for station-signal \u2014 connect signals into DAGs",
   "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
-    "./browser": { "types": "./dist/browser.d.ts", "default": "./dist/browser.js" },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "default": "./dist/browser.js"
+    },
     ".": {
       "types": "./dist/index.d.ts",
       "browser": "./dist/browser.js",
@@ -21,14 +24,19 @@
       "default": "crypto"
     }
   },
-  "files": ["dist", "src"],
+  "files": [
+    "dist",
+    "src"
+  ],
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/*.test.ts"
   },
   "type": "module",
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "peerDependencies": {
     "station-signal": "workspace:*"
   },

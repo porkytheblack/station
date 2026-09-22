@@ -6,13 +6,23 @@
     "dev:browser": "pnpm --filter example-17-browser... build && pnpm --filter example-17-browser start",
     "build": "pnpm -r run build",
     "typecheck": "pnpm -r run typecheck",
-    "test": "pnpm test:release && pnpm --reporter=append-only -r run test",
+    "test": "pnpm test:release && pnpm test:browser-use:bridge && pnpm test:browser-use:tools && pnpm --reporter=append-only -r run test",
+    "test:browser-use:bridge": "node --test examples/19-foundry-browser/browser-bridge.test.mjs",
+    "test:browser-use:tools": "node --import tsx --test packages/station-daemon/test/e2e/browser-agent-tools.mjs",
+    "test:browser-use:agent": "node --import tsx scripts/test-foundry-browser.mjs",
     "test:release": "node --test scripts/release-npm.test.mjs",
     "test:browser:install": "pnpm --filter example-17-browser exec playwright install chromium",
     "release": "node scripts/release-npm.mjs",
     "release:dry-run": "node scripts/release-npm.mjs --dry-run",
     "release:npm": "node scripts/release-npm.mjs",
-    "release:npm:dry-run": "node scripts/release-npm.mjs --dry-run"
+    "release:npm:dry-run": "node scripts/release-npm.mjs --dry-run",
+    "benchmark:runtimes": "pnpm --filter station-signal build && node scripts/benchmark-runtimes.mjs",
+    "test:browser-use": "pnpm --filter station-browser-use test:browsers",
+    "test:execution:dashboard": "pnpm --filter station-daemon... build && pnpm --filter station-dashboard build && node --test packages/station-daemon/test/e2e/dashboard.mjs",
+    "test:execution:containers": "pnpm --filter station-sandbox test:containers",
+    "test:execution:tenants": "node --import tsx --test packages/station-daemon/test/e2e/tenants.mjs",
+    "test:browser-use:containers": "pnpm --filter station-browser-use exec node --import tsx --test test/container.integration.ts",
+    "test:execution:policy": "node --test scripts/execution-container/enforced/proxy.test.mjs && python3 -B scripts/execution-container/enforced/provision_test.py"
   },
   "devDependencies": {
     "@types/node": "^25.3.0",
@@ -22,7 +32,8 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "better-sqlite3",
-      "esbuild"
+      "esbuild",
+      "node-pty"
     ]
   }
 }

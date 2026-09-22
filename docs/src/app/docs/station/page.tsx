@@ -3,7 +3,7 @@ import Link from "next/link";
 import { Code } from "../../components/Code";
 
 export const metadata: Metadata = {
-  title: "Station Dashboard — Station",
+  title: "Station Daemon — Station",
 };
 
 export default function StationPage() {
@@ -12,38 +12,29 @@ export default function StationPage() {
       <div className="eyebrow">API Reference</div>
       <h2 style={{ marginTop: 0 }}>Station</h2>
       <p>
-        Station is a monitoring dashboard for Station. It connects to your
-        signal and broadcast adapters and provides a web interface for
-        inspecting registered signals, browsing run history, and watching
-        broadcast DAG execution in real time.
+        <code>station-daemon</code> runs Station without a dashboard process. It
+        composes signal, broadcast and beacon runners, storage, authentication,
+        the Hono API and real-time events. Its executable is <code>stationd</code>.
       </p>
       <p>
-        Station is a combined:
+        <code>station-runtime-cli</code> supplies the <code>station</code> client;
+        <code>station-dashboard</code> supplies the independently started web UI.
+        Both can connect to a local or remote daemon. Stopping a client does not
+        stop the daemon or its work.
       </p>
-      <ul>
-        <li>
-          <strong>Hono API server</strong> — REST endpoints for signals, runs,
-          broadcasts, and health checks, plus a WebSocket endpoint for
-          real-time event streaming
-        </li>
-        <li>
-          <strong>Next.js frontend</strong> — Dashboard UI that renders signal
-          metadata, run history, broadcast DAG visualization, and live log
-          output
-        </li>
-      </ul>
-      <p>
-        The API and dashboard share the configured public Station address
-        (port 4400 by default). Station manages the internal frontend process
-        automatically when you launch it.
-      </p>
+      <div className="warn-box"><p>
+        Station 3.0 removes <code>station-kit</code> without compatibility
+        exports. Replace configuration imports with <code>station-daemon</code>
+        and start the dashboard separately. Existing published 2.x packages
+        remain available; this change does not delete persisted data.
+      </p></div>
 
       <hr className="divider" />
 
       {/* ── Install ── */}
 
       <h3>Install</h3>
-      <Code>{`pnpm add station-kit`}</Code>
+      <Code>{`pnpm add station-daemon`}</Code>
 
       <hr className="divider" />
 
@@ -54,7 +45,7 @@ export default function StationPage() {
         Create a <code>station.config.ts</code> (or <code>.js</code> / <code>.mjs</code>)
         in your project root:
       </p>
-      <Code>{`import { defineConfig } from "station-kit";
+      <Code>{`import { defineConfig } from "station-daemon";
 import { SqliteAdapter } from "station-adapter-sqlite";
 import { BroadcastSqliteAdapter } from "station-adapter-sqlite/broadcast";
 
@@ -105,7 +96,7 @@ export default defineConfig({
             <td><code>number</code></td>
             <td><code>4400</code></td>
             <td>
-              Public HTTP port for both the API and dashboard.
+              HTTP port for the daemon API.
             </td>
           </tr>
           <tr>
@@ -113,7 +104,7 @@ export default defineConfig({
             <td><code>string</code></td>
             <td><code>{`"localhost"`}</code></td>
             <td>
-              Hostname to bind both servers to. Set
+              Hostname to bind the daemon API to. Set
               to <code>&quot;0.0.0.0&quot;</code> to listen on all interfaces.
             </td>
           </tr>
@@ -181,15 +172,6 @@ export default defineConfig({
               SignalRunner and BroadcastRunner internally. Set
               to <code>false</code> for read-only monitoring of an existing
               runner&rsquo;s database.
-            </td>
-          </tr>
-          <tr>
-            <td><code>open</code></td>
-            <td><code>boolean</code></td>
-            <td><code>true</code></td>
-            <td>
-              Automatically open the dashboard in the default browser on
-              startup.
             </td>
           </tr>
           <tr>
@@ -293,7 +275,7 @@ export default defineConfig({
         an in-memory store for tests, …) can be wired in via{" "}
         <code>auth.keyStorage</code> on <code>defineConfig</code>.
       </p>
-      <Code>{`import { defineConfig, SqliteKeyStorage } from "station-kit";
+      <Code>{`import { defineConfig, SqliteKeyStorage } from "station-daemon";
 import { SqliteAdapter } from "station-adapter-sqlite";
 
 export default defineConfig({
@@ -309,7 +291,7 @@ export default defineConfig({
         and pass an instance:
       </p>
       <Code>{`// keys-postgres.ts
-import type { ApiKeyStorageAdapter, ApiKey, ApiKeyPublic } from "station-kit";
+import type { ApiKeyStorageAdapter, ApiKey, ApiKeyPublic } from "station-daemon";
 
 export class PostgresKeyStorage implements ApiKeyStorageAdapter {
   constructor(private pool: Pool) {}
@@ -332,7 +314,7 @@ export class PostgresKeyStorage implements ApiKeyStorageAdapter {
   async close(): Promise<void> { await this.pool.end(); }
 }`}</Code>
       <Code>{`// station.config.ts
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 import { PostgresKeyStorage } from "./keys-postgres.js";
 
 export default defineConfig({
@@ -353,7 +335,7 @@ export default defineConfig({
       <p>
         Adapters can be sync or async — the <code>KeyStore</code> awaits all
         results either way. <code>MemoryKeyStorage</code> ships in{" "}
-        <code>station-kit</code> for tests and ephemeral deployments.
+        <code>station-daemon</code> for tests and ephemeral deployments.
       </p>
 
       <div className="warn-box">
@@ -371,7 +353,7 @@ export default defineConfig({
       {/* ── Running Station ── */}
 
       <h3>Running Station</h3>
-      <Code>{`npx station`}</Code>
+      <Code>{`pnpm exec stationd`}</Code>
       <p>
         Station looks for <code>station.config.ts</code> (or <code>.js</code> / <code>.mjs</code>)
         in the current working directory. If no config file is found, it starts
@@ -836,9 +818,8 @@ export default defineConfig({
 
       <h3>Using Station with an existing runner</h3>
       <p>
-        By default a single <code>npx station</code> process both executes
-        signals and serves the dashboard — that is the setup you want unless
-        something prevents it.
+        By default <code>stationd</code> executes signals and serves the API.
+        The dashboard is a separate client of that API.
       </p>
       <p>
         If you already have a process executing signals — Station embedded in an
@@ -860,7 +841,7 @@ const runner = new SignalRunner({
 runner.start();`}</Code>
 
       <Code>{`// station.config.ts — read-only monitoring
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 import { SqliteAdapter } from "station-adapter-sqlite";
 import { BroadcastSqliteAdapter } from "station-adapter-sqlite/broadcast";
 

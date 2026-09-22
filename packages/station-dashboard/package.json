@@ -1,0 +1,48 @@
+{
+  "name": "station-dashboard",
+  "version": "3.0.0",
+  "description": "Standalone web client for local and remote Station daemons",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "station-dashboard": "./bin/station-dashboard.mjs"
+  },
+  "exports": {
+    "./cli": "./bin/station-dashboard.mjs"
+  },
+  "files": [
+    "bin",
+    ".next/standalone"
+  ],
+  "scripts": {
+    "build": "next build && node scripts/package-dashboard.mjs && node scripts/prune-standalone.mjs",
+    "dev": "next dev",
+    "typecheck": "tsc -p tsconfig.next.json --noEmit",
+    "test": "node --test test/*.test.mjs",
+    "test:registry:browser": "STATION_DASHBOARD_BROWSER_TEST=1 node --test test/registry.integration.mjs"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "next": "15.5.12",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "ws": "^8",
+    "station-browser-use": "workspace:*",
+    "station-env": "workspace:*",
+    "station-expressions": "workspace:*",
+    "station-network": "workspace:*",
+    "station-sandbox": "workspace:*",
+    "station-schedules": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.0",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@types/ws": "^8",
+    "typescript": "^5.9.3"
+  }
+}

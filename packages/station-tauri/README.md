@@ -3,7 +3,7 @@
 Embed Station as a localhost-only sidecar in a Tauri desktop application.
 
 ```bash
-pnpm add station-tauri station-kit station-signal station-adapter-sqlite
+pnpm add station-tauri station-daemon station-signal station-adapter-sqlite
 ```
 
 ```ts

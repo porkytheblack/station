@@ -1,4 +1,4 @@
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 import { PostgresAdapter } from "station-adapter-postgres";
 
 const connectionString = process.env.DATABASE_URL ?? "postgresql://localhost:5432/station";

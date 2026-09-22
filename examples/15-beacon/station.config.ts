@@ -1,6 +1,6 @@
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 
-// Run the dashboard against these beacons:  npx station
+// Run the daemon with these beacons:  pnpm exec stationd
 // Then open http://localhost:4400/beacons
 export default defineConfig({
   port: 4400,

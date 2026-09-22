@@ -1,0 +1,18 @@
+{
+  "attemptedAt": "2026-09-14T14:45:35.350464+00:00",
+  "passed": false,
+  "model": "openai/gpt-4.1-mini",
+  "maxTurns": 14,
+  "maxOutputTokensPerCall": 600,
+  "modelCallsAttempted": 1,
+  "successfulModelResponses": 0,
+  "toolCalls": 0,
+  "screenshotsSent": 0,
+  "tokenUsageReported": false,
+  "initialError": "Configured model request failed",
+  "separateReadOnlyKeyCheckHttpStatus": 401,
+  "remainingBlocker": "Configured OpenRouter credential is rejected",
+  "furtherGenerationAttempts": 0,
+  "bridgeTests": "3/3 passed",
+  "uploaded": false
+}

@@ -1,0 +1,76 @@
+{
+  "name": "station-browser-use",
+  "version": "3.0.0",
+  "description": "Container-isolated, Bun WebView and Playwright browser sessions for Station workers",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    "./agent": {
+      "types": "./dist/agent.d.ts",
+      "import": "./dist/agent.js"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "import": "./dist/client.js"
+    },
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./bun": {
+      "types": "./dist/bun.d.ts",
+      "import": "./dist/bun.js"
+    },
+    "./playwright": {
+      "types": "./dist/playwright.d.ts",
+      "import": "./dist/playwright.js"
+    },
+    "./container": {
+      "types": "./dist/container.d.ts",
+      "import": "./dist/container.js"
+    },
+    "./remote": {
+      "types": "./dist/remote.d.ts",
+      "import": "./dist/remote.js"
+    },
+    "./browserbase": {
+      "types": "./dist/browserbase.d.ts",
+      "import": "./dist/browserbase.js"
+    },
+    "./steel": {
+      "types": "./dist/steel.d.ts",
+      "import": "./dist/steel.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "REMOTE.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts",
+    "test:browsers": "pnpm run build && node --import tsx --test test/browser.integration.ts test/advanced.integration.ts test/interaction.integration.ts test/navigation.integration.ts",
+    "test:containers": "pnpm run build && node --import tsx --test test/container.integration.ts",
+    "test:remote": "pnpm run build && node --import tsx --test test/remote.integration.ts",
+    "test:provider:live": "pnpm run build && node --import tsx test/provider.live.ts"
+  },
+  "peerDependencies": {
+    "playwright": "^1.63.0"
+  },
+  "peerDependenciesMeta": {
+    "playwright": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "ajv": "^8.20.0",
+    "playwright": "^1.63.0"
+  }
+}

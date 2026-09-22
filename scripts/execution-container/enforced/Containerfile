@@ -1,0 +1,4 @@
+FROM docker.io/library/node:22-bookworm-slim
+COPY scripts/execution-container/enforced/proxy.mjs /opt/station/egress-proxy.mjs
+USER 1000:1000
+ENTRYPOINT ["/usr/local/bin/node", "/opt/station/egress-proxy.mjs"]

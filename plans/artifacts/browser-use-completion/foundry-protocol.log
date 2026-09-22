@@ -1,0 +1,3 @@
+[station] Running on http://127.0.0.1:49197
+[station] Running on http://127.0.0.1:49198
+{"passed":true,"realModel":false,"mode":"Foundry discovery/assembly protocol only","mountedBrowserTools":9,"modelCalls":0,"artifacts":"/var/folders/sr/8xkg5bfd4w515h716kr_pkcr0000gn/T/station-foundry-agent-7GUXkB/artifacts"}

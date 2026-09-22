@@ -1,0 +1,66 @@
+{
+  "name": "station-daemon",
+  "version": "3.0.0",
+  "description": "Headless Station runtime, scheduling, execution and authenticated API",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "stationd": "./dist/cli.js"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "import": "./dist/server/index.js"
+    },
+    "./cli": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "REGISTRY-TENANCY.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test \"test/**/*.test.ts\""
+  },
+  "peerDependencies": {
+    "station-beacon": "workspace:*",
+    "station-broadcast": "workspace:*",
+    "station-signal": "workspace:*"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1",
+    "esbuild": "^0.25.12",
+    "hono": "^4",
+    "station-browser-use": "workspace:*",
+    "station-env": "workspace:*",
+    "station-expressions": "workspace:*",
+    "station-network": "workspace:*",
+    "station-sandbox": "workspace:*",
+    "station-schedules": "workspace:*",
+    "tsx": "^4.21.0",
+    "ws": "^8",
+    "station-images": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.0",
+    "@types/ws": "^8",
+    "better-sqlite3": "^11.9.1",
+    "station-adapter-sqlite": "workspace:*",
+    "station-beacon": "workspace:*",
+    "station-broadcast": "workspace:*",
+    "station-signal": "workspace:*",
+    "typescript": "^5.9.3"
+  }
+}

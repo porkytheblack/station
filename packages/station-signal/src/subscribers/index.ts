@@ -22,6 +22,7 @@ export interface JobInitMessage {
   type: "job:init";
   data: {
     runId: string;
+    attempt?: number;
     signalName: string;
     signalFile: string;
     input: string;

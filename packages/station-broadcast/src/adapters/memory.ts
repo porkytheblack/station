@@ -29,6 +29,7 @@ export class BroadcastMemoryAdapter implements BroadcastQueueAdapter {
   }
 
   async addBroadcastRun(run: BroadcastRun): Promise<void> {
+    if (this.runs.has(run.id)) throw new Error(`Broadcast run with id "${run.id}" already exists`);
     this.runs.set(run.id, run);
     if (this.runs.size > this.maxRuns) {
       this.evictCompleted();

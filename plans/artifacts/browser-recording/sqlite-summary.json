@@ -1,0 +1,13 @@
+{
+  "passed": true,
+  "database": "sqlite",
+  "checks": [
+    "UI login, workspace creation, offline npm install and fresh-command CLI invocation passed",
+    "Custom install stayed out of a second workspace and survived owner process restart",
+    "Failed command exposes stderr/exit code; cancellation and configured timeout settle running commands",
+    "Deleting the original workspace removes its installed tool and workspace files",
+    "bun-worker UI actions, screenshots, five-second recording away from dashboard, playback after close and trace deletion passed",
+    "playwright-worker UI actions, screenshots, five-second recording away from dashboard, playback after close and trace deletion passed"
+  ],
+  "dashboardErrors": []
+}

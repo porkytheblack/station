@@ -1,4 +1,5 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import { NodeProcessRuntime, type ProcessRuntime } from "./process-runtime.js";
+import type { ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -32,7 +33,7 @@ function hasExited(child: ChildProcess): boolean {
 let _tsxImport: string | undefined;
 function getTsxImport(): string | undefined {
   if (_tsxImport !== undefined) return _tsxImport || undefined;
-  // Allow station-kit (or other launchers) to pass the tsx path
+  // Allow station-daemon (or other launchers) to pass the tsx path
   if (process.env.__STATION_TSX) {
     _tsxImport = process.env.__STATION_TSX;
     return _tsxImport;
@@ -99,6 +100,8 @@ export interface SignalNetworkCoordinator {
 }
 
 export interface SignalRunnerOptions {
+  /** Child execution runtime. Defaults to Node; does not change controller runtime. */
+  processRuntime?: ProcessRuntime;
   signalsDir?: string;
   adapter?: SignalQueueAdapter;
   pollIntervalMs?: number;
@@ -147,6 +150,8 @@ export interface SignalRunnerOptions {
   stationLabels?: Record<string, string>;
   /** Dynamic admission gate used for station draining. */
   canClaim?: () => Promise<boolean>;
+  /** Admission-only gate: denial or failure fences active children before renewal. Do not use draining state. */
+  canRenew?: () => Promise<boolean>;
   /**
    * Grace given to a child that has already reported its result before the
    * runner starts reaping it. A well-behaved signal exits on its own once its
@@ -174,6 +179,7 @@ export class SignalRunner {
   private subscribers: SignalSubscriber[];
   private maxConcurrent: number;
   private scheduleReconciler?: SignalScheduleReconciler;
+  private processRuntime: ProcessRuntime;
   private envProvider?: EnvProvider;
   private stationId: string;
   private leaseDurationMs: number;
@@ -183,6 +189,9 @@ export class SignalRunner {
   private stationLabels: Record<string, string>;
   private networkSlotByRunId = new Map<string, { name: string; token: string }>();
   private canClaim?: () => Promise<boolean>;
+  private canRenew?: () => Promise<boolean>;
+  private admissionFencedChildren = new WeakSet<ChildProcess>();
+  private prepareDefinition?: (run: Run) => Promise<boolean>;
   private activeCount = 0;
   private activePerSignal = new Map<string, number>();
   /** Map runId → child process for cancel/timeout kill. */
@@ -208,8 +217,11 @@ export class SignalRunner {
   private initialized = false;
   /** How often to scan for orphaned "running" runs when we own no children. */
   private static readonly ORPHAN_SWEEP_INTERVAL_MS = 30_000;
+  /** Trusted controller hook: schedule bounded preparation without claiming or executing the run. */
+  setDefinitionPreparer(prepare: (run: Run) => Promise<boolean>): void { this.prepareDefinition = prepare; }
 
   constructor(options: SignalRunnerOptions = {}) {
+    this.processRuntime = options.processRuntime ?? new NodeProcessRuntime();
     const adapter = options.adapter ?? new MemoryAdapter();
     configure({ adapter });
     this.adapter = adapter;
@@ -241,6 +253,7 @@ export class SignalRunner {
     this.networkId = options.networkId ?? "default";
     this.stationLabels = { ...(options.stationLabels ?? {}) };
     this.canClaim = options.canClaim;
+    this.canRenew = options.canRenew;
     this.reapGraceMs = options.reapGraceMs ?? 10_000;
     this.killGraceMs = options.killGraceMs ?? 5_000;
   }
@@ -312,7 +325,7 @@ export class SignalRunner {
    * global `configure()` singleton — important when multiple SignalRunner
    * instances coexist or when the global adapter differs from this runner's.
    */
-  async triggerSignal(name: string, input: unknown, schedule?: { id: string; scheduledFor: Date }): Promise<string> {
+  async triggerSignal(name: string, input: unknown, schedule?: { id: string; scheduledFor: Date }, options?: { idempotencyKey?: string; requiredStationId?: string }): Promise<string> {
     const sig = this.registry.get(name)?.signal;
     if (!sig) {
       throw new Error(`Signal "${name}" is not registered (no Signal object available)`);
@@ -323,8 +336,13 @@ export class SignalRunner {
     if (!result.success) {
       throw new Error(`Invalid input for signal "${name}": ${result.error.message}`);
     }
-    const idempotencyKey = schedule ? `schedule:${schedule.id}:${schedule.scheduledFor.toISOString()}` : undefined;
-    const id = idempotencyKey ? deterministicRunId(idempotencyKey) : this.adapter.generateId();
+    if (options?.idempotencyKey !== undefined && (typeof options.idempotencyKey !== "string" || options.idempotencyKey.length < 1 || options.idempotencyKey.length > 1024)) throw new Error("Invalid idempotency key");
+    if (options?.requiredStationId !== undefined) {
+      if (typeof options.requiredStationId !== "string" || options.requiredStationId.length < 1 || options.requiredStationId.length > 255 || options.requiredStationId.trim() !== options.requiredStationId || /[\r\n\0]/.test(options.requiredStationId)) throw new Error("Invalid required Station identity");
+      if (!this.adapter.claimRun) throw new Error("Explicit Station placement requires an adapter with atomic run claiming");
+    }
+    const idempotencyKey = schedule ? `schedule:${schedule.id}:${schedule.scheduledFor.toISOString()}` : options?.idempotencyKey;
+    const id = idempotencyKey ? signalRunIdForKey(idempotencyKey) : this.adapter.generateId();
     const run: Run = {
       id,
       signalName: name,
@@ -338,13 +356,21 @@ export class SignalRunner {
       scheduleId: schedule?.id,
       scheduledFor: schedule?.scheduledFor,
       idempotencyKey,
+      requiredStationId: options?.requiredStationId,
     };
+    const existing = idempotencyKey ? await this.adapter.getRun(id) : null;
+    if (existing) {
+      if (existing.signalName !== name || existing.input !== run.input || existing.requiredStationId !== run.requiredStationId) throw new Error("Idempotency key conflicts with an existing run");
+      return id;
+    }
     try {
       await this.adapter.addRun(run);
     } catch (err) {
       // Deterministic schedule IDs make enqueue idempotent across controller
       // retries and ambiguous database/network failures.
-      if (!idempotencyKey || !(await this.adapter.getRun(id))) throw err;
+      const duplicate = idempotencyKey ? await this.adapter.getRun(id) : null;
+      if (!duplicate) throw err;
+      if (duplicate.signalName !== name || duplicate.input !== run.input || duplicate.requiredStationId !== run.requiredStationId) throw new Error("Idempotency key conflicts with an existing run");
     }
     this.wakeUp();
     return id;
@@ -733,8 +759,11 @@ export class SignalRunner {
     if (this.ticking) return true;
     this.ticking = true;
     try {
-    await this.recoverAndRenewLeases();
+    if (!await this.recoverAndRenewLeases()) return this.childByRunId.size > 0;
     await this.checkTimeouts();
+    if (this.canClaim && !(await this.canClaim())) {
+      return this.childByRunId.size > 0;
+    }
     await this.tickRecurring();
     if (this.scheduleReconciler) {
       try {
@@ -742,10 +771,6 @@ export class SignalRunner {
       } catch (err) {
         console.error("[station-signal] Schedule reconciler error:", err);
       }
-    }
-
-    if (this.canClaim && !(await this.canClaim())) {
-      return this.childByRunId.size > 0;
     }
 
     // Bounded batch: we dispatch at most `maxConcurrent` per tick, but some
@@ -756,8 +781,11 @@ export class SignalRunner {
     for (const run of due) {
       if (this.activeCount >= this.maxConcurrent) break;
 
+      // A requested owner remains authoritative before discovery/env checks and after recovery.
+      if (run.requiredStationId != null && run.requiredStationId !== this.stationId) continue;
       const sig = this.registry.get(run.signalName);
       if (!sig) {
+        if (await this.prepareDefinition?.(run)) continue;
         if (!this.failUnknownSignals) continue;
         const error = `No signal registered for "${run.signalName}"`;
         this.emit("onRunFailed", { run, error });
@@ -855,6 +883,13 @@ export class SignalRunner {
           continue;
         }
       } else {
+        if (run.requiredStationId !== undefined) {
+          if (networkSlot) await this.releaseNetworkSlotValue(networkSlot);
+          const error = "Explicit Station placement requires atomic run claiming";
+          await this.adapter.updateRun(run.id, { status: "failed", completedAt: new Date(), error });
+          this.emit("onRunFailed", { run, error });
+          continue;
+        }
         await this.adapter.updateRun(run.id, {
           status: "running",
           startedAt: claimedAt,
@@ -883,10 +918,29 @@ export class SignalRunner {
     }
   }
 
-  private async recoverAndRenewLeases(): Promise<void> {
+  private async admissionAllowsRenewal(): Promise<boolean> {
+    if (!this.canRenew) return true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        Promise.resolve().then(() => this.canRenew!()),
+        new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), 5000); }),
+      ]);
+    } catch { return false; }
+    finally { if (timer) clearTimeout(timer); }
+  }
+
+  private async recoverAndRenewLeases(): Promise<boolean> {
+    if (!await this.admissionAllowsRenewal()) {
+      for (const [runId, child] of this.childByRunId) {
+        this.admissionFencedChildren.add(child);
+        this.ensureExit(child, runId, 0);
+      }
+      return false;
+    }
     const now = new Date();
     await this.adapter.requeueExpiredRuns?.(now);
-    if (!this.adapter.renewRunLease || this.childByRunId.size === 0) return;
+    if (!this.adapter.renewRunLease || this.childByRunId.size === 0) return true;
 
     const leaseExpiresAt = new Date(now.getTime() + this.leaseDurationMs);
     for (const runId of this.childByRunId.keys()) {
@@ -914,6 +968,7 @@ export class SignalRunner {
         }
       }
     }
+    return true;
   }
 
   private async acquireNetworkSlot(
@@ -1078,17 +1133,43 @@ export class SignalRunner {
       STATION_SIGNAL_TIMEOUT: String(run.timeout ?? DEFAULT_TIMEOUT_MS),
     };
 
-    const tsxImport = getTsxImport();
-    const nodeArgs = tsxImport ? ["--import", tsxImport, BOOTSTRAP] : [BOOTSTRAP];
-    const child = spawn("node", nodeArgs, {
-      env,
-      stdio: ["ignore", "pipe", "pipe", "ipc"],
-    });
+    const failRun = async (error: string) => {
+      const currentRun = await this.adapter.getRun(run.id);
+      if (!currentRun || currentRun.status !== "running") return;
+      const attempts = currentRun.attempts;
+      const maxAttempts = run.maxAttempts ?? this.defaultMaxAttempts;
+      if (attempts < maxAttempts) {
+        const updated = await this.updateOwnedRun(run, {
+          status: "pending", startedAt: undefined, lastRunAt: new Date(), error,
+          stationId: undefined, leaseToken: undefined, leaseExpiresAt: undefined, claimedAt: undefined,
+        });
+        if (updated) this.emit("onRunRetry", { run: currentRun, attempt: attempts, maxAttempts });
+      } else {
+        const updated = await this.updateOwnedRun(run, {
+          status: "failed", completedAt: new Date(), error,
+          leaseToken: undefined, leaseExpiresAt: undefined,
+        });
+        if (updated) this.emit("onRunFailed", { run: currentRun, error });
+      }
+    };
+    let child: ChildProcess;
+    try {
+      child = this.processRuntime.spawn({ entrypoint: BOOTSTRAP, env, tsxImport: getTsxImport() });
+    } catch (error) {
+      this.activeCount = Math.max(0, this.activeCount - 1);
+      this.decrementPerSignal(run.signalName);
+      void Promise.all([
+        this.releaseNetworkSlot(run.id),
+        failRun(`Child process error: ${error instanceof Error ? error.message : String(error)}`),
+      ]).catch((err) => console.error("[station-signal] Failed to record launch failure:", err));
+      return;
+    }
 
     const init: JobInitMessage = {
       type: "job:init",
       data: {
         runId: run.id,
+        attempt: Math.max(1, run.attempts),
         signalName: run.signalName,
         signalFile: sig.filePath,
         input: run.input,
@@ -1098,11 +1179,6 @@ export class SignalRunner {
         env: injectedEnv && Object.keys(injectedEnv).length > 0 ? injectedEnv : undefined,
       },
     };
-    try {
-      child.send(init);
-    } catch (err) {
-      console.error(`[station-signal] Failed to send job to child for "${sig.name}":`, err);
-    }
 
     // A retry reuses the same run id. If a previous attempt's child is somehow
     // still tracked, reap it rather than letting this `set` drop the reference.
@@ -1119,13 +1195,14 @@ export class SignalRunner {
       // not. Without this a handler that leaks a handle leaves a permanent
       // zero-CPU process behind, and the container eventually cannot fork
       // (`spawn node EAGAIN`).
-      this.ensureExit(child, run.signalName, this.reapGraceMs);
+      if (child.pid) this.ensureExit(child, run.signalName, this.reapGraceMs);
       void this.releaseNetworkSlot(run.id).catch((err) => {
         console.error(`[station-signal] Failed to release network slot for "${run.signalName}":`, err);
       });
     };
 
     child.on("message", async (msg: IPCMessage) => {
+      if (this.admissionFencedChildren.has(child)) return;
       switch (msg.type) {
         case "run:started": {
           const current = await this.adapter.getRun(run.id);
@@ -1231,17 +1308,17 @@ export class SignalRunner {
       this.emit("onLogOutput", { run, level: "stderr", message: chunk.toString() });
     });
 
-    child.on("error", (err) => {
+    const onChildError = (err: Error) => {
+      if (resolved) return;
       resolved = true;
       this.activeCount = Math.max(0, this.activeCount - 1);
       this.decrementPerSignal(run.signalName);
-      this.untrack(run.id, child);
-      this.clearReap(child);
-      void this.releaseNetworkSlot(run.id).catch((slotErr) => {
-        console.error(`[station-signal] Failed to release network slot for "${run.signalName}":`, slotErr);
+      cleanup();
+      void failRun(`Child process error: ${err.message}`).catch((error) => {
+        console.error(`[station-signal] Failed to record process failure for "${sig.name}":`, error);
       });
-      console.error(`[station-signal] Failed to spawn process for "${sig.name}":`, err);
-    });
+    };
+    child.on("error", onChildError);
 
     child.on("exit", async () => {
       this.clearReap(child);
@@ -1265,45 +1342,20 @@ export class SignalRunner {
 
       if (resolved) return;
 
-      // Check if the run was already handled (cancelled/timed out/completed/retried)
-      const currentRun = await this.adapter.getRun(run.id);
-      if (!currentRun || currentRun.status !== "running") {
-        return;
-      }
-
-      const error = "Child process exited unexpectedly";
-      const attempts = currentRun.attempts;
-      const maxAttempts = run.maxAttempts ?? this.defaultMaxAttempts;
-
-      if (attempts < maxAttempts) {
-        const updated = await this.updateOwnedRun(run, {
-          status: "pending",
-          startedAt: undefined,
-          lastRunAt: new Date(),
-          error,
-          stationId: undefined,
-          leaseToken: undefined,
-          leaseExpiresAt: undefined,
-          claimedAt: undefined,
-        });
-        if (!updated) return;
-        this.emit("onRunRetry", { run: currentRun, attempt: attempts, maxAttempts });
-      } else {
-        const updated = await this.updateOwnedRun(run, {
-          status: "failed",
-          completedAt: new Date(),
-          error,
-          leaseToken: undefined,
-          leaseExpiresAt: undefined,
-        });
-        if (!updated) return;
-        this.emit("onRunFailed", { run: currentRun, error });
-      }
+      resolved = true;
+      await failRun("Child process exited unexpectedly");
+    });
+    // Wait for a successful spawn and install all listeners before sending IPC.
+    // Missing executables emit error without ever emitting spawn.
+    child.once("spawn", () => {
+      try { child.send(init, (error) => { if (error) onChildError(error); }); }
+      catch (error) { onChildError(error instanceof Error ? error : new Error(String(error))); }
     });
   }
 }
 
-function deterministicRunId(key: string): string {
+/** Stable run identity for an idempotent trigger; callers must scope keys to their operation. */
+export function signalRunIdForKey(key: string): string {
   const hex = createHash("sha256").update(key).digest("hex").slice(0, 32);
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }

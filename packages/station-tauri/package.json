@@ -1,7 +1,7 @@
 {
   "name": "station-tauri",
-  "version": "2.3.0",
-  "description": "Run Station as a Tauri sidecar — auto-provisioned auth, localhost-only API",
+  "version": "3.0.0",
+  "description": "Run Station as a Tauri sidecar \u2014 auto-provisioned auth, localhost-only API",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -26,7 +26,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "station-kit": "workspace:*",
+    "station-daemon": "workspace:*",
     "station-signal": "workspace:*"
   },
   "peerDependencies": {

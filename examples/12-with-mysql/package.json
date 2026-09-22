@@ -5,12 +5,12 @@
   "scripts": {
     "start": "tsx runner.ts",
     "trigger": "tsx trigger.ts",
-    "station": "station"
+    "station": "stationd"
   },
   "dependencies": {
     "station-signal": "workspace:*",
     "station-adapter-mysql": "workspace:*",
-    "station-kit": "workspace:*"
+    "station-daemon": "workspace:*"
   },
   "devDependencies": {
     "tsx": "^4.21.0"

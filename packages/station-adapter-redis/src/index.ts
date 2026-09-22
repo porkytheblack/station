@@ -50,6 +50,8 @@ return 1
 const CLAIM_RUN_LUA = `
 local hashKey = KEYS[1]
 if redis.call('HGET', hashKey, 'status') ~= 'pending' then return 0 end
+local requiredStation = redis.call('HGET', hashKey, 'requiredStationId')
+if requiredStation and requiredStation ~= ARGV[3] then return 0 end
 local due = redis.call('ZSCORE', KEYS[2], ARGV[1])
 if not due or tonumber(due) > tonumber(ARGV[2]) then return 0 end
 redis.call('HSET', hashKey,

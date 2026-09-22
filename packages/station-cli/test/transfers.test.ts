@@ -1,0 +1,50 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { mkdtemp, writeFile, readFile, stat, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { StationClient } from "station-client";
+import { downloadSandboxFile, saveNewFile } from "../src/transfers.js";
+import { ContextStore } from "../src/store.js";
+import { run, parseArgs } from "../src/commands.js";
+test("sandbox downloads paginate bytes and remove incomplete output without replacing existing files", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "station-download-")); t.after(() => rm(dir, { recursive: true, force: true }));
+  const bytes = Buffer.from([0, 255, 128, 10]);
+  const client = new StationClient({ url: "https://hq.example" }, { fetch: async (_url, options) => {
+    const input = JSON.parse(String(options?.body)), offset = input.options.offset;
+    const data = bytes.subarray(offset, offset + 2);
+    return new Response(JSON.stringify({ data: { path: "x", base64: data.toString("base64"), bytes: data.length, totalBytes: 4, nextOffset: offset + data.length } }));
+  } });
+  const file = join(dir, "output");
+  assert.equal((await downloadSandboxFile(client, "owner", "id", "x", file)).bytes, 4);
+  assert.deepEqual(await readFile(file), bytes);
+  await assert.rejects(downloadSandboxFile(client, "owner", "id", "x", file), /EEXIST/);
+  await assert.rejects(saveNewFile(file, Buffer.from("replace")), /EEXIST/);
+  const rejected = join(dir, "oversized");
+  await assert.rejects(downloadSandboxFile(client, "owner", "id", "x", rejected, 1), /limit/);
+  await assert.rejects(stat(rejected), { code: "ENOENT" });
+});
+test("CLI uploads explicit local binary, writes screenshot locally and forwards deployment CAS requests", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "station-cli-file-")); t.after(() => rm(dir, { recursive: true, force: true }));
+  const store = new ContextStore(join(dir, "context")); await store.add("test", { url: "https://hq.example", tenant: true });
+  const input = join(dir, "binary.dat"), output = join(dir, "screen.png"), bytes = Buffer.from([0, 255, 42]); await writeFile(input, bytes);
+  const requests: { path: string; body: any }[] = [];
+  const original = globalThis.fetch; t.after(() => { globalThis.fetch = original; });
+  globalThis.fetch = async (url, init) => {
+    const path = new URL(String(url)).pathname;
+    if (path.endsWith("/info")) return new Response(JSON.stringify({ data: { protocol: "station.api/v1", version: "3.0.0", stationId: "hq" } }));
+    const body = JSON.parse(String(init?.body)); requests.push({ path, body });
+    return new Response(JSON.stringify({ data: body.action === "screenshot" ? { mimeType: "image/png", base64: bytes.toString("base64") } : { accepted: true } }));
+  };
+  await run(parseArgs(["sandbox", "upload", "space", "--station", "worker", "--file", input, "--path", "assets/data", "--parents"]), store);
+  assert.equal(requests[0].path, "/api/v1/tenant/stations/worker/execution/sandbox");
+  assert.deepEqual(requests[0].body.options, { createParents: true, base64: bytes.toString("base64") });
+  await run(parseArgs(["browser", "screenshot", "session", "--station", "worker", "--out", output]), store);
+  assert.deepEqual(await readFile(output), bytes);
+  await run(parseArgs(["deployments", "activate", "deploy", "--json", '{"generation":"generation-one","expectedRevision":1}']), store);
+  assert.deepEqual(requests[2], { path: "/api/v1/tenant/registry/deployments/deploy/activate", body: { generation: "generation-one", expectedRevision: 1 } });
+  await store.add("operator", {url:"https://hq.example"});
+  const rollout={operationId:"replace-a",expectedRevision:2,sourceInstance:"old-instance",generation:"new-generation",alias:"watch"};
+  await run(parseArgs(["deployments","rollout","deploy","--context","operator","--station","worker","--json",JSON.stringify(rollout)]),store);
+  assert.deepEqual(requests[3],{path:"/api/v1/stations/worker/registry/deployments/deploy/rollout",body:rollout});
+});

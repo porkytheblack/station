@@ -49,6 +49,8 @@ export interface DynamicNodeSpec {
 }
 
 export interface DynamicBroadcastSpec {
+  /** Immutable execution affinity for image-planned work. */
+  requiredStationId?: string;
   /** Namespace-scoped — never collides with file-defined broadcasts. */
   name: string;
   /** Monotonically incremented on each save. */

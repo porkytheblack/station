@@ -1,0 +1,44 @@
+{
+  "name": "station-sandbox",
+  "version": "3.0.0",
+  "description": "Persistent Station workspaces, terminals and supervised services with host and container adapters",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./container": {
+      "types": "./dist/container.d.ts",
+      "import": "./dist/container.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "GUIDE.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts",
+    "test:containers": "node --import tsx --test test/container.integration.ts test/container-security.integration.ts"
+  },
+  "peerDependencies": {
+    "node-pty": "^1.1.0"
+  },
+  "peerDependenciesMeta": {
+    "node-pty": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "node-pty": "^1.1.0"
+  }
+}

@@ -271,3 +271,16 @@ that beacon's definition-owned instance, keeping its desired state and counters.
 ## License
 
 MIT
+
+## Child execution runtime
+
+`BeaconRunner` accepts `processRuntime`, shared with signal execution:
+
+```ts
+import { BunProcessRuntime } from "station-signal";
+import { BeaconRunner } from "station-beacon";
+
+const runner = new BeaconRunner({ processRuntime: new BunProcessRuntime() });
+```
+
+Node remains the default. The optional Bun launcher runs real TypeScript beacon handlers with the existing readiness, restart and shutdown protocol. StationKit's `processRuntime` setting applies to both signal and beacon children; it does not migrate the controller or select a browser backend. Install and validate Bun and your application dependencies on the worker before opting in.

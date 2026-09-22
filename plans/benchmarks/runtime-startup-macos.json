@@ -1,0 +1,37 @@
+{
+  "platform": "darwin",
+  "arch": "arm64",
+  "samples": 20,
+  "delayMs": 0,
+  "scope": "Fresh process through real Station bootstrap, in-memory adapter, trivial signal, JSON IPC. Parent reaps child after completion; excludes natural process drain, queue polling, durable DB, concurrent fleet load and browser processes. RSS is sampled inside handler, not peak/tree memory.",
+  "results": [
+    {
+      "case": "Node / JavaScript",
+      "version": "22.18.0",
+      "medianMs": 134.4,
+      "p95Ms": 148.7,
+      "medianHandlerRssMiB": 54.6
+    },
+    {
+      "case": "Node + tsx / TypeScript",
+      "version": "22.18.0",
+      "medianMs": 235.2,
+      "p95Ms": 314.1,
+      "medianHandlerRssMiB": 88.7
+    },
+    {
+      "case": "Bun / JavaScript",
+      "version": "1.3.14",
+      "medianMs": 79.5,
+      "p95Ms": 93.2,
+      "medianHandlerRssMiB": 53.6
+    },
+    {
+      "case": "Bun / TypeScript",
+      "version": "1.3.14",
+      "medianMs": 80.3,
+      "p95Ms": 106.6,
+      "medianHandlerRssMiB": 53.5
+    }
+  ]
+}

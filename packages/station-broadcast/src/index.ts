@@ -1,5 +1,5 @@
 export { broadcast, BroadcastBuilder, BroadcastChain, type BroadcastDefinition, type BroadcastNode, type ThenOptions } from "./broadcast.js";
-export { BroadcastRunner, type BroadcastRunnerOptions } from "./broadcast-runner.js";
+export { BroadcastRunner, type BroadcastRunnerOptions, type BroadcastPlanner } from "./broadcast-runner.js";
 export { configureBroadcast, getBroadcastAdapter, isBroadcastConfigured } from "./config.js";
 
 export type {

@@ -1,5 +1,5 @@
 export { signal, SignalBuilder, StepBuilder, type Signal, type BuiltSignal, type AnySignal, type SignalConcurrency, type SignalPlacement } from "./signal.js";
-export { SignalRunner, type SignalRunnerOptions, type SignalScheduleReconciler, type EnvProvider } from "./signal-runner.js";
+export { SignalRunner, signalRunIdForKey, type SignalRunnerOptions, type SignalScheduleReconciler, type EnvProvider } from "./signal-runner.js";
 export { configure, getAdapter, getTriggerAdapter, isConfigured, onLocalEnqueue, notifyLocalEnqueue, type ConfigureOptions } from "./config.js";
 export { parseInterval } from "./interval.js";
 
@@ -36,3 +36,7 @@ export { HttpTriggerAdapter, type HttpTriggerOptions } from "./adapters/http-tri
 export { isSignal, isReservedEnvKey, SIGNAL_BRAND } from "./util.js";
 
 export { z } from "zod";
+
+export { NodeProcessRuntime, BunProcessRuntime, type ProcessRuntime, type ProcessSpawnOptions } from "./process-runtime.js";
+
+export { getRunContext, type SignalRunContext } from "./run-context.js";

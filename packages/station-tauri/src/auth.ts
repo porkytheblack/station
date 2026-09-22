@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { resolve, dirname } from "node:path";
-import { KeyStore } from "station-kit/server";
+import { KeyStore } from "station-daemon/server";
 
 /**
  * Get or create an API key for the Tauri desktop app.

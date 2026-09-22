@@ -6,14 +6,14 @@ Complete, copy-pasteable examples for the Station background job framework.
 > explicit BrowserStation registry and worker hosts there; do not adapt Node
 > runner constructors or station.config.ts into a browser bundle.
 >
-> **How to run the Node examples below: `station-kit`.** Signals, broadcasts, and beacons
+> **How to run the Node examples below: `station-daemon`.** Signals, broadcasts, and beacons
 > are just exported definitions in `signalsDir` / `broadcastsDir` /
 > `beaconsDir` — a `station.config.ts` calling `defineConfig` plus
-> `npx station` discovers and runs them, with the dashboard and v1 API included.
+> `pnpm exec stationd` discovers and runs them, with the v1 API. Start `station-dashboard` separately.
 >
 > ```ts
 > // station.config.ts
-> import { defineConfig } from "station-kit";
+> import { defineConfig } from "station-daemon";
 > import { SqliteAdapter } from "station-adapter-sqlite";
 > import { BroadcastSqliteAdapter } from "station-adapter-sqlite/broadcast";
 >
@@ -30,7 +30,7 @@ Complete, copy-pasteable examples for the Station background job framework.
 > `BeaconRunner` by hand to show what a runner does and which options exist.
 > That is the escape hatch, for embedding Station in a process you own, headless
 > workers, and tests — **not** the shape to copy for a normal app. Prefer the
-> config above and let station-kit wire the runners.
+> config above and let station-daemon wire the runners.
 
 ## Contents
 
@@ -867,7 +867,7 @@ Complete `station.config.ts` with all options.
 
 ```ts
 // station.config.ts
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 import { SqliteAdapter } from "station-adapter-sqlite";
 import { BroadcastSqliteAdapter } from "station-adapter-sqlite/broadcast";
 
@@ -899,9 +899,6 @@ export default defineConfig({
   // Set to false to run the dashboard API without processing jobs
   runRunners: true,
 
-  // Open browser on start
-  open: true,
-
   // Log level: "debug" | "info" | "warn" | "error"
   logLevel: "info",
 
@@ -913,16 +910,22 @@ export default defineConfig({
 });
 ```
 
-Run with:
+Run the daemon with:
 
 ```sh
-npx station
+pnpm exec stationd
+```
+
+In another terminal, start the independent dashboard:
+
+```sh
+STATION_DAEMON_URL=http://127.0.0.1:4400 PORT=4401 STATION_DASHBOARD_HOST=127.0.0.1 pnpm exec station-dashboard
 ```
 
 Deploy to production:
 
 ```sh
-npx station deploy
+pnpm exec stationd deploy
 # Bundle generated at .station/out/
 # Ready for Docker, Railway, Fly.io, etc.
 ```
@@ -981,7 +984,7 @@ Station config with PostgreSQL:
 
 ```ts
 // station.config.ts
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 import pg from "pg";
 import { PostgresAdapter } from "station-adapter-postgres";
 import { BroadcastPostgresAdapter } from "station-adapter-postgres/broadcast";
@@ -1057,7 +1060,7 @@ Station config with Redis:
 
 ```ts
 // station.config.ts
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 import Redis from "ioredis";
 import { RedisAdapter } from "station-adapter-redis";
 import { BroadcastRedisAdapter } from "station-adapter-redis/broadcast";
@@ -1132,7 +1135,7 @@ Station config with MySQL:
 
 ```ts
 // station.config.ts
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 import mysql from "mysql2/promise";
 import { MysqlAdapter } from "station-adapter-mysql";
 import { BroadcastMysqlAdapter } from "station-adapter-mysql/broadcast";
@@ -1167,7 +1170,7 @@ Recommended layout.
 my-app/
   package.json
   tsconfig.json
-  station.config.ts         # optional -- only needed for dashboard
+  station.config.ts         # daemon configuration
   lib/                       # shared code (auto-bundled on deploy)
     db.ts
     schema.ts
@@ -1181,7 +1184,7 @@ my-app/
     etl-pipeline.ts
   subscribers/
     slack-alert.ts
-  runner.ts                  # entry point (or use `npx station`)
+  runner.ts                  # entry point (or use `pnpm exec stationd`)
   trigger.ts                 # separate trigger script (optional)
 ```
 
@@ -1194,14 +1197,16 @@ my-app/
   "scripts": {
     "start": "npx tsx runner.ts",
     "trigger": "npx tsx trigger.ts",
-    "dashboard": "npx station",
-    "deploy": "station deploy"
+    "daemon": "stationd",
+    "dashboard": "station-dashboard",
+    "deploy": "stationd deploy"
   },
   "dependencies": {
     "station-signal": "^1.0.0",
     "station-broadcast": "^1.0.0",
     "station-adapter-sqlite": "^1.0.0",
-    "station-kit": "^1.0.0"
+    "station-daemon": "^3.0.0",
+    "station-dashboard": "^3.0.0"
   },
   "devDependencies": {
     "tsx": "^4.0.0",
@@ -1241,7 +1246,7 @@ my-app/
 ### Generate a deploy bundle
 
 ```sh
-npx station deploy
+pnpm exec stationd deploy
 ```
 
 Output in `.station/out/` — ready to deploy anywhere.
@@ -1249,7 +1254,7 @@ Output in `.station/out/` — ready to deploy anywhere.
 ### Deploy with Docker
 
 ```sh
-npx station deploy
+pnpm exec stationd deploy
 docker build -t my-app .station/out
 docker run -p 4400:4400 \
   -e STATION_AUTH_USERNAME=admin \
@@ -1281,7 +1286,7 @@ export const processOrder = signal("process-order")
   });
 ```
 
-After `station deploy`:
+After `stationd deploy`:
 ```
 .station/out/
   signals/process-order.js    # bundled JS
@@ -1295,7 +1300,7 @@ For files that aren't imported (SQL migrations, email templates, static assets):
 
 ```ts
 // station.config.ts
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 
 export default defineConfig({
   signalsDir: "./signals",
@@ -1596,11 +1601,11 @@ Existing `BroadcastRun`s keep their snapshot — they advance against whichever 
 
 `station-schedules` lets you create / edit / disable schedules at runtime, separately from `.every()` in code.
 
-### 21.1 Wire the schedule adapter into station-kit
+### 21.1 Wire the schedule adapter into station-daemon
 
 ```ts
 // station.config.ts
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 import { SqliteAdapter } from "station-adapter-sqlite";
 import { BroadcastSqliteAdapter } from "station-adapter-sqlite/broadcast";
 import { ScheduleSqliteAdapter } from "station-adapter-sqlite/schedules";
@@ -1613,7 +1618,7 @@ export default defineConfig({
 });
 ```
 
-station-kit constructs a `ScheduleReconciler` for each runner automatically. For Postgres / MySQL / Redis, swap the import path:
+station-daemon constructs a `ScheduleReconciler` for each runner automatically. For Postgres / MySQL / Redis, swap the import path:
 
 ```ts
 import { ScheduleRedisAdapter } from "station-adapter-redis/schedules";
@@ -1833,7 +1838,7 @@ import type {
   ApiKey,
   ApiKeyPublic,
   ApiKeyStorageAdapter,
-} from "station-kit/server";
+} from "station-daemon/server";
 
 export class PostgresKeyStorage implements ApiKeyStorageAdapter {
   constructor(private pool: pg.Pool, private table = "api_keys") {}
@@ -1927,12 +1932,12 @@ function rowToApiKey(r: Record<string, unknown>): ApiKey {
 }
 ```
 
-### 23.2 Wire it into station-kit
+### 23.2 Wire it into station-daemon
 
 ```ts
 // station.config.ts
 import pg from "pg";
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 import { PostgresKeyStorage } from "./auth/postgres-key-storage.js";
 
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
@@ -1954,7 +1959,7 @@ export default defineConfig({
 If you instantiate a `KeyStore` outside the server (scripts, custom tooling), every method is async:
 
 ```ts
-import { KeyStore, FileKeyStorage } from "station-kit/server";
+import { KeyStore, FileKeyStorage } from "station-daemon/server";
 
 const store = new KeyStore(new FileKeyStorage({ filePath: "./keys.json" }));
 // String overload also works (defaults to FileKeyStorage; .db is silently
@@ -1962,7 +1967,7 @@ const store = new KeyStore(new FileKeyStorage({ filePath: "./keys.json" }));
 // const store = new KeyStore("./keys.json");
 //
 // For SQLite, install `better-sqlite3` separately and use:
-// import { SqliteKeyStorage } from "station-kit/server";
+// import { SqliteKeyStorage } from "station-daemon/server";
 // const store = new KeyStore(new SqliteKeyStorage({ dbPath: "./keys.db" }));
 
 const { key, record } = await store.create("ci-deploy", ["trigger"]);
@@ -2155,7 +2160,7 @@ If `STRIPE_API_KEY` is defined in neither the env store nor the host process env
 
 ```ts
 // station.config.ts
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 import { EnvPostgresAdapter } from "station-adapter-postgres/env";
 
 export default defineConfig({
@@ -2235,7 +2240,7 @@ Configure the control plane:
 
 ```ts
 // station.hq.config.ts
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 import { PostgresAdapter } from "station-adapter-postgres";
 import { StationNetworkPostgresAdapter } from "station-adapter-postgres/network";
 import { SchedulePostgresAdapter } from "station-adapter-postgres/schedules";
@@ -2246,7 +2251,6 @@ export default defineConfig({
   role: "headquarters",
   port: 4400,
   host: "0.0.0.0",
-  open: false,
   signalsDir: "./signals",
   adapter: new PostgresAdapter({ connectionString }),
   scheduleAdapter: new SchedulePostgresAdapter({ connectionString }),
@@ -2270,7 +2274,7 @@ Configure workers from environment-provided identities and labels:
 
 ```ts
 // station.worker.config.ts
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 import { PostgresAdapter } from "station-adapter-postgres";
 import { StationNetworkPostgresAdapter } from "station-adapter-postgres/network";
 
@@ -2279,7 +2283,6 @@ const connectionString = process.env.DATABASE_URL!;
 export default defineConfig({
   role: "station",
   host: "0.0.0.0",
-  open: false,
   signalsDir: "./signals",
   adapter: new PostgresAdapter({ connectionString }),
   network: {
@@ -2300,13 +2303,13 @@ export default defineConfig({
 Start one Headquarters and two uniquely identified workers:
 
 ```bash
-npx station --config station.hq.config.ts --no-open
+pnpm exec stationd --config station.hq.config.ts
 
 STATION_ID=worker-ke-1 STATION_NAME="Kenya 1" REGION=ke HAS_GPU=true \
-  npx station --config station.worker.config.ts --port 4410 --no-open
+  pnpm exec stationd --config station.worker.config.ts --port 4410
 
 STATION_ID=worker-ke-2 STATION_NAME="Kenya 2" REGION=ke HAS_GPU=true \
-  npx station --config station.worker.config.ts --port 4420 --no-open
+  pnpm exec stationd --config station.worker.config.ts --port 4420
 ```
 
 Use a scoped API key or authenticated session at Headquarters to enqueue work:
@@ -2401,7 +2404,7 @@ import { RedisAdapter } from "station-adapter-redis";
 import { BroadcastRedisAdapter } from "station-adapter-redis/broadcast";
 import { MysqlAdapter } from "station-adapter-mysql";
 import { BroadcastMysqlAdapter } from "station-adapter-mysql/broadcast";
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 import { createTauriStation } from "station-tauri";
 
 // Station Network
@@ -2433,7 +2436,7 @@ import {
   MemoryKeyStorage,      // tests / ephemeral
   SqliteKeyStorage,      // optional — requires `better-sqlite3` to be installed
   type ApiKeyStorageAdapter,
-} from "station-kit/server";
+} from "station-daemon/server";
 
 // Custom run log storage
 import {
@@ -2442,7 +2445,7 @@ import {
   MemoryLogStorage,      // tests / ephemeral
   type LogStorageAdapter,
   type LogEntry,
-} from "station-kit/server";
+} from "station-daemon/server";
 ```
 
 ### Shutdown order

@@ -6,13 +6,13 @@
     "start": "tsx runner.ts",
     "start:feature": "tsx runner.ts feature/auth",
     "trigger": "tsx trigger.ts",
-    "station": "station"
+    "station": "stationd"
   },
   "dependencies": {
     "station-signal": "workspace:*",
     "station-broadcast": "workspace:*",
     "station-adapter-sqlite": "workspace:*",
-    "station-kit": "workspace:*"
+    "station-daemon": "workspace:*"
   },
   "devDependencies": {
     "tsx": "^4.21.0"

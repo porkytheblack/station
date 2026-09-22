@@ -1,0 +1,23 @@
+{
+  "name": "example-18-execution-network",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "hq": "stationd --config station.hq.config.ts",
+    "sandbox": "stationd --config station.sandbox.config.ts",
+    "browser": "stationd --config station.browser.config.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "station-daemon": "workspace:*",
+    "station-sandbox": "workspace:*",
+    "station-browser-use": "workspace:*",
+    "station-adapter-postgres": "workspace:*",
+    "station-signal": "workspace:*",
+    "playwright": "^1.63.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "@types/node": "^25.3.0"
+  }
+}

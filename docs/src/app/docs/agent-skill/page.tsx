@@ -14,7 +14,7 @@ export default function AgentSkillPage() {
         Station ships with a Claude Code skill that teaches the AI assistant how
         to build with every Station package. Once installed, Claude knows how to
         create signals, broadcasts, beacons, schedules, Station Networks,
-        adapters, subscribers, browser workers, and dashboard configs without you having to
+        adapters, subscribers, browser workers, shell workspaces, browser automation, and dashboard configs without you having to
         explain the API.
       </p>
 
@@ -53,6 +53,11 @@ export default function AgentSkillPage() {
             <td><code>browser.md</code></td>
             <td>BrowserStation setup, worker and service-worker hosting, API usage, supported definitions, recovery, and known limits. Read this first for browser-local work.</td>
           </tr>
+          <tr><td><code>images.md</code></td><td>Compiled native/JavaScript images, deployment/environment bindings, beacon rollout, enrollment, native planner grants, invocation artifacts, private registries and independent Docker cleanup.</td></tr>
+          <tr>
+            <td><code>execution.md</code></td>
+            <td>Separate Sandbox and Browser Use primitives, exact-owner Headquarters routing, trusted-code limits, persistence, and opt-in Bun process children.</td>
+          </tr>
           <tr>
             <td><code>SKILL.md</code></td>
             <td>
@@ -66,7 +71,7 @@ export default function AgentSkillPage() {
             <td>
               Exhaustive package and v1 REST API reference, including signals,
               broadcasts, beacons, schedules, environment variables, expressions,
-              Station Networks, adapters, station-kit, and station-tauri.
+              Station Networks, adapters, station-daemon, and station-tauri.
             </td>
           </tr>
           <tr>
@@ -119,6 +124,10 @@ export default function AgentSkillPage() {
           <tr>
             <td>Browser runtime</td>
             <td>Explicit registries, IndexedDB queues and checkpoints, worker drains, bounded service-worker wake slices, cooperative beacons, and configuration workarounds. See the <a href="/docs/browser">browser guide</a>.</td>
+          </tr>
+          <tr>
+            <td>Server execution</td>
+            <td>Native shell workspaces, Bun WebView/Playwright sessions, screenshots, owner routing and interrupted-state recovery. See the <a href="/docs/execution">execution guide</a>.</td>
           </tr>
           <tr>
             <td>Signals</td>

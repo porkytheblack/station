@@ -1,0 +1,208 @@
+v22.23.2
+1.3.14
+10.9.8
+Chromium 152.0.7977.82 built on Debian GNU/Linux 12 (bookworm)
+TAP version 13
+# Subtest: opening reservations enforce capacity and shutdown waits for late opens
+ok 1 - opening reservations enforce capacity and shutdown waits for late opens
+  ---
+  duration_ms: 2.100257
+  type: 'test'
+  ...
+# Subtest: operations reject concurrent access and validate byte limits
+ok 2 - operations reject concurrent access and validate byte limits
+  ---
+  duration_ms: 0.933962
+  type: 'test'
+  ...
+# Subtest: closing retains capacity until resources are released
+ok 3 - closing retains capacity until resources are released
+  ---
+  duration_ms: 0.225667
+  type: 'test'
+  ...
+# Subtest: shutdown attempts every session even if one close fails
+ok 4 - shutdown attempts every session even if one close fails
+  ---
+  duration_ms: 0.270751
+  type: 'test'
+  ...
+# Subtest: managed sessions serialize operations and close cancels active and queued work
+ok 5 - managed sessions serialize operations and close cancels active and queued work
+  ---
+  duration_ms: 0.726336
+  type: 'test'
+  ...
+# Subtest: timeouts retire sessions rather than leave background work running
+ok 6 - timeouts retire sessions rather than leave background work running
+  ---
+  duration_ms: 22.789416
+  type: 'test'
+  ...
+# Subtest: managed sessions limit queued operations and normalize JSON results
+ok 7 - managed sessions limit queued operations and normalize JSON results
+  ---
+  duration_ms: 3.217887
+  type: 'test'
+  ...
+# Subtest: invalid configuration and missing Bun fail without hanging
+ok 8 - invalid configuration and missing Bun fail without hanging
+  ---
+  duration_ms: 10.448496
+  type: 'test'
+  ...
+# Subtest: action failures release busy state and failed opens release reservations
+ok 9 - action failures release busy state and failed opens release reservations
+  ---
+  duration_ms: 0.806252
+  type: 'test'
+  ...
+# Subtest: response limits reject oversized screenshots and JSON results
+ok 10 - response limits reject oversized screenshots and JSON results
+  ---
+  duration_ms: 182.674621
+  type: 'test'
+  ...
+# Subtest: real bash, per-workspace home, output, exit status and disk recovery
+ok 11 - real bash, per-workspace home, output, exit status and disk recovery
+  ---
+  duration_ms: 16.506809
+  type: 'test'
+  ...
+# Subtest: timeout, cancellation, output and admission are bounded
+ok 12 - timeout, cancellation, output and admission are bounded
+  ---
+  duration_ms: 122.949029
+  type: 'test'
+  ...
+# Subtest: bad paths, symlink cwd escape and host secret inheritance are rejected
+ok 13 - bad paths, symlink cwd escape and host secret inheritance are rejected
+  ---
+  duration_ms: 12.629504
+  type: 'test'
+  ...
+# Subtest: shutdown interrupts commands and stale running records are never replayed
+ok 14 - shutdown interrupts commands and stale running records are never replayed
+  ---
+  duration_ms: 4.095432
+  type: 'test'
+  ...
+# Subtest: a shell that exits cleans background descendants holding output pipes
+ok 15 - a shell that exits cleans background descendants holding output pipes
+  ---
+  duration_ms: 13.500215
+  type: 'test'
+  ...
+# Subtest: cancellation escalates when a process ignores SIGTERM
+ok 16 - cancellation escalates when a process ignores SIGTERM
+  ---
+  duration_ms: 267.75347
+  type: 'test'
+  ...
+# Subtest: UTF-8 capture handles split characters and a cap inside a multibyte sequence
+ok 17 - UTF-8 capture handles split characters and a cap inside a multibyte sequence
+  ---
+  duration_ms: 62.641102
+  type: 'test'
+  ...
+# Subtest: a missing executable fails the run and releases admission capacity
+ok 18 - a missing executable fails the run and releases admission capacity
+  ---
+  duration_ms: 26.953473
+  type: 'test'
+  ...
+# Subtest: history bounds survive reopening without deleting workspace files
+ok 19 - history bounds survive reopening without deleting workspace files
+  ---
+  duration_ms: 38.299056
+  type: 'test'
+  ...
+# Subtest: malformed and foreign command metadata is rejected rather than accepted on recovery
+ok 20 - malformed and foreign command metadata is rejected rather than accepted on recovery
+  ---
+  duration_ms: 13.023089
+  type: 'test'
+  ...
+# Subtest: persistence failures surface to callers instead of stale running results
+ok 21 - persistence failures surface to callers instead of stale running results
+  ---
+  duration_ms: 2.768635
+  type: 'test'
+  ...
+# Subtest: offline npm-installed tools survive new commands and restart, without leaking through another workspace PATH
+ok 22 - offline npm-installed tools survive new commands and restart, without leaking through another workspace PATH
+  ---
+  duration_ms: 973.876237
+  type: 'test'
+  ...
+# Subtest: operators can override npm prefix while workspace tool paths stay first
+ok 23 - operators can override npm prefix while workspace tool paths stay first
+  ---
+  duration_ms: 12.772588
+  type: 'test'
+  ...
+1..23
+# tests 23
+# suites 0
+# pass 23
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2214.906776
+bun test v1.3.14 (0d9b296a)
+
+packages/station-sandbox/test/host.test.ts:
+(pass) real bash, per-workspace home, output, exit status and disk recovery [18.67ms]
+(pass) timeout, cancellation, output and admission are bounded [110.88ms]
+(pass) bad paths, symlink cwd escape and host secret inheritance are rejected [14.76ms]
+(pass) shutdown interrupts commands and stale running records are never replayed [3.45ms]
+(pass) a shell that exits cleans background descendants holding output pipes [12.74ms]
+(pass) cancellation escalates when a process ignores SIGTERM [268.10ms]
+(pass) UTF-8 capture handles split characters and a cap inside a multibyte sequence [56.00ms]
+(pass) a missing executable fails the run and releases admission capacity [25.81ms]
+(pass) history bounds survive reopening without deleting workspace files [39.81ms]
+(pass) malformed and foreign command metadata is rejected rather than accepted on recovery [13.73ms]
+(pass) persistence failures surface to callers instead of stale running results [3.00ms]
+(pass) offline npm-installed tools survive new commands and restart, without leaking through another workspace PATH [1205.90ms]
+(pass) operators can override npm prefix while workspace tool paths stay first [14.00ms]
+
+packages/station-browser-use/test/manager.test.ts:
+(pass) opening reservations enforce capacity and shutdown waits for late opens [1.35ms]
+(pass) operations reject concurrent access and validate byte limits [0.94ms]
+(pass) closing retains capacity until resources are released [0.23ms]
+(pass) shutdown attempts every session even if one close fails [0.19ms]
+(pass) managed sessions serialize operations and close cancels active and queued work [0.53ms]
+(pass) timeouts retire sessions rather than leave background work running [21.24ms]
+(pass) managed sessions limit queued operations and normalize JSON results [0.96ms]
+(pass) invalid configuration and missing Bun fail without hanging [2.97ms]
+(pass) action failures release busy state and failed opens release reservations [0.43ms]
+(pass) response limits reject oversized screenshots and JSON results [21.40ms]
+
+ 23 pass
+ 0 fail
+Ran 23 tests across 2 files. [1.89s]
+TAP version 13
+# bun-webview: captured 7219 PNG bytes on Linux
+# Subtest: bun-webview: Linux compiled adapter, input, PNG, independent sessions and cancellation
+ok 1 - bun-webview: Linux compiled adapter, input, PNG, independent sessions and cancellation
+  ---
+  duration_ms: 1491.815657
+  type: 'test'
+  ...
+# playwright: captured 7744 PNG bytes on Linux
+# Subtest: playwright: Linux compiled adapter, input, PNG, independent sessions and cancellation
+ok 2 - playwright: Linux compiled adapter, input, PNG, independent sessions and cancellation
+  ---
+  duration_ms: 1914.68023
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 3478.94869

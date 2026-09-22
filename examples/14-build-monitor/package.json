@@ -3,8 +3,8 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "station",
-    "deploy": "station deploy"
+    "dev": "stationd",
+    "deploy": "stationd deploy"
   },
   "dependencies": {
     "station-signal": "workspace:*",
@@ -15,7 +15,7 @@
     "zod": "^3.25"
   },
   "devDependencies": {
-    "station-kit": "workspace:*",
+    "station-daemon": "workspace:*",
     "tsx": "^4.21.0",
     "drizzle-kit": "^0.31",
     "@types/better-sqlite3": "^7.6.13"

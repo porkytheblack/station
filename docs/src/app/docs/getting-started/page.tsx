@@ -37,11 +37,12 @@ export default function GettingStartedPage() {
       {/* ── 1. Install ── */}
 
       <h3>1. Install</h3>
-      <Code>{`pnpm add station-signal station-kit`}</Code>
+      <Code>{`pnpm add station-signal station-daemon
+pnpm add -D station-runtime-cli station-dashboard`}</Code>
       <p>
         <code>station-signal</code> is where you define jobs;{" "}
-        <code>station-kit</code> is how you run them — it is Station&apos;s entry
-        point, and it wires the runners, dashboard, and API for you.
+        <code>station-daemon</code> is how you run them — it is Station&apos;s entry
+        point for the runners and API. The CLI and dashboard are separate clients.
       </p>
       <div className="info-box">
         <p>
@@ -128,24 +129,25 @@ export const sendEmail = signal("sendEmail")
       <p>
         Station apps are configured in one file and started with one command.{" "}
         <code>defineConfig</code> points Station at your signal directory; the{" "}
-        <code>station</code> CLI discovers what is there and runs it.
+        <code>stationd</code> process discovers what is there and runs it.
       </p>
       <Code>{`// station.config.ts
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 
 export default defineConfig({
   signalsDir: "./signals",
 });`}</Code>
-      <Code>{`npx station`}</Code>
+      <Code>{`pnpm exec stationd`}</Code>
       <p>
-        That one command starts the signal runner, serves the dashboard on{" "}
-        <code>http://localhost:4400</code>, and exposes the authenticated v1 API
-        — so you can watch runs, inspect logs, and trigger jobs without writing
-        any of that yourself. Add <code>broadcastsDir</code> and{" "}
+        That command starts the signal runner and the v1 API on{" "}
+        <code>http://localhost:4400</code>. Add <code>broadcastsDir</code> and{" "}
         <code>beaconsDir</code> later and the matching runners are wired the same
         way, including the shutdown ordering between them.
       </p>
 
+      <Code>{`# Run in another terminal; the dashboard has its own lifecycle
+STATION_DAEMON_URL=http://127.0.0.1:4400 PORT=4401 STATION_DASHBOARD_HOST=127.0.0.1 pnpm exec station-dashboard`}</Code>
+      <p>Open <code>http://127.0.0.1:4401</code>. A remote daemon uses the same dashboard with a different <code>STATION_DAEMON_URL</code>.</p>
       <table className="api-table">
         <thead>
           <tr>
@@ -171,7 +173,7 @@ export default defineConfig({
           </tr>
           <tr>
             <td><code>port</code></td>
-            <td>Dashboard / API port. Defaults to <code>4400</code>.</td>
+            <td>Daemon API port. Defaults to <code>4400</code>.</td>
           </tr>
           <tr>
             <td><code>runner.pollIntervalMs</code></td>
@@ -193,7 +195,7 @@ export default defineConfig({
       <h4>Embedding: constructing a runner yourself</h4>
       <p>
         <code>SignalRunner</code> is also exported directly, for the cases
-        station-kit deliberately doesn&apos;t cover: embedding Station inside a
+        station-daemon deliberately doesn&apos;t cover: embedding Station inside a
         server process you already own, a headless worker that must not bind a
         port, or tests. Reach for it only then — you take on wiring the storage,
         subscribers, and shutdown ordering yourself.
@@ -279,7 +281,7 @@ console.log(\`Enqueued run: \${runId}\`);`}</Code>
         See <a href="/docs/adapters">Adapters</a> for details.
       </div>
       <Code>{`// station.config.ts
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 import { SqliteAdapter } from "station-adapter-sqlite";
 
 export default defineConfig({
@@ -486,7 +488,7 @@ export const processOrder = signal("processOrder")
         never instead of them.
       </p>
       <Code>{`// station.config.ts
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 import { ConsoleSubscriber } from "station-signal";
 
 export default defineConfig({

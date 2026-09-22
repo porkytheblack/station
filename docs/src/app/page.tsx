@@ -166,7 +166,7 @@ export default function LandingPage() {
             Start as one TypeScript process with SQLite. Grow into a Station
             Network backed by PostgreSQL, MySQL, or Redis when you need more
             capacity. Retries, cron scheduling, workflows, long-running services,
-            and a fleet dashboard are included. For work on the device, explore
+            and a separate fleet dashboard are available. For work on the device, explore
             the <Link href="/docs/browser">experimental browser runtime</Link>
             {" "}with local signals, workflows, and beacons.
           </p>
@@ -241,7 +241,7 @@ export default function LandingPage() {
             <div className="letter-pillar">
               <span className="letter-pillar-num">03</span>
               <span className="letter-pillar-label">Simple monitoring</span>
-              <span className="letter-pillar-desc">Every run recorded. Station dashboard included. One command to start.</span>
+              <span className="letter-pillar-desc">Every run recorded. Independent dashboard. Headless workers.</span>
             </div>
           </div>
         </div>
@@ -288,8 +288,8 @@ export default function LandingPage() {
               A signal is a background job definition &mdash; input schema, handler
               function, execution constraints. Define them in your codebase. The
               runner auto-discovers signal files, handles scheduling, retries,
-              timeouts, and concurrency. StationKit adds configuration only when
-              you want the dashboard or a multi-process network.
+              timeouts, and concurrency. Station Daemon composes the runners and API; the independent
+              dashboard connects to local or remote daemons.
             </p>
             <Link href="/docs/getting-started" className="btn-primary">
               View documentation &rarr;
@@ -414,11 +414,11 @@ export const loveLetter = signal("loveLetter")
         <span className="section-number">// Get started</span>
         <h2 className="section-heading">Five minutes to your first signal.</h2>
         <p>
-          Install the runtime and StationKit, define a signal, then start Station.
+          Install the runtime and Station Daemon, define a signal, then start Station.
           SQLite is enough for the first process.
         </p>
         <div className="landing-cta-install">
-          <code>pnpm add station-signal station-kit</code>
+          <code>pnpm add station-signal station-daemon</code>
         </div>
         <Link href="/docs/getting-started" className="btn-primary">
           Read the guide

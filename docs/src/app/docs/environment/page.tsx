@@ -150,7 +150,7 @@ export const priceFeed = beacon("price-feed")
         <li><code>station-adapter-redis/env</code></li>
       </ul>
       <Code>{`// station.config.ts
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 import { EnvPostgresAdapter } from "station-adapter-postgres/env";
 
 export default defineConfig({

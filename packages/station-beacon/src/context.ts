@@ -15,6 +15,10 @@ export interface BeaconContext<TConfig = unknown> {
   readonly instanceId: string;
   /** Validated configuration for this incarnation (schema defaults applied). */
   readonly config: TConfig;
+  /** Explicit store-managed variables; never the inherited host environment. */
+  readonly environment?: Readonly<Record<string, string>>;
+  /** Supervised image dependency invocation; only available when the parent grants a handler. */
+  triggerDependency?(alias: string, input: unknown, requestId: string): Promise<string>;
   /**
    * Which incarnation this is (1 for the first start, incremented on each
    * supervised restart). Useful for logging and connection labels.

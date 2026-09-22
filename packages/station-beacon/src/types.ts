@@ -150,6 +150,8 @@ export interface BeaconInstance {
   lastError?: string;
   /** When, in `backoff`, the next restart is scheduled. */
   nextRestartAt?: Date;
+  /** Immutable execution target. Other stations must never start this instance. */
+  requiredStationId?: string;
   /** Station that owns the current incarnation. */
   stationId?: string;
   /** JSON-serialized BeaconExposure advertised by the handler. */
@@ -158,9 +160,9 @@ export interface BeaconInstance {
   updatedAt: Date;
 }
 
-/** Identity fields (id, beaconName, origin, createdAt) are immutable; everything else is patchable. */
+/** Identity fields (id, beaconName, origin, createdAt, requiredStationId) are immutable; everything else is patchable. */
 export type BeaconInstancePatch = Partial<
-  Omit<BeaconInstance, "id" | "beaconName" | "origin" | "createdAt">
+  Omit<BeaconInstance, "id" | "beaconName" | "origin" | "createdAt" | "requiredStationId">
 >;
 
 /** Lifecycle event kinds recorded to the optional event log. */

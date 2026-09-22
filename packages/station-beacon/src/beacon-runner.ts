@@ -1,9 +1,11 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  NodeProcessRuntime,
+  type ProcessRuntime,
   type EnvProvider,
   type SignalQueueAdapter,
   type SignalRunner,
@@ -99,6 +101,8 @@ export interface CreateInstanceOptions {
   label?: string;
   /** Config for this instance — validated against the beacon's config schema. */
   config?: unknown;
+  /** Pin every incarnation to this station, including restart and recovery. */
+  requiredStationId?: string;
   /** Start the instance immediately. @default true */
   start?: boolean;
 }
@@ -113,7 +117,19 @@ export interface UpdateInstanceOptions {
   restart?: boolean;
 }
 
+export interface BeaconDependencyTriggerRequest {
+  beaconName: string;
+  instanceId: string;
+  incarnation: number;
+  alias: string;
+  input: unknown;
+  requestId: string;
+}
+export type BeaconDependencyTrigger = (request: BeaconDependencyTriggerRequest) => Promise<string>;
+
 export interface BeaconRunnerOptions {
+  /** Child execution runtime. Defaults to Node; does not change controller runtime. */
+  processRuntime?: ProcessRuntime;
   beaconsDir?: string;
   adapter?: BeaconStateAdapter;
   /** Supervisor reconcile cadence. @default 1000 */
@@ -150,6 +166,8 @@ export interface BeaconRunnerOptions {
   stationLabels?: Record<string,string>;
   leaseDurationMs?: number;
   canClaim?: () => Promise<boolean>;
+  /** Admission-only gate: denial or failure fences active children before renewal. Do not use draining state. */
+  canRenew?: () => Promise<boolean>;
 }
 
 /**
@@ -165,6 +183,16 @@ export interface BeaconRunnerOptions {
  * {@link BeaconRunner.createInstance}, each with its own config.
  */
 export class BeaconRunner {
+  private dependencyTrigger?: BeaconDependencyTrigger;
+  setDependencyTrigger(handler: BeaconDependencyTrigger): this { this.dependencyTrigger = handler; return this; }
+  /** Register a newly installed immutable definition and seed it on a live supervisor. */
+  async install(beacon: AnyBeacon, filePath: string): Promise<void> {
+    const existing = this.registry.get(beacon.name);
+    if (existing) return;
+    this.registry.set(beacon.name, { beacon, filePath: resolve(filePath) });
+    if (this.running && beacon.startMode !== "on-demand") await this.seedOrResumeDefinitionInstance(beacon);
+  }
+
   private adapter: BeaconStateAdapter;
   private beaconsDir?: string;
   private pollIntervalMs: number;
@@ -178,6 +206,7 @@ export class BeaconRunner {
   private signalAdapterName?: string;
   private signalAdapterOptions?: Record<string, unknown>;
   private signalAdapterImport?: string;
+  private processRuntime: ProcessRuntime;
   private envProvider?: EnvProvider;
   private networkCoordinator?: BeaconRunnerOptions["networkCoordinator"];
   private networkId: string;
@@ -185,6 +214,7 @@ export class BeaconRunner {
   private stationLabels: Record<string,string>;
   private leaseDurationMs: number;
   private canClaim?: () => Promise<boolean>;
+  private canRenew?: () => Promise<boolean>;
   private networkLeaseByInstance = new Map<string,{name:string;token:string}>();
 
   private running = false;
@@ -197,6 +227,7 @@ export class BeaconRunner {
   private markReady!: () => void;
 
   constructor(options: BeaconRunnerOptions = {}) {
+    this.processRuntime = options.processRuntime ?? new NodeProcessRuntime();
     this.adapter = options.adapter ?? new BeaconMemoryAdapter();
     this.beaconsDir = options.beaconsDir;
     this.pollIntervalMs = options.pollIntervalMs ?? 1000;
@@ -218,6 +249,7 @@ export class BeaconRunner {
     this.stationLabels = { ...(options.stationLabels ?? {}) };
     this.leaseDurationMs = Math.max(options.leaseDurationMs ?? 30_000, this.pollIntervalMs * 3);
     this.canClaim = options.canClaim;
+    this.canRenew = options.canRenew;
     this.readyPromise = this.armReady();
   }
 
@@ -510,6 +542,11 @@ export class BeaconRunner {
     const reg = this.registry.get(beaconName);
     if (!reg) throw new Error(`Beacon "${beaconName}" is not registered`);
     const beacon = reg.beacon;
+    if (opts.requiredStationId !== undefined && (
+      typeof opts.requiredStationId !== "string" || !opts.requiredStationId.length
+      || opts.requiredStationId.length > 255 || opts.requiredStationId.trim() !== opts.requiredStationId
+      || /[\r\n\0]/.test(opts.requiredStationId)
+    )) throw new BeaconValidationError(beaconName, "requiredStationId must be a nonempty station id of at most 255 characters");
 
     // Validate config up front so a bad payload fails the API call rather than
     // silently crash-looping a child process.
@@ -545,6 +582,7 @@ export class BeaconRunner {
       id,
       beaconName,
       label: opts.label,
+      requiredStationId: opts.requiredStationId,
       origin: "api",
       status: start ? "backoff" : "stopped",
       desiredState: start ? "running" : "stopped",
@@ -773,6 +811,8 @@ export class BeaconRunner {
       this.instances.set(instance.id, instance);
       this.supervised.set(instance.id, this.freshSupervised());
 
+      if (instance.requiredStationId !== undefined && instance.requiredStationId !== this.stationId) continue;
+
       if (!this.registry.has(instance.beaconName)) {
         // A network is intentionally heterogeneous: another station may own a
         // definition this station does not have. Never corrupt its shared
@@ -826,6 +866,7 @@ export class BeaconRunner {
       };
       this.instances.set(instance.id, instance);
       this.supervised.set(instance.id, this.freshSupervised());
+      if (instance.requiredStationId !== undefined && instance.requiredStationId !== this.stationId) return;
       if (instance.desiredState === "running") {
         const restartPatch: BeaconInstancePatch = {
           status: "backoff",
@@ -867,7 +908,7 @@ export class BeaconRunner {
     this.ticking = true;
     try {
       const now = Date.now();
-      await this.renewNetworkLeases(new Date(now));
+      if (!await this.renewNetworkLeases(new Date(now))) return;
       if (this.networkCoordinator) await this.syncNetworkInstances();
       // Snapshot: reconcile awaits, and an API call can add or delete an
       // instance in the meantime.
@@ -944,6 +985,7 @@ export class BeaconRunner {
     if (!inst) return;
     const sup = this.supervised.get(instanceId);
     if (!sup || sup.removing) return;
+    if (inst.requiredStationId !== undefined && inst.requiredStationId !== this.stationId) return;
 
     // Enforce desired=stopped: stop any live child that shouldn't be running.
     // This is the reconcile safety net that closes the window where a
@@ -1015,6 +1057,7 @@ export class BeaconRunner {
   private async spawnBeacon(beacon: AnyBeacon, instanceId: string): Promise<void> {
     const reg = this.registry.get(beacon.name)!;
     const inst = this.instances.get(instanceId)!;
+    if (inst.requiredStationId !== undefined && inst.requiredStationId !== this.stationId) return;
     const incarnation = inst.incarnation + 1;
 
     // Resolve store-managed env vars and enforce `.env()` requirements before
@@ -1107,12 +1150,17 @@ export class BeaconRunner {
       return;
     }
 
-    const tsxImport = getTsxImport();
-    const nodeArgs = tsxImport ? ["--import", tsxImport, BOOTSTRAP] : [BOOTSTRAP];
-    const child = spawn("node", nodeArgs, {
-      env,
-      stdio: ["ignore", "pipe", "pipe", "ipc"],
-    });
+    let child: ChildProcess;
+    try {
+      child = this.processRuntime.spawn({ entrypoint: BOOTSTRAP, env, tsxImport: getTsxImport() });
+    } catch (error) {
+      this.supervised.set(instanceId, {
+        stopRequested: false, stalled: false, forceRestart: false,
+        exitHandled: false, startedAtMs: Date.now(),
+      });
+      await this.handleExit(beacon, instanceId, null, error instanceof Error ? error.message : String(error));
+      return;
+    }
 
     const jobInit: BeaconJobInitMessage = {
       type: "job:init",
@@ -1124,11 +1172,7 @@ export class BeaconRunner {
         env: injectedEnv && Object.keys(injectedEnv).length > 0 ? injectedEnv : undefined,
       },
     };
-    try {
-      child.send(jobInit);
-    } catch (err) {
-      console.error(`[station-beacon] Failed to send job:init to "${instanceId}":`, err);
-    }
+
     // The supervisor's own poll loop keeps this process alive; a child must not.
     // Otherwise a lingering beacon would prevent the supervisor from exiting.
     // (stdout/stderr are sockets at runtime, but typed as Readable without unref.)
@@ -1145,10 +1189,9 @@ export class BeaconRunner {
       startedAtMs: Date.now(),
     };
     this.supervised.set(instanceId, sup);
-    await this.patch(instanceId, { pid: child.pid });
 
     child.on("message", (msg: BeaconIPCMessage) => {
-      this.handleMessage(instanceId, msg).catch((err) =>
+      this.handleMessage(instanceId, msg, child).catch((err) =>
         console.error(`[station-beacon] message handler error for "${instanceId}":`, err),
       );
     });
@@ -1158,24 +1201,52 @@ export class BeaconRunner {
     child.stderr?.on("data", (chunk: Buffer) => {
       this.emitLog(instanceId, "stderr", chunk.toString());
     });
+    let initError: string | undefined;
+    const failInit = (error: Error) => {
+      if (sup.exitHandled || initError) return;
+      initError = error.message;
+      // A send failure is not proof of process exit. Retain supervision until
+      // exit and escalate termination so a disconnected handler cannot leak.
+      child.kill("SIGTERM");
+      sup.killTimer = setTimeout(() => child.kill("SIGKILL"), 1_000);
+      sup.killTimer.unref?.();
+    };
     child.on("error", (err) => {
-      console.error(`[station-beacon] Failed to spawn "${instanceId}":`, err);
-      void this.handleExit(beacon, instanceId, null, err.message);
+      if (child.pid) failInit(err);
+      else void this.handleExit(beacon, instanceId, null, err.message);
     });
     child.on("exit", (code) => {
-      void this.handleExit(beacon, instanceId, code);
+      void this.handleExit(beacon, instanceId, code, initError);
     });
+    child.once("spawn", () => {
+      try { child.send(jobInit, (error) => { if (error) failInit(error); }); }
+      catch (error) { failInit(error instanceof Error ? error : new Error(String(error))); }
+    });
+    await this.patch(instanceId, { pid: child.pid });
   }
 
-  private async handleMessage(instanceId: string, msg: BeaconIPCMessage): Promise<void> {
+  private async handleMessage(instanceId: string, msg: BeaconIPCMessage, source: ChildProcess): Promise<void> {
     const sup = this.supervised.get(instanceId);
-    if (!sup || sup.leaseLost) return;
+    if (!sup || sup.leaseLost || sup.child !== source || msg.incarnation !== this.instances.get(instanceId)?.incarnation) return;
     if (!(await this.ownsNetworkLease(instanceId))) {
       sup.leaseLost = true;
       sup.child?.kill("SIGTERM");
       return;
     }
+    if (this.supervised.get(instanceId) !== sup || sup.leaseLost || sup.child !== source || msg.incarnation !== this.instances.get(instanceId)?.incarnation) return;
     switch (msg.type) {
+      case "beacon:trigger": {
+        const instance = this.instances.get(instanceId);
+        const { alias, input, requestId } = msg.data ?? {};
+        if (typeof alias !== "string" || alias.length > 128 || typeof requestId !== "string" || requestId.length > 128 || JSON.stringify(input ?? null).length > 1024 * 1024) return;
+        try {
+          if (!instance || this.stopping || sup.stopRequested || !this.dependencyTrigger) throw new Error("Trigger not granted");
+          const runId = await this.dependencyTrigger({ beaconName: instance.beaconName, instanceId, incarnation: instance.incarnation, alias, input, requestId });
+          const ownsAfterTrigger = await this.ownsNetworkLease(instanceId);
+          if (ownsAfterTrigger && this.supervised.get(instanceId) === sup && !sup.leaseLost && !sup.stopRequested && sup.child === source && this.instances.get(instanceId)?.incarnation === instance.incarnation && source.connected) source.send({ type: "beacon:trigger-result", requestId, runId }, () => {});
+        } catch { if (source.connected) source.send({ type: "beacon:trigger-result", requestId, error: "dependency_trigger_failed" }, () => {}); }
+        break;
+      }
       case "beacon:started": {
         sup.runningSinceMs = Date.now();
         if (!sup.stopRequested) {
@@ -1346,8 +1417,38 @@ export class BeaconRunner {
     return lease;
   }
 
-  private async renewNetworkLeases(now: Date): Promise<void> {
-    if (!this.networkCoordinator) return;
+  private async admissionAllowsRenewal(): Promise<boolean> {
+    if (!this.canRenew) return true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        Promise.resolve().then(() => this.canRenew!()),
+        new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), 5000); }),
+      ]);
+    } catch { return false; }
+    finally { if (timer) clearTimeout(timer); }
+  }
+
+  private fenceChild(instanceId: string): void {
+    const sup = this.supervised.get(instanceId);
+    if (!sup) return;
+    sup.leaseLost = true;
+    sup.child?.kill("SIGTERM");
+    // A hostile/blocked child may ignore SIGTERM. Preserve ownership-loss
+    // semantics while bounding cleanup, without writing a stale instance state.
+    if (sup.child && !sup.killTimer) {
+      const child = sup.child;
+      sup.killTimer = setTimeout(() => child.kill("SIGKILL"), 1000);
+      sup.killTimer.unref?.();
+    }
+  }
+
+  private async renewNetworkLeases(now: Date): Promise<boolean> {
+    if (!await this.admissionAllowsRenewal()) {
+      for (const instanceId of this.supervised.keys()) this.fenceChild(instanceId);
+      return false;
+    }
+    if (!this.networkCoordinator) return true;
     for (const [instanceId, lease] of this.networkLeaseByInstance) {
       const renewed = await this.networkCoordinator.renewControllerLease(
         lease.name,
@@ -1357,11 +1458,10 @@ export class BeaconRunner {
         now,
       );
       if (!renewed) {
-        const supervised = this.supervised.get(instanceId);
-        if (supervised) supervised.leaseLost = true;
-        supervised?.child?.kill("SIGTERM");
+        this.fenceChild(instanceId);
       }
     }
+    return true;
   }
 
   private async releaseNetworkLease(instanceId: string): Promise<void> {

@@ -1,5 +1,5 @@
-import { createStation } from "station-kit/server";
-import { resolveConfig, type StationUserConfig } from "station-kit";
+import { createStation } from "station-daemon/server";
+import { resolveConfig, type StationUserConfig } from "station-daemon";
 import { getOrCreateApiKey } from "./auth.js";
 
 export interface TauriStationConfig {
@@ -42,7 +42,7 @@ export async function createTauriStation(opts: TauriStationConfig): Promise<Taur
     ...opts.station,
     port,
     host: "127.0.0.1",
-    open: false,
+
     signalsDir: opts.signalsDir,
     broadcastsDir: opts.broadcastsDir,
     stationDir: opts.dataDir,

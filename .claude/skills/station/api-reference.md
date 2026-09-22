@@ -7,10 +7,10 @@ Complete reference for all Station packages. Every export, type, interface, and 
 > supported subset. Node runners, directory discovery, server adapters, and fleet
 > APIs below are not browser APIs.
 >
-> **For Node applications: `station-kit` is Station's entry point by design.**
+> **For Node applications: `station-daemon` is Station's entry point by design.**
 > An ordinary app is a `station.config.ts` calling `defineConfig` (§7), run with
-> `npx station`. That single call wires the signal / broadcast / beacon runners
-> and their shutdown ordering, the HTTP server, the dashboard, the authenticated
+> `pnpm exec stationd`. That single call wires the signal / broadcast / beacon runners
+> and their shutdown ordering, the HTTP server, the authenticated
 > v1 API, API keys, the env store, run-log storage, and schedule reconciliation.
 >
 > The `SignalRunner` / `BroadcastRunner` / `BeaconRunner` constructors documented
@@ -29,7 +29,7 @@ Complete reference for all Station packages. Every export, type, interface, and 
 4. [station-adapter-postgres](#4-station-adapter-postgres)
 5. [station-adapter-mysql](#5-station-adapter-mysql)
 6. [station-adapter-redis](#6-station-adapter-redis)
-7. [station-kit](#7-station-kit)
+7. [station-daemon](#7-station-daemon)
 8. [Station v1 API Endpoints](#8-station-v1-api-endpoints)
 9. [Dynamic Broadcasts](#9-dynamic-broadcasts)
 10. [station-schedules](#10-station-schedules)
@@ -769,7 +769,7 @@ interface BroadcastRunnerOptions {
   adapter?: BroadcastQueueAdapter;
   pollIntervalMs?: number;              // default: 1000
   subscribers?: BroadcastSubscriber[];
-  /** Schedule reconciler. station-kit wires one in automatically when `config.scheduleAdapter` is set. */
+  /** Schedule reconciler. station-daemon wires one in automatically when `config.scheduleAdapter` is set. */
   scheduleReconciler?: ScheduleReconciler;
 }
 
@@ -1274,19 +1274,19 @@ const broadcastAdapter = new BroadcastRedisAdapter({ redis, prefix: "myapp" });
 
 ---
 
-## 7. station-kit
+## 7. station-daemon
 
 **The entry point for a Station app.** Everything below is what `defineConfig` +
-`npx station` gives you without hand-wiring runners.
+`pnpm exec stationd` gives you without hand-wiring runners.
 
-npm: `station-kit`
+npm: `station-daemon`
 
-Dashboard with Hono API server + Next.js frontend.
+Headless Hono API and runner composition. The Next.js UI is the separate `station-dashboard` package.
 
 ### Exports
 
 ```ts
-import { defineConfig, type StationUserConfig, type StationConfig, type AuthConfig, type DeployConfig } from "station-kit";
+import { defineConfig, type StationUserConfig, type StationConfig, type AuthConfig, type DeployConfig } from "station-daemon";
 ```
 
 ### defineConfig()
@@ -1380,7 +1380,6 @@ interface StationConfig {
   runner: RunnerConfig;
   broadcastRunner: BroadcastRunnerConfig;
   runRunners: boolean;                   // default: true; Headquarters still never executes work
-  open: boolean;                         // default: true (opens browser)
   logLevel: "debug" | "info" | "warn" | "error"; // default: "info"
   auth?: AuthConfig;
   deploy?: DeployConfig;               // deployment bundle configuration
@@ -1428,7 +1427,7 @@ This is why hand-rolling a runner is *not* needed for observability hooks.
 
 ```ts
 // station.config.ts
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 import { SqliteAdapter } from "station-adapter-sqlite";
 import { BroadcastSqliteAdapter } from "station-adapter-sqlite/broadcast";
 
@@ -1452,14 +1451,14 @@ export default defineConfig({
 ### CLI
 
 ```
-npx station
+pnpm exec stationd
 ```
 
 Launches:
-- Hono API and dashboard on the configured public `port` (default 4400)
-- Internal Next.js process managed automatically by StationKit
+- Hono API on the configured `port` (default 4400)
+- No Next.js process, dashboard assets or browser launch
 - `standalone`: control-plane reconciliation plus local execution when `runRunners` is true
-- `headquarters`: API/dashboard and control-plane reconciliation, never signal/beacon execution
+- `headquarters`: API and control-plane reconciliation, never signal/beacon execution
 - `station`: signal/beacon execution when `runRunners` is true, never schedule/broadcast reconciliation
 
 The CLI uses a launcher pattern: re-execs with `node --import tsx` to enable TypeScript resolution for user signal/broadcast files.
@@ -1467,16 +1466,31 @@ The CLI uses a launcher pattern: re-execs with `node --import tsx` to enable Typ
 ### CLI Commands
 
 ```
-npx station                    # Start dashboard + runners
-npx station deploy             # Build production bundle to .station/out/
-npx station --no-open          # Start without opening browser
-npx station --no-runners       # Dashboard only, no job processing
-npx station --port 5000        # Custom port
-npx station --host 0.0.0.0    # Bind to all interfaces
-npx station --config path.ts   # Custom config file
+pnpm exec stationd                   # Foreground daemon + runners
+pnpm exec stationd deploy             # Build production bundle to .station/out/
+pnpm exec stationd --no-runners       # API only, no job processing
+pnpm exec stationd --port 5000        # Custom port
+pnpm exec stationd --host 0.0.0.0    # Bind to all interfaces
+pnpm exec stationd --config path.ts   # Custom config file
 ```
 
-### station deploy
+### Independent clients (Station 3.0)
+
+`station-runtime-cli` owns the `station` executable; `station-daemon` owns `stationd`.
+`station-kit` is retired with no compatibility facade or migration window.
+Install `station-dashboard` separately, then start it in another terminal:
+
+```sh
+STATION_DAEMON_URL=http://127.0.0.1:4400 PORT=4401 STATION_DASHBOARD_HOST=127.0.0.1 pnpm exec station-dashboard
+```
+
+The dashboard URL is `http://127.0.0.1:4401`. For a remote daemon, configure its
+HTTPS URL instead. Daemon `port` and `host` configure its API listener; dashboard
+`PORT` and `STATION_DASHBOARD_HOST` configure the independent UI listener. Closing either
+client does not stop the daemon. Do not use the removed daemon `open` setting,
+`--no-open` flag, or a third `nextPort` argument to `createStation`.
+
+### stationd deploy
 
 Bundles signals, broadcasts, and config into a self-contained deploy directory using esbuild.
 
@@ -1530,7 +1544,7 @@ import {
   type ApiKeyStorageAdapter,
   type ApiKey,
   type ApiKeyPublic,
-} from "station-kit/server";
+} from "station-daemon/server";
 ```
 
 #### ApiKeyStorageAdapter
@@ -1604,7 +1618,7 @@ class SqliteKeyStorage implements ApiKeyStorageAdapter {
 }
 ```
 
-`FileKeyStorage` is the default when station-kit boots without a `keyStorage` configured (JSON file, fsync'd tmp+rename, `0o600`/`0o700` perms, no native deps). Single-process only — for multi-process or high-throughput deployments, implement your own `ApiKeyStorageAdapter`. `MemoryKeyStorage` is intended for tests and ephemeral deployments — keys do not survive process restart. `SqliteKeyStorage` remains as an opt-in adapter for users who want SQLite specifically.
+`FileKeyStorage` is the default when station-daemon boots without a `keyStorage` configured (JSON file, fsync'd tmp+rename, `0o600`/`0o700` perms, no native deps). Single-process only — for multi-process or high-throughput deployments, implement your own `ApiKeyStorageAdapter`. `MemoryKeyStorage` is intended for tests and ephemeral deployments — keys do not survive process restart. `SqliteKeyStorage` remains as an opt-in adapter for users who want SQLite specifically.
 
 ### 7.6 LogStore (run log storage)
 
@@ -1620,7 +1634,7 @@ import {
   MemoryLogStorage,
   type LogStorageAdapter,
   type LogEntry,
-} from "station-kit/server";
+} from "station-daemon/server";
 
 interface LogStorageAdapter {
   add(entry: LogEntry): Promise<void> | void;
@@ -1637,7 +1651,11 @@ interface LogStorageAdapter {
 class FileLogStorage implements LogStorageAdapter {
   constructor(options: {
     filePath: string;
-    onError?: (err: unknown) => void;  // surfaces background write failures
+    onError?: (err: unknown) => void;  // surfaces write failures / dropped overflow
+    maxFileBytes?: number;           // 64 MiB per segment; current + previous
+    maxPendingBytes?: number;        // 4 MiB pending writes
+    maxQueryEntries?: number;        // newest 10000 matching records
+    maxQueryBytes?: number;          // newest 4 MiB of matching records
   });
 }
 
@@ -1646,12 +1664,12 @@ class MemoryLogStorage implements LogStorageAdapter {
 }
 ```
 
-`FileLogStorage` is the default — append-only JSONL at `<dataDir>/station-logs.jsonl`, single-process only. The default `onError` (when wired through `createStation`) routes failures to `console.error`. `MemoryLogStorage` is for tests; logs do not survive restart. The legacy SQLite-backed log store has been removed; an old `station-logs.db` triggers a startup warning from `createStation`.
+`FileLogStorage` streams queries without a full-memory startup index, rejects lines over64KiB, bounds pending writes/results and rotates to one previous segment. An existing oversized legacy file may be retained once as the previous segment until the next rotation; reads remain bounded. It is the default — JSONL at `<dataDir>/station-logs.jsonl`, single-process only. The default `onError` (when wired through `createStation`) routes failures to `console.error`. `MemoryLogStorage` is for tests; logs do not survive restart. The legacy SQLite-backed log store has been removed; an old `station-logs.db` triggers a startup warning from `createStation`.
 
 #### Configuring custom storage
 
 ```ts
-import { defineConfig, type LogStorageAdapter, type LogEntry } from "station-kit";
+import { defineConfig, type LogStorageAdapter, type LogEntry } from "station-daemon";
 
 class PostgresLogStorage implements LogStorageAdapter {
   constructor(private pool: Pool) {}
@@ -1679,7 +1697,7 @@ export default defineConfig({
 #### Configuring custom storage
 
 ```ts
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 
 export default defineConfig({
   auth: {
@@ -1690,7 +1708,7 @@ export default defineConfig({
 });
 ```
 
-`auth.keyStorage` is a plain `ApiKeyStorageAdapter` — anyone can implement it against Postgres / MySQL / Redis / etc. without forking station-kit.
+`auth.keyStorage` is a plain `ApiKeyStorageAdapter` — anyone can implement it against Postgres / MySQL / Redis / etc. without forking station-daemon.
 
 ---
 
@@ -2167,7 +2185,7 @@ If `triggerFn` throws, the schedule still has its `nextRunAt` advanced (via the 
 
 ### Runner wiring
 
-Both `SignalRunnerOptions` and `BroadcastRunnerOptions` accept `scheduleReconciler?: ScheduleReconciler`. station-kit constructs and wires reconcilers automatically when `config.scheduleAdapter` is set:
+Both `SignalRunnerOptions` and `BroadcastRunnerOptions` accept `scheduleReconciler?: ScheduleReconciler`. station-daemon constructs and wires reconcilers automatically when `config.scheduleAdapter` is set:
 
 - one reconciler per runner, with `kinds` set to `["signal"]` for the SignalRunner and `["broadcast-static", "broadcast-dynamic"]` for the BroadcastRunner.
 
@@ -2342,7 +2360,7 @@ interface TauriStation {
 
 ### StationInstance additions
 
-`StationInstance` (from station-kit internals) now exposes two additional properties:
+`StationInstance` (from station-daemon internals) now exposes two additional properties:
 
 ```ts
 interface StationInstance {
@@ -2587,7 +2605,7 @@ All optional; errors are caught and logged. `onBeaconDiscovered`, `onBeaconInsta
 - **Fatal errors** (invalid config, beacon not found) exit with `FATAL_EXIT_CODE` (78, exported) and go to `errored` without restarting — the sentinel exit code is authoritative so a bad config never restart-loops, even under `restart("always")`.
 - Child processes are `unref`'d and self-exit on IPC `disconnect`, so a dying supervisor never leaves orphans.
 - Triggering signals from a beacon requires a **persistent** signal adapter (SQLite/Postgres/…) wired via `signalRunner`; the default in-memory adapter does not cross the child-process boundary.
-- **Dashboard**: set `beaconsDir` (and optionally `beaconAdapter`) in `station-kit`'s `defineConfig` to supervise beacons and surface them on the dashboard `/beacons` page — live status, logs, lifecycle events, per-instance controls, and a **New instance** form built from the beacon's config schema. `beaconMaxInstances` sets the default instance cap.
+- **Dashboard**: set `beaconsDir` (and optionally `beaconAdapter`) in `station-daemon`'s `defineConfig` to supervise beacons and surface them on the dashboard `/beacons` page — live status, logs, lifecycle events, per-instance controls, and a **New instance** form built from the beacon's config schema. `beaconMaxInstances` sets the default instance cap.
 
 **Beacon REST surface** (dashboard API under `/api`, authenticated v1 under `/api/v1`):
 
@@ -2674,7 +2692,7 @@ await store.resolveFor({ kind: "signal", name: "charge" });  // Record<string,st
 
 - **Resolution**: global vars first, then vars scoped to the target (scoped wins on key collisions).
 - **Conflicts**: `create`/`update` throw `EnvValidationError` if two vars would both apply to one target with the same key.
-- `EnvStore` structurally satisfies the runner `EnvProvider` interface — pass it as `envProvider` to `SignalRunner`/`BeaconRunner`, or set `envStorage` in `station-kit`'s `defineConfig` (station-kit wires the `EnvStore` and injects it into both runners automatically).
+- `EnvStore` structurally satisfies the runner `EnvProvider` interface — pass it as `envProvider` to `SignalRunner`/`BeaconRunner`, or set `envStorage` in `station-daemon`'s `defineConfig` (station-daemon wires the `EnvStore` and injects it into both runners automatically).
 
 ### Requiring env vars
 
@@ -2697,7 +2715,7 @@ Dashboard: the **Environment** page manages vars and flags required-but-undefine
 ## 15. station-network
 
 Shared fleet membership and fenced controller leases for multi-process Station
-deployments. `station-kit` creates a memory adapter automatically, but separate
+deployments. `station-daemon` creates a memory adapter automatically, but separate
 processes must receive the same durable backend through `network.adapter`.
 
 ### Exports

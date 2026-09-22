@@ -10,6 +10,11 @@ function cloneStation(station: StationNode): StationNode {
       signals: [...station.definitions.signals],
       broadcasts: [...station.definitions.broadcasts],
       beacons: [...station.definitions.beacons],
+      execution: station.definitions.execution ? {
+        ...(station.definitions.execution.tenantId === undefined ? {} : { tenantId: station.definitions.execution.tenantId }),
+        sandbox: station.definitions.execution.sandbox ? { ...station.definitions.execution.sandbox, ...(station.definitions.execution.sandbox.capabilities ? { capabilities: { ...station.definitions.execution.sandbox.capabilities } } : {}) } : undefined,
+        browser: station.definitions.execution.browser ? { ...station.definitions.execution.browser, ...(station.definitions.execution.browser.capabilities ? { capabilities: { ...station.definitions.execution.browser.capabilities } } : {}) } : undefined,
+      } : undefined,
       beaconMetadata: station.definitions.beaconMetadata?.map((item) => ({
         ...item,
         requiredEnv: item.requiredEnv ? [...item.requiredEnv] : undefined,
@@ -50,6 +55,11 @@ export class StationNetworkMemoryAdapter implements StationNetworkAdapter {
         signals: [...heartbeat.definitions.signals],
         broadcasts: [...heartbeat.definitions.broadcasts],
         beacons: [...heartbeat.definitions.beacons],
+        execution: heartbeat.definitions.execution ? {
+          ...(heartbeat.definitions.execution.tenantId === undefined ? {} : { tenantId: heartbeat.definitions.execution.tenantId }),
+          sandbox: heartbeat.definitions.execution.sandbox ? { ...heartbeat.definitions.execution.sandbox, ...(heartbeat.definitions.execution.sandbox.capabilities ? { capabilities: { ...heartbeat.definitions.execution.sandbox.capabilities } } : {}) } : undefined,
+          browser: heartbeat.definitions.execution.browser ? { ...heartbeat.definitions.execution.browser, ...(heartbeat.definitions.execution.browser.capabilities ? { capabilities: { ...heartbeat.definitions.execution.browser.capabilities } } : {}) } : undefined,
+        } : undefined,
         beaconMetadata: heartbeat.definitions.beaconMetadata?.map((item) => ({
           ...item,
           requiredEnv: item.requiredEnv ? [...item.requiredEnv] : undefined,

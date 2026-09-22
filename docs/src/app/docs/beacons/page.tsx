@@ -898,14 +898,15 @@ await beaconRunner.start();`}</Code>
         controls.
       </p>
       <Code>{`// station.config.ts
-import { defineConfig } from "station-kit";
+import { defineConfig } from "station-daemon";
 
 export default defineConfig({
   beaconsDir: "./beacons",
   // beaconAdapter: new BeaconSqliteAdapter(...),  // optional, for durable state
 });`}</Code>
       <p>
-        Then run <code>npx station</code> and open <code>/beacons</code>. A
+        Then run <code>pnpm exec stationd</code>, start the separate dashboard
+        using the <Link href="/docs/dashboard">dashboard guide</Link>, and open <code>/beacons</code>. A
         beacon&apos;s page lists its instances, builds new ones from the config
         schema, and scopes logs and controls to the selected instance. The REST
         surface behind the page (see <a href="#instances">Instances</a>) is
