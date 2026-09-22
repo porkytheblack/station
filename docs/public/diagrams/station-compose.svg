@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="500" viewBox="0 0 960 500" role="img" aria-labelledby="title desc">
+<title id="title">Station on Docker Compose</title><desc id="desc">A separate dashboard and controller communicate over verified HTTPS on a private Compose network. Only the controller accesses Docker. Docker runs a separate Hermes sandbox with a persistent home volume.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10" fill="none" stroke="#a7c495" stroke-width="1.7"/></marker></defs>
+<rect width="960" height="500" rx="16" fill="#191c1c"/>
+<g font-family="system-ui, sans-serif" fill="#ece8df">
+<text x="32" y="42" font-size="22" font-weight="600">Station manages the workloads. Compose runs Station.</text>
+<rect x="24" y="68" width="598" height="226" rx="12" fill="#222728" stroke="#63716d" stroke-dasharray="5 5"/>
+<text x="44" y="95" font-size="13" fill="#b9c4bd">COMPOSE SERVICES · PRIVATE NETWORK</text>
+<rect x="44" y="118" width="224" height="148" rx="8" fill="#2a3031" stroke="#66726e"/>
+<text x="62" y="148" font-size="20">Dashboard</text><text x="62" y="176" font-size="14" fill="#c0c7c3">Shell · files · services</text><text x="62" y="211" font-size="13" fill="#a7c495">No Docker socket</text><text x="62" y="234" font-size="13" fill="#c0c7c3">Local port 5801</text>
+<rect x="362" y="118" width="238" height="148" rx="8" fill="#2a3031" stroke="#a7c495"/>
+<text x="380" y="148" font-size="20">Station controller</text><text x="380" y="176" font-size="14" fill="#c0c7c3">Lifecycle · supervision</text><text x="380" y="211" font-size="13" fill="#a7c495">Trusted Docker access</text><text x="380" y="234" font-size="13" fill="#c0c7c3">Authenticated API :5800</text>
+<path d="M276 185H350" stroke="#a7c495" stroke-width="2" marker-end="url(#arrow)"/><text x="278" y="170" font-size="12" fill="#c0c7c3">HTTPS</text>
+<rect x="696" y="118" width="240" height="148" rx="8" fill="#30382c" stroke="#a7c495"/>
+<text x="714" y="148" font-size="20">Hermes sandbox</text><text x="714" y="176" font-size="14" fill="#c0c7c3">Agent · Bash · Git · tools</text><text x="714" y="211" font-size="13" fill="#a7c495">Separate container</text><text x="714" y="234" font-size="13" fill="#c0c7c3">No socket or host home</text>
+<rect x="362" y="334" width="238" height="64" rx="8" fill="#2a3031" stroke="#a7c495"/><text x="390" y="373" font-size="19">Host Docker engine</text>
+<path d="M480 270V324" stroke="#a7c495" stroke-width="2" marker-end="url(#arrow)"/><text x="494" y="317" font-size="12" fill="#c0c7c3">socket</text>
+<path d="M608 364H816V278" fill="none" stroke="#a7c495" stroke-width="2" marker-end="url(#arrow)"/><text x="676" y="351" font-size="13" fill="#c0c7c3">creates + supervises</text>
+<rect x="44" y="420" width="278" height="52" rx="8" fill="#222728" stroke="#63716d"/><text x="62" y="443" font-size="14">Private controller state</text><text x="62" y="461" font-size="12" fill="#c0c7c3">Metadata · auth · ownership</text>
+<path d="M372 273L185 407" stroke="#63716d" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="696" y="420" width="240" height="52" rx="8" fill="#222728" stroke="#63716d"/><text x="714" y="443" font-size="14">Persistent agent home</text><text x="714" y="461" font-size="12" fill="#c0c7c3">Files · sessions · installed tools</text>
+<path d="M924 278V407" stroke="#63716d" stroke-width="1.5" marker-end="url(#arrow)"/>
+</g></svg>

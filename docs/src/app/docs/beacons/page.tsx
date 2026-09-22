@@ -1,5 +1,6 @@
 import { Metadata } from "next";
 import Link from "next/link";
+import { BeaconFigure } from "../../components/ArchitectureFigure";
 import { Code } from "../../components/Code";
 
 export const metadata: Metadata = {
@@ -23,6 +24,7 @@ export default function BeaconsPage() {
         <strong>desired state</strong>{" "}
         (running / stopped) you can flip at runtime.
       </p>
+      <BeaconFigure />
       <p>
         This reference describes the Node runtime. The shared builder also works
         with the <Link href="/docs/browser">experimental browser runtime</Link>.

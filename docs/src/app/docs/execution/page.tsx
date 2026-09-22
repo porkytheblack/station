@@ -19,6 +19,11 @@ export default function ExecutionPage() {
         Use the host backend for trusted work. Customer execution requires tenant-scoped
         authorization and isolated, network-restricted container backends.
       </p>
+      <div className="guide-paths">
+        <Link href="/docs/sandboxes"><strong>Understand sandboxes →</strong><span>Files, shells, tool installation, long-running agents and persistence.</span></Link>
+        <Link href="/docs/browser-use"><strong>Understand Browser Use →</strong><span>Agent tools, session ownership, profiles, recordings and human control.</span></Link>
+      </div>
+      <p>This page is the configuration and security reference. The illustrated guides above explain the lifecycle before you wire the primitives into a network.</p>
       <p>
         For a step-by-step sandbox walkthrough, read the
         <a href="https://github.com/porkytheblack/station/blob/main/packages/station-sandbox/GUIDE.md"> detailed Sandbox guide</a>.
@@ -26,6 +31,7 @@ export default function ExecutionPage() {
         tenant API payloads and the different recovery behavior of host and container backends.
       </p>
       <table className="api-table">
+        <caption>For a containerized controller and persistent agent setup, see <Link href="/docs/docker-compose">Docker Compose and persistent agents</Link>.</caption>
         <thead><tr><th>Primitive</th><th>Runs where</th><th>Purpose</th></tr></thead>
         <tbody>
           <tr><td>station-sandbox</td><td>POSIX worker</td><td>Persistent files, native Bash and bounded commands through a SandboxAdapter.</td></tr>

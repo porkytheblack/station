@@ -2,6 +2,10 @@
 
 Station 3.0.0 provides separate server execution primitives. `station-browser` instead runs Station signals/DAGs/beacons inside a browser worker; it does not supply Bash or control server browsers.
 
+## Containerized controller and persistent agents
+
+See `/docs/docker-compose` and `examples/20-hermes-sandbox/compose.yaml` for separate controller/dashboard containers managing sibling Docker sandbox containers. Only the trusted controller receives the Docker socket and private controller metadata. Workloads receive their own named home volume, never the socket. Compose owns the control plane; Station owns sandbox lifecycle. Long-lived agents use `startService`, not timeout-bound `exec`. Host-process mode inside one outer container is an explicit alternative with a shared isolation boundary, not a fallback for a missing engine. Docker unavailability fails closed. Preserve controller metadata and workload volumes together; stop the prior controller before migration. Restart recovery interrupts interactive shells but retains files. Forced sandbox cancellation can interrupt every service in the workspace. This local example is not multi-tenant production validation.
+
 ## Agent browser integration
 
 Use `createBrowserAgentTools({ client: new BrowserUseClient({baseUrl, stationId,

@@ -1,5 +1,6 @@
 import { Metadata } from "next";
 import Link from "next/link";
+import { SignalFigure } from "../../components/ArchitectureFigure";
 import { Code } from "../../components/Code";
 
 export const metadata: Metadata = {
@@ -17,6 +18,7 @@ export default function SignalsPage() {
         up, spawns an isolated child process, and manages retries, timeouts, and
         concurrency on your behalf.
       </p>
+      <SignalFigure />
       <p>
         This reference describes the Node runtime. The shared builder also works
         with the <Link href="/docs/browser">experimental browser runtime</Link>.

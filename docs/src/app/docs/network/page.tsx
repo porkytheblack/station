@@ -1,5 +1,6 @@
 import { Metadata } from "next";
 import Link from "next/link";
+import { ArchitectureFigure } from "../../components/ArchitectureFigure";
 import { Code } from "../../components/Code";
 
 export const metadata: Metadata = { title: "Station Networks — Station" };
@@ -17,11 +18,17 @@ export default function NetworkPage() {
         shared adapters.
       </p>
 
+      <ArchitectureFigure title="Queued work: any eligible worker can claim it" nodes={[
+        { label: "Public entry point", title: "Headquarters", detail: "Authenticates a request, validates it and enqueues the run." },
+        { label: "Shared durable state", title: "Queue + leases", detail: "Atomic claims assign one attempt to one owner. State is shared across the fleet.", accent: true },
+        { label: "Private execution", title: "Eligible worker", detail: "Checks definitions, placement and capacity, then executes the claimed run." },
+      ]} caption="Workers claim queued work; Headquarters does not push every job directly. Retries and lease recovery can repeat work, so external effects still need idempotency." />
+
       <h3>Roles and request flow</h3>
       <table className="api-table">
         <thead><tr><th>Role</th><th>Responsibility</th></tr></thead>
         <tbody>
-          <tr><td><code>headquarters</code></td><td>API, dashboard, schedules, broadcasts, routing, and fleet inventory. It does not execute signals or beacons.</td></tr>
+          <tr><td><code>headquarters</code></td><td>API, schedules, broadcasts, routing and fleet inventory for the separate dashboard. It does not execute signals or beacons.</td></tr>
           <tr><td><code>station</code></td><td>Advertises local definitions and executes eligible signal runs and beacon instances.</td></tr>
           <tr><td><code>standalone</code></td><td>Backwards-compatible single-node mode that performs both roles.</td></tr>
         </tbody>
@@ -40,6 +47,14 @@ export default function NetworkPage() {
         routes requests to an explicitly selected owner through Headquarters;
         it does not use signal queue placement or migrate live sessions.
       </p>
+
+      <ArchitectureFigure title="Live environments: return to their owning worker" nodes={[
+        { label: "Client or agent", title: "Workspace / session ID", detail: "Requests another command, browser action or screenshot." },
+        { label: "Authenticated routing", title: "Headquarters", detail: "Resolves the authorized worker target; tenant grants are operator-configured.", accent: true },
+        { label: "Existing owner", title: "Sandbox or browser", detail: "The selected worker operates its retained workspace or live browser session." },
+      ]} caption="Session routing is not queue placement. A different worker cannot automatically pick up an open terminal or browser just because both workers share a database." />
+      <p>For example, keep CPU build tools on one Station and browser sessions on another. Both can be private services behind Headquarters. A signal can invoke their APIs, but application code must retain resource IDs and handle interrupted or unknown outcomes. Read the <Link href="/docs/sandboxes">Sandbox</Link> and <Link href="/docs/browser-use">Browser Use</Link> lifecycle guides before planning recovery.</p>
+      <p>A Station Network coordinates work; it does not provision a VPN or Docker-style network. Workers need access to shared adapters and Headquarters needs a reachable, authenticated endpoint for proxied execution. Configure DNS, TLS, firewalls and ingress in the deployment. Keep private worker credentials and tenant assignments in operator configuration; a heartbeat is discovery data, not permission to act as a tenant.</p>
 
       <h3>Configure Headquarters</h3>
       <Code>{`import { defineConfig } from "station-daemon";
@@ -136,6 +151,15 @@ export const gateway = beacon("gateway")
         do not treat the injected <code>x-station-*</code> headers as proof of
         identity on a publicly reachable service.
       </p>
+
+      <h3>What happens when a worker disappears?</h3>
+      <table className="api-table"><thead><tr><th>Resource</th><th>Recovery model</th></tr></thead><tbody>
+        <tr><td>Signal attempt</td><td>Lease expiry makes recovery possible. Fencing rejects stale completion; it cannot undo an external effect already performed.</td></tr>
+        <tr><td>Beacon process</td><td>Shared intent and ownership leases coordinate a replacement. New process memory starts fresh.</td></tr>
+        <tr><td>Sandbox workspace</td><td>Files may persist on its owner. Restart and service recovery depend on the adapter; there is no automatic cross-worker workspace migration.</td></tr>
+        <tr><td>Browser session</td><td>The live browser is interrupted. Retained profiles, recordings and explicit checkpoints can help reopen on a compatible owner.</td></tr>
+      </tbody></table>
+      <p>Draining stops new queued claims. Also inspect worker-owned shells, services and browser sessions before maintenance; an empty signal queue does not prove the worker has no live environments.</p>
 
       <h3>Production checklist</h3>
       <ul>

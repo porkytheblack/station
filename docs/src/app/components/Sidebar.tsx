@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { sections } from "./sidebar-data";
 
 export function Sidebar() {
-  const pathname = usePathname();
+  const pathname = usePathname().replace(/\.html$/, "");
 
   return (
     <aside className="docs-sidebar">
@@ -16,7 +16,7 @@ export function Sidebar() {
             <Link
               key={link.href}
               href={link.href}
-              className={`docs-sidebar-link${pathname === link.href || (link.href !== "/docs/examples" && pathname.startsWith(link.href)) ? " active" : ""}`}
+              className={`docs-sidebar-link${pathname === link.href || (link.href !== "/docs/examples" && pathname.startsWith(`${link.href}/`)) ? " active" : ""}`}
             >
               {link.label}
             </Link>

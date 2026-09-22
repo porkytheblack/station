@@ -1,6 +1,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { Code } from "./components/Code";
+import { ArchitectureFigure } from "./components/ArchitectureFigure";
 import { TowerIllustration } from "./components/TowerIcon";
 
 function CronIcon() {
@@ -166,9 +167,8 @@ export default function LandingPage() {
             Start as one TypeScript process with SQLite. Grow into a Station
             Network backed by PostgreSQL, MySQL, or Redis when you need more
             capacity. Retries, cron scheduling, workflows, long-running services,
-            and a separate fleet dashboard are available. For work on the device, explore
-            the <Link href="/docs/browser">experimental browser runtime</Link>
-            {" "}with local signals, workflows, and beacons.
+            and a separate fleet dashboard are available. Give agents persistent
+            shell workspaces and browser tools when their jobs need more than a function.
           </p>
           <div className="landing-hero-cta">
             <Link href="/docs/getting-started" className="btn-primary">
@@ -353,6 +353,28 @@ export const loveLetter = signal("loveLetter")
           <img src="/screenshots/station-network.png" alt="Station Network dashboard with Headquarters and two execution stations" />
           <div className="landing-network-caption">LIVE FLEET INVENTORY · CAPACITY · DRAINING · HEARTBEATS</div>
         </div>
+      </section>
+
+      <div className="field-divider" />
+      <section className="landing-execution">
+        <div className="section-header">
+          <div>
+            <span className="section-number">// Execution environments</span>
+            <h2 className="section-heading">Some jobs need a workspace.<br className="desktop-break" /> Some need a browser.</h2>
+          </div>
+          <p className="section-desc">Keep the same background-job foundation. Add the environment your agent needs, on a worker you control.</p>
+        </div>
+        <ArchitectureFigure title="From background job to agent workflow" nodes={[
+          { label: "Your application", title: "Trigger the work", detail: "A signal handles one job. A broadcast connects jobs. A beacon stays available." },
+          { label: "Station worker", title: "Use the right tools", detail: "Call a persistent shell workspace or an agent-controlled browser session.", accent: true },
+          { label: "Your dashboard", title: "See what happened", detail: "Inspect run history, command output, files and recorded browser frames." },
+        ]} caption="Sandboxes and Browser Use are separate, optional execution primitives. Their files and profiles can persist; live processes still belong to their worker." />
+        <div className="guide-paths">
+          <Link href="/docs/sandboxes"><strong>Give an agent a workspace →</strong><span>Shells, Git, custom tools and supervised services, with an explicit isolation boundary.</span></Link>
+          <Link href="/docs/browser-use"><strong>Give an agent a browser →</strong><span>Observe pages, act through tools, retain profiles and review screenshots.</span></Link>
+          <Link href="/docs/docker-compose"><strong>Run your own deployment →</strong><span>A separate controller and dashboard, with workloads in sibling containers.</span></Link>
+        </div>
+        <p>Working entirely on the device? The <Link href="/docs/browser">experimental browser runtime</Link> runs local signals, broadcasts and beacons with IndexedDB.</p>
       </section>
 
       {/* ── Landscape / comparison section ── */}

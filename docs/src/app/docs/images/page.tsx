@@ -1,4 +1,5 @@
 import { Metadata } from "next";
+import { ArchitectureFigure } from "../../components/ArchitectureFigure";
 import { Code } from "../../components/Code";
 
 export const metadata: Metadata = {
@@ -12,6 +13,11 @@ export default function ImagesPage() {
     <h2 style={{ marginTop: 0 }}>Station Images and registry</h2>
     <p>Station 3 accepts independently authored native executables and bundled JavaScript as signals, broadcast planners and beacons. An image is a manifest plus verified executable blobs. It is not an OCI filesystem image: isolation comes from the configured execution backend.</p>
     <p>Use the <a href="https://github.com/porkytheblack/station/blob/main/docs/STATION-IMAGES.md">complete authoring and operations guide</a> for a runnable manifest generator, all protocol fields, environment grants, Docker policy, independent cleanup and recovery.</p>
+    <ArchitectureFigure title="Publish compiled work; execute verified bytes" nodes={[
+      { label: "Author", title: "Build + manifest", detail: "Compile native code or bundle JavaScript. Declare exports, target compatibility and artifact digests." },
+      { label: "Registry", title: "Publish + resolve", detail: "Store verified blobs and metadata. Pin an immutable digest for execution.", accent: true },
+      { label: "Station worker", title: "Install + invoke", detail: "Run a compatible signal, broadcast planner or beacon with granted input and environment." },
+    ]} caption="A Station image packages an execution protocol and artifacts. A Docker image packages a filesystem and runtime. The two serve different roles and can be used together." />
     <h3>Build the artifact</h3>
     <p>Compile native code for the target OS, architecture and ABI, or bundle JavaScript and its dependencies into a single file. Station does not install application dependencies or compile uploads. A manifest uses <code>station.image/v1</code>, artifact SHA-256 digests and byte counts, target declarations, and named exports of kind <code>signal</code>, <code>broadcast</code> or <code>beacon</code>.</p>
     <p>A finite signal receives an NDJSON invocation on stdin and returns a result on stdout. Parameters are structured JSON; stdout is reserved for the protocol.</p>
