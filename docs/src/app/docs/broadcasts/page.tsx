@@ -1,5 +1,6 @@
 import { Metadata } from "next";
 import Link from "next/link";
+import { BroadcastFigure } from "../../components/ArchitectureFigure";
 import { Code } from "../../components/Code";
 
 export const metadata: Metadata = {
@@ -19,6 +20,7 @@ export default function BroadcastsPage() {
         the entire graph, handling fan-out, fan-in, conditional execution, and
         failure propagation.
       </p>
+      <BroadcastFigure />
       <p>
         This reference describes the Node runtime. The shared builder also works
         with the <Link href="/docs/browser">experimental browser runtime</Link>.

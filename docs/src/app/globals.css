@@ -2201,3 +2201,113 @@ pre .number { color: var(--patina-pale); }
     grid-template-columns: 1fr;
   }
 }
+
+/* Architecture figures use real text and reflow vertically on small screens. */
+.architecture-figure {
+  margin: 2rem 0;
+  padding: 1.5rem;
+  border: 1px solid var(--border-heavy);
+  background: var(--surface-tint);
+  border-radius: 8px;
+}
+.architecture-title {
+  font-family: var(--font-mono);
+  font-size: .72rem;
+  font-weight: 500;
+  letter-spacing: .04em;
+  color: var(--rust);
+  margin-bottom: 1.4rem;
+}
+.architecture-figure .architecture-flow {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1.5rem;
+}
+.architecture-figure .architecture-node {
+  position: relative;
+  padding: 1rem;
+  margin: 0;
+  background: var(--concrete);
+  border: 1px solid var(--border-heavy);
+  border-radius: 4px;
+  min-width: 0;
+}
+.architecture-node:not(:last-child)::after {
+  content: '→';
+  position: absolute;
+  right: -1.4rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--rust);
+  font-family: var(--font-mono);
+}
+.architecture-figure .architecture-node-accent {
+  border-color: var(--patina);
+  background: var(--info-bg);
+}
+.architecture-node-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: .65rem;
+  color: var(--rust);
+  margin-bottom: .4rem;
+}
+.architecture-node strong {
+  display: block;
+  font-family: var(--font-body);
+  font-size: .95rem;
+  font-weight: 500;
+  line-height: 1.4;
+}
+.architecture-node-detail {
+  display: block;
+  margin-top: .6rem;
+  font-size: .8rem;
+  line-height: 1.6;
+  color: var(--wire);
+}
+.architecture-figure figcaption {
+  margin-top: 1.2rem;
+  font-size: .8rem;
+  line-height: 1.6;
+  color: var(--wire);
+}
+.architecture-band {
+  margin-top: 1.2rem;
+  padding: .85rem 1rem;
+  border: 1px dashed var(--patina);
+  font-size: .8rem;
+  color: var(--wire);
+}
+.guide-paths {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin: 1.5rem 0 2rem;
+}
+.guide-paths a {
+  display: block;
+  border: 1px solid var(--border-heavy);
+  border-radius: 4px;
+  padding: 1.2rem;
+  text-decoration: none;
+}
+.guide-paths a:hover { background: var(--surface-medium); }
+.guide-paths a:focus-visible { outline: 2px solid var(--patina); outline-offset: 4px; }
+.guide-paths strong { display: block; font-size: 1rem; }
+.guide-paths span { display: block; color: var(--wire); font-size: .85rem; margin-top: .4rem; }
+.landing-execution { padding: var(--space-3xl) var(--space-xl); max-width: 1280px; margin: 0 auto; }
+.landing-execution .section-desc { max-width: 480px; }
+.landing-execution .guide-paths { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.landing-execution .architecture-figure { margin-bottom: 2rem; }
+@media (max-width: 680px) {
+  .architecture-figure { padding: 1rem; }
+  .architecture-figure .architecture-flow { grid-template-columns: 1fr; gap: 1.7rem; }
+  .architecture-node:not(:last-child)::after { content: '↓'; top: auto; right: 50%; bottom: -1.65rem; transform: translateX(50%); }
+  .architecture-node-detail { font-size: .85rem; }
+  .guide-paths, .landing-execution .guide-paths { grid-template-columns: 1fr; }
+  .landing-execution { padding: var(--space-2xl) var(--space-lg); }
+}

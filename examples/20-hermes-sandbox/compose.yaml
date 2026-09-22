@@ -1,0 +1,85 @@
+name: station-hermes
+services:
+  station:
+    image: station-hermes-controller:local
+    build:
+      context: ../..
+      dockerfile: examples/20-hermes-sandbox/Station.Dockerfile
+      target: controller
+    hostname: station-hermes-controller
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 45s
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 1g
+    cpus: 1
+    pids_limit: 256
+    tmpfs: ['/tmp:size=128m,mode=1777']
+    environment:
+      TINI_KILL_PROCESS_GROUP: '1'
+      STATION_COMPOSE_OWNER: '1'
+      STATION_DATA_DIR: /data
+      STATION_BIND_HOST: 0.0.0.0
+      STATION_TLS_PROXY: '1'
+    volumes:
+      - type: bind
+        source: ${STATION_DATA_PATH:-../../.station/hermes}
+        target: /data
+        bind:
+          create_host_path: false
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - '127.0.0.1:5800:5800'
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:5800/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: '3'}
+  dashboard:
+    image: station-hermes-dashboard:local
+    build:
+      context: ../..
+      dockerfile: examples/20-hermes-sandbox/Station.Dockerfile
+      target: dashboard
+    # Independent network namespace survives controller replacement. Trust only
+    # this deployment's public certificate; never mount the TLS private key here.
+    ports: ['127.0.0.1:5801:5801']
+    volumes:
+      - type: bind
+        source: ${STATION_DATA_PATH:-../../.station/hermes}/tls-cert.pem
+        target: /etc/station/ca.pem
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      station:
+        condition: service_healthy
+        restart: true
+    init: true
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 512m
+    cpus: 1
+    pids_limit: 128
+    tmpfs: ['/tmp:size=64m,mode=1777']
+    environment:
+      PORT: '5801'
+      STATION_DASHBOARD_HOST: 0.0.0.0
+      STATION_DAEMON_URL: https://station:5843
+      NODE_EXTRA_CA_CERTS: /etc/station/ca.pem
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:5801/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: '3'}

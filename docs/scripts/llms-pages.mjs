@@ -10,7 +10,10 @@ export const pageGroups = [
     heading: "Start here",
     pages: [
       { route: "/docs/getting-started", title: "Getting started", description: "Install Station, define and run a signal, add persistence, and prepare a production configuration." },
+      { route: "/docs/docker-compose", title: "Docker Compose and persistent agents", description: "Containerized Station controller and separate dashboard, sibling agent sandboxes, Docker socket boundaries, persistent volumes and engine failure recovery." },
       { route: "/docs/browser", title: "Browser runtime (experimental)", description: "Build signals, DAGs, and beacons in Web Workers or service workers with IndexedDB, explicit wake handling, recovery, and browser execution limits. Includes beacon configuration and start-mode behavior." },
+      { route: "/docs/sandboxes", title: "Sandboxes", description: "Illustrated workspace lifecycle: host and container boundaries, commands versus terminals and services, custom tools and Git, internal networking, persistence and recovery." },
+      { route: "/docs/browser-use", title: "Browser Use", description: "Illustrated agent browser loop, adapter choices, session/profile/checkpoint distinctions, scoped tools, screenshot playback, human control and lifecycle limitations." },
       { route: "/docs/execution", title: "Sandbox and Browser Use (experimental)", description: "Build persistent shell workspaces and agent-controlled browser sessions through Headquarters. Covers host/container adapters, tenant authorization, enforced network/storage controls, agent tools and image observations, dashboard subpages, recordings, recovery and optional Bun children." },
       { route: "/docs/dashboard", title: "Dashboard guide", description: "Operate the independent Station dashboard, inspect runs, and understand Headquarters fleet views." },
       { route: "/docs/network", title: "Station Networks", description: "Scale execution across Headquarters and worker stations with placement, capacity, leases, and draining." },

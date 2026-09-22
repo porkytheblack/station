@@ -14,7 +14,7 @@ const navLinks = [
 ];
 
 export function Nav() {
-  const pathname = usePathname();
+  const pathname = usePathname().replace(/\.html$/, "");
   const isDocs = pathname.startsWith("/docs");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -148,7 +148,7 @@ export function Nav() {
                     className={`docs-sidebar-link${
                       pathname === link.href ||
                       (link.href !== "/docs/examples" &&
-                        pathname.startsWith(link.href))
+                        pathname.startsWith(`${link.href}/`))
                         ? " active"
                         : ""
                     }`}

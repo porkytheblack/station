@@ -4,7 +4,10 @@ export const sections = [
     links: [
       { href: "/docs/getting-started", label: "Getting started" },
       { href: "/docs/browser", label: "Browser runtime" },
-      { href: "/docs/execution", label: "Sandbox & Browser Use" },
+      { href: "/docs/sandboxes", label: "Sandboxes" },
+      { href: "/docs/browser-use", label: "Browser Use" },
+      { href: "/docs/execution", label: "Execution configuration" },
+      { href: "/docs/docker-compose", label: "Docker Compose & agents" },
       { href: "/docs/images", label: "Images & registry" },
       { href: "/docs/dashboard", label: "Dashboard" },
       { href: "/docs/remote-triggers", label: "Remote triggers" },

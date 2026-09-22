@@ -1,5 +1,6 @@
 import { Metadata } from "next";
 import Link from "next/link";
+import { ArchitectureFigure } from "../../components/ArchitectureFigure";
 import { Code } from "../../components/Code";
 
 export const metadata: Metadata = {
@@ -19,6 +20,11 @@ export default function BrowserPage() {
         browser runtime needs no Node runner, companion app, or Station server.
         It is experimental and is not a Station Network member.
       </p>
+      <ArchitectureFigure title="Local state can outlive a browser execution slice" nodes={[
+        { label: "Application", title: "Trigger locally", detail: "The page registers bundled definitions and queues work on this device." },
+        { label: "IndexedDB", title: "Retain progress", detail: "Store runs, completed steps, workflow state and beacon intent.", accent: true },
+        { label: "Worker", title: "Run while awake", detail: "Execute work when the browser allows it. A later wake can recover persisted state." },
+      ]} caption="Storage durability is not continuous execution. A service worker cannot promise one-second polling after the PWA closes." />
       <p>
         Persistence survives a page reload; continuous execution does not.
         Service workers run bounded work when the browser wakes them. Neither an
@@ -28,15 +34,15 @@ export default function BrowserPage() {
 
       <p>
         For server-owned browsers, screenshots or native shell workspaces, use
-        {" "}<Link href="/docs/execution">Sandbox and Browser Use</Link>. Those are
+        {" "}<Link href="/docs/browser-use">Browser Use</Link> or <Link href="/docs/sandboxes">Sandboxes</Link>. Those are
         separate server primitives with their own lifecycles.
       </p>
 
       <h3>Try the implementation</h3>
       <p>
         The experimental package has been available since Station 2.3.0.
-        This checkout targets 2.4.0. After that release is published, install it with
-        <code> pnpm add station-browser@^2.4.0</code>. To try the release checkout,
+        This checkout targets 3.0.0. After that release is published, install it with
+        <code> pnpm add station-browser@^3.0.0</code>. To try the release checkout,
         start with the repository workspace:
       </p>
       <Code>{`# From the Station repository checkout containing station-browser
